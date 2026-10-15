@@ -7,6 +7,11 @@
 //! length). A piece that does not (one was lost) freezes the row as it is
 //! until its entry arrives; a piece of a part already completed is a late
 //! one and is dropped. The end of the turn drops whatever is left.
+//!
+//! A piece from offset 0 is the bridge catching this client up after it
+//! started watching the session: it replaces the row's whole text and
+//! unfreezes it, so a switch to a session mid-reply shows what is already
+//! written instead of an empty row waiting for the completing entry.
 
 use std::collections::{HashMap, HashSet};
 
@@ -61,6 +66,15 @@ impl LiveTextState {
                 live.rows.last_mut().expect("just pushed")
             }
         };
+        // The catch-up piece the bridge sends a client that has just started
+        // watching: it is the part whole, so it replaces whatever the row
+        // had and unfreezes it.
+        if msg.offset == 0 {
+            row.text = msg.text.clone();
+            row.len = msg.text.encode_utf16().count() as u64;
+            row.frozen = false;
+            return Some(LiveChange { key: row.key.clone(), text: Some(row.text.clone()) });
+        }
         if row.frozen || msg.offset != row.len {
             row.frozen = true;
             return None;
@@ -122,6 +136,25 @@ mod tests {
         assert_eq!(s.apply("m", &piece("k", 9, "lost")), None);
         assert_eq!(s.apply("m", &piece("k", 3, "def")), None, "a frozen row stays frozen");
         assert_eq!(s.complete("m", "s", "k"), Some(LiveChange { key: "k".into(), text: None }));
+    }
+
+    #[test]
+    fn a_piece_from_offset_zero_replaces_the_row() {
+        let mut s = LiveTextState::default();
+        s.apply("m", &piece("k", 0, "half a sen"));
+        // The catch-up after a switch to this session: the part whole.
+        assert_eq!(shown(s.apply("m", &piece("k", 0, "half a sentence"))).as_deref(), Some("half a sentence"));
+        // It is now as long as it says: the next piece continues it.
+        assert_eq!(shown(s.apply("m", &piece("k", 15, "!"))).as_deref(), Some("half a sentence!"));
+    }
+
+    #[test]
+    fn a_piece_from_offset_zero_unfreezes_the_row() {
+        let mut s = LiveTextState::default();
+        s.apply("m", &piece("k", 0, "abc"));
+        assert_eq!(s.apply("m", &piece("k", 9, "lost")), None, "a gap froze it");
+        assert_eq!(shown(s.apply("m", &piece("k", 0, "abcdef"))).as_deref(), Some("abcdef"));
+        assert_eq!(shown(s.apply("m", &piece("k", 6, "!"))).as_deref(), Some("abcdef!"));
     }
 
     #[test]

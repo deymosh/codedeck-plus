@@ -65,6 +65,9 @@ const RESUME_HEARD_WITHIN_MS: u64 = 90_000;
 const STALE_WATCHDOG_EVERY: Duration = Duration::from_secs(30);
 /// The longest a stop waits for its `away` to go out.
 const AWAY_WAIT: Duration = Duration::from_secs(2);
+/// How long a change of what this client watches is coalesced before it is
+/// sent: flicking through sessions sends one `presence`, not one per tap.
+const WATCH_SETTLE_MS: u64 = 300;
 /// Relay ping interval while the app is in the background. Every ping is a
 /// radio wake-up per relay round; in the background the host's periodic
 /// [`Core::keepalive`] is what checks the sockets.
@@ -441,6 +444,8 @@ impl Core {
             last_connected_relays: Vec::new(),
             pair_timer: None,
             unanswered_timer: None,
+            watch_timer: None,
+            watch_sent: None,
             undo_timer: None,
             backup_timer: None,
             backup_busy: false,
@@ -681,6 +686,8 @@ enum Msg {
     SocketClose,
     RetryDue,
     VisibilitySettled,
+    /// The coalescing window for a change of what this client watches closed.
+    WatchSettle,
     StaleWatchdog,
     /// The host woke the device to check the connection.
     Keepalive(oneshot::Sender<()>),
@@ -980,6 +987,12 @@ struct Loop {
     /// When the earliest machine-settings change still waiting for an answer
     /// gives up (see [`client_core::stores::machines::SETTINGS_ANSWER_TIMEOUT_MS`]).
     unanswered_timer: Option<AbortHandle>,
+    /// The coalescing window for a change of what this client watches (see
+    /// [`Loop::watch_changed`]).
+    watch_timer: Option<AbortHandle>,
+    /// The machine last told what this client watches, and which session:
+    /// what a change is measured against.
+    watch_sent: Option<(String, Option<String>)>,
     /// The delete-controller's 4 s undo window.
     undo_timer: Option<AbortHandle>,
     /// The pending config backup save (see `runtime::backup`).
@@ -1085,12 +1098,15 @@ impl Loop {
                     self.ws.set_ping_interval(BACKGROUND_PING_EVERY);
                     self.set_link_ping(BACKGROUND_PING_EVERY);
                     self.dispatch(ConnectionEvent::Visibility { visible: false });
+                    // Hiding is debounced, so the watch is settled when it
+                    // really takes effect (`Msg::VisibilitySettled`).
                 }
                 Msg::Resume => {
                     self.ws.set_ping_interval(PING_EVERY);
                     self.set_link_ping(PING_EVERY);
                     self.dispatch(ConnectionEvent::Visibility { visible: true });
                     self.dispatch(ConnectionEvent::Resume);
+                    self.watch_changed();
                     // Back on the session it showed: what came for it while
                     // the app was hidden is seen now.
                     let viewed = self.stores.ui.resume_viewing();
@@ -1149,7 +1165,16 @@ impl Loop {
                 }
                 Msg::RetryDue => self.dispatch(ConnectionEvent::RetryDue),
                 Msg::RelaysChanged => self.check_connected_relays_changed(),
-                Msg::VisibilitySettled => self.dispatch(ConnectionEvent::VisibilitySettled),
+                Msg::VisibilitySettled => {
+                    self.dispatch(ConnectionEvent::VisibilitySettled);
+                    // The app really is hidden now: the bridge stops sending
+                    // this client live text.
+                    self.watch_changed();
+                }
+                Msg::WatchSettle => {
+                    abort(&mut self.watch_timer);
+                    self.settle_watch();
+                }
                 Msg::SocketOpen => {
                     let at = self.clock.now_ms();
                     self.dispatch(ConnectionEvent::SocketOpen { at });
@@ -1311,6 +1336,10 @@ impl Loop {
             // fresh list, reconcile from what we know. Deferred to a message so
             // this sync `apply` can stay non-blocking.
             ConnectionEffect::RefreshAndReconcile => {
+                // A fresh connection: the bridge may have restarted and
+                // forgotten what this client watches, so say it again.
+                self.watch_sent = None;
+                self.watch_changed();
                 let _ = self.self_tx.send(Msg::RefreshReconcile { reconnected: true });
             }
             ConnectionEffect::ResumeReconcile => {
@@ -1332,7 +1361,7 @@ impl Loop {
             for machine in self.stores.machines.machine_pubkeys() {
                 if matches!(self.cipher_for(&machine), Cipher::SessionKey(_)) {
                     let (tx, rx) = oneshot::channel();
-                    let away = PhoneToBridge::Presence(PresenceMsg { away: true });
+                    let away = PhoneToBridge::Presence(PresenceMsg { away: true, watching: None });
                     self.sign_and_publish(machine, away, Some(tx), None, true);
                     sent.push(rx);
                 }
@@ -1825,6 +1854,9 @@ impl Loop {
         // A machine-settings change just sent may need a "did the machine
         // answer?" deadline; re-arming here keeps that cheap and in one place.
         self.rearm_unanswered_timer();
+        // An intent may have opened another session or left one: the bridge
+        // hears about it once the choice has settled.
+        self.watch_changed();
         if let Some(send) = session_file_send {
             self.spawn_session_file(send, reply.take());
         }
@@ -2180,8 +2212,76 @@ impl Loop {
             .filter(|m| self.last_command_ms.get(m).is_none_or(|at| now.saturating_sub(*at) >= PRESENCE_RENEW_SECS * 1000))
             .collect();
         for machine in due {
-            self.sign_and_publish(machine, PhoneToBridge::Presence(PresenceMsg { away: false }), None, None, true);
+            // The renewal also carries what this client watches now, so a
+            // bridge that missed a change catches up within one period.
+            let watching = self.watching_for(&machine);
+            self.sign_and_publish(machine, PhoneToBridge::Presence(PresenceMsg { away: false, watching }), None, None, true);
         }
+    }
+
+    /// What this client shows live text for right now: the session on screen
+    /// while the app is in the foreground, nothing otherwise.
+    fn watch_now(&self) -> Option<(String, String)> {
+        if !self.conn.visible {
+            return None;
+        }
+        match (&self.stores.ui.selected_machine, &self.stores.ui.selected_session) {
+            (Some(machine), Some(session)) => Some((machine.clone(), session.clone())),
+            _ => None,
+        }
+    }
+
+    /// The `watching` a `presence` to `machine` carries: the session it is
+    /// showing, or `None` for any other machine.
+    fn watching_for(&self, machine: &str) -> Option<String> {
+        match self.watch_now() {
+            Some((shown, session)) if shown == machine => Some(session),
+            _ => None,
+        }
+    }
+
+    /// What this client watches may have changed — another session on
+    /// screen, or the app hidden. Say it once the choice has settled.
+    fn watch_changed(&mut self) {
+        if self.watch_timer.is_none() {
+            self.watch_timer = Some(self.arm(WATCH_SETTLE_MS, Msg::WatchSettle));
+        }
+    }
+
+    /// The settle window closed: tell each machine whose `watching` differs
+    /// from what it was last told. Leaving a machine for another also tells
+    /// the one left behind that nothing is watched there any more.
+    fn settle_watch(&mut self) {
+        let desired = self.watch_now().map(|(machine, session)| (machine, Some(session)));
+        let previous = self.watch_sent.clone();
+        if previous == desired {
+            return;
+        }
+        if let Some((machine, _)) = &previous {
+            if !desired.as_ref().is_some_and(|(next, _)| next == machine) {
+                self.send_watching(machine, None);
+            }
+        }
+        // Only what a machine was told counts as sent: one that could not be
+        // (no session key to use right now) is tried again at the next
+        // settle, instead of being taken for told and never retried.
+        let told = match &desired {
+            Some((machine, session)) => self.send_watching(machine, session.clone()),
+            None => true,
+        };
+        self.watch_sent = if told { desired } else { None };
+    }
+
+    /// One `presence` saying what this client watches, to one machine. Only
+    /// a machine that knows this client by its session key is told: a copy
+    /// addressed to the identity reaches no client, and so no live text.
+    /// Returns whether it went out.
+    fn send_watching(&mut self, machine: &str, watching: Option<String>) -> bool {
+        if !matches!(self.cipher_for(machine), Cipher::SessionKey(_)) {
+            return false;
+        }
+        self.sign_and_publish(machine.to_string(), PhoneToBridge::Presence(PresenceMsg { away: false, watching }), None, None, true);
+        true
     }
 
     /// Publish a built command, or report why it could not be built. It goes

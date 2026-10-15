@@ -4,10 +4,12 @@
 
 mod support;
 
+use agent_protocol::SessionEvent;
 use bridge_core::{Effect, Input, Via, MAX_CLIENTS};
 use protocol::commands::{PRESENCE_LEASE_SECS, SESSION_KEY_MAX_LIFETIME_SECS};
+use protocol::common::PartialKind;
 use protocol::crypto::{generate_keypair, Keypair};
-use protocol::events::BridgeToPhone;
+use protocol::events::{BridgeToPhone, PartialMsg};
 use serde_json::json;
 use support::*;
 
@@ -392,4 +394,202 @@ fn a_sync_goes_to_the_client_that_asked_alone() {
         })
         .collect();
     assert_eq!(sync, vec![vec![asking.pubkey_hex.clone()]; 2]);
+}
+
+// --- live text: what each client watches ---
+
+/// A `presence` saying which session the client shows live text for
+/// (`None` = none); returns its effects.
+fn watching(rig: &mut Rig, key: &Keypair, session: Option<&str>) -> Vec<Effect> {
+    let phone = rig.phone.clone();
+    rig.take();
+    rig.phone_event_via_key(&phone, key, json!({"v":12,"type":"presence","watching":session}), Via::Commands);
+    rig.take()
+}
+
+/// The host streams a piece of part `key` of `session_id`.
+fn stream(rig: &mut Rig, session_id: &str, key: &str, offset: u64, text: &str) {
+    rig.host_event(
+        session_id,
+        SessionEvent::Partial {
+            key: key.into(),
+            entry_type: PartialKind::Text,
+            subagent: None,
+            offset,
+            text: text.into(),
+        },
+    );
+}
+
+fn partial(session_id: &str, key: &str, offset: u64, text: &str) -> PartialMsg {
+    PartialMsg {
+        session_id: session_id.into(),
+        key: key.into(),
+        entry_type: PartialKind::Text,
+        subagent: None,
+        offset,
+        text: text.into(),
+    }
+}
+
+/// Each `partial` publish, as the (phone, key) pairs it went to and the piece.
+fn live_pieces(effects: &[Effect]) -> Vec<(Vec<(String, String)>, PartialMsg)> {
+    effects
+        .iter()
+        .filter_map(|e| match e {
+            Effect::Publish { to, message: BridgeToPhone::Partial(m) } => {
+                Some((to.iter().map(|a| (a.phone.clone(), a.key.clone())).collect(), m.clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The one addressee a message for `key`, a client of the paired phone, has.
+fn copy_for(rig: &Rig, key: &Keypair) -> Vec<(String, String)> {
+    vec![(rig.phone.pubkey_hex.clone(), key.pubkey_hex.clone())]
+}
+
+/// Two sessions of `alpha`, both ready to stream.
+fn two_running_sessions(rig: &mut Rig) -> (String, String) {
+    rig.host_up();
+    let first = rig.ready_session("alpha");
+    let second = rig.ready_session("alpha");
+    rig.take();
+    (first, second)
+}
+
+#[test]
+fn live_text_reaches_only_the_client_watching_that_session() {
+    let mut rig = Rig::new();
+    let (s1, s2) = two_running_sessions(&mut rig);
+    let (on_s1, on_s2) = (generate_keypair(), generate_keypair());
+    grant(&mut rig, &on_s1, NOW_SECS + DAY);
+    grant(&mut rig, &on_s2, NOW_SECS + DAY);
+    watching(&mut rig, &on_s1, Some(&s1));
+    watching(&mut rig, &on_s2, Some(&s2));
+
+    stream(&mut rig, &s1, "p1", 0, "on one");
+    assert_eq!(live_pieces(&rig.take()), vec![(copy_for(&rig, &on_s1), partial(&s1, "p1", 0, "on one"))]);
+
+    stream(&mut rig, &s2, "p1", 0, "on two");
+    assert_eq!(live_pieces(&rig.take()), vec![(copy_for(&rig, &on_s2), partial(&s2, "p1", 0, "on two"))]);
+}
+
+#[test]
+fn a_client_that_has_not_said_gets_every_sessions_live_text() {
+    let mut rig = Rig::new();
+    let (s1, s2) = two_running_sessions(&mut rig);
+    let quiet = generate_keypair();
+    grant(&mut rig, &quiet, NOW_SECS + DAY);
+    rig.take();
+
+    stream(&mut rig, &s1, "p1", 0, "one");
+    stream(&mut rig, &s2, "p1", 0, "two");
+    let pieces = live_pieces(&rig.take());
+    assert_eq!(pieces.len(), 2, "until it says what it watches, it gets everything");
+    assert!(pieces.iter().all(|(to, _)| *to == copy_for(&rig, &quiet)));
+}
+
+#[test]
+fn an_away_client_gets_no_live_text() {
+    let mut rig = Rig::new();
+    let (s1, _s2) = two_running_sessions(&mut rig);
+    let pocket = generate_keypair();
+    grant(&mut rig, &pocket, NOW_SECS + DAY);
+    presence(&mut rig, &pocket, true);
+
+    stream(&mut rig, &s1, "p1", 0, "nobody");
+    assert!(live_pieces(&rig.take()).is_empty());
+}
+
+#[test]
+fn an_identity_with_no_client_still_gets_its_live_text() {
+    let mut rig = Rig::new();
+    let (s1, _s2) = two_running_sessions(&mut rig);
+
+    stream(&mut rig, &s1, "p1", 0, "unaddressed");
+    let pieces = live_pieces(&rig.take());
+    assert_eq!(pieces.len(), 1, "the identity's own copy is unchanged");
+    assert_eq!(pieces[0].0, vec![(rig.phone.pubkey_hex.clone(), rig.phone.pubkey_hex.clone())]);
+}
+
+#[test]
+fn a_client_that_starts_watching_is_caught_up_on_the_whole_part() {
+    let mut rig = Rig::new();
+    let (s1, s2) = two_running_sessions(&mut rig);
+    let (on_it, elsewhere) = (generate_keypair(), generate_keypair());
+    grant(&mut rig, &on_it, NOW_SECS + DAY);
+    grant(&mut rig, &elsewhere, NOW_SECS + DAY);
+    watching(&mut rig, &on_it, Some(&s1));
+    watching(&mut rig, &elsewhere, Some(&s2));
+
+    stream(&mut rig, &s1, "p1", 0, "Hello ");
+    stream(&mut rig, &s1, "p1", 6, "world");
+    assert_eq!(live_pieces(&rig.take()).len(), 2, "the watcher gets each piece as it comes");
+
+    // The other client switches to the streaming session: it gets the part
+    // whole, from offset 0, and alone.
+    assert_eq!(
+        live_pieces(&watching(&mut rig, &elsewhere, Some(&s1))),
+        vec![(copy_for(&rig, &elsewhere), partial(&s1, "p1", 0, "Hello world"))]
+    );
+    // Saying it again is not a change: no second catch-up.
+    assert!(live_pieces(&watching(&mut rig, &elsewhere, Some(&s1))).is_empty());
+    // And once caught up it gets the pieces that follow as they come, with
+    // the client that was watching all along.
+    stream(&mut rig, &s1, "p1", 11, "!");
+    let pieces = live_pieces(&rig.take());
+    assert_eq!(pieces.len(), 1, "one publish, a copy per watcher: {pieces:?}");
+    let (mut got, piece) = pieces.into_iter().next().unwrap();
+    assert_eq!(piece, partial(&s1, "p1", 11, "!"));
+    got.sort();
+    let mut expected = vec![
+        (rig.phone.pubkey_hex.clone(), on_it.pubkey_hex.clone()),
+        (rig.phone.pubkey_hex.clone(), elsewhere.pubkey_hex.clone()),
+    ];
+    expected.sort();
+    assert_eq!(got, expected, "both watchers of the session get it");
+}
+
+#[test]
+fn a_restarted_session_catches_no_one_up_on_the_turn_it_lost() {
+    let mut rig = Rig::new();
+    let (s1, s2) = two_running_sessions(&mut rig);
+    let late = generate_keypair();
+    grant(&mut rig, &late, NOW_SECS + DAY);
+    watching(&mut rig, &late, Some(&s2));
+    stream(&mut rig, &s1, "p1", 0, "cut off mid");
+    // The agent dies mid-reply and the session restarts: that part will
+    // never be completed.
+    rig.host_event(&s1, SessionEvent::Ended { error: Some("boom".into()), resume_lost: false });
+    rig.take();
+
+    assert!(live_pieces(&watching(&mut rig, &late, Some(&s1))).is_empty(), "no row nothing would end");
+}
+
+#[test]
+fn a_part_past_the_catch_up_cap_is_not_caught_up() {
+    let mut rig = Rig::new();
+    let (s1, _s2) = two_running_sessions(&mut rig);
+    let late = generate_keypair();
+    grant(&mut rig, &late, NOW_SECS + DAY);
+    watching(&mut rig, &late, None);
+
+    // A part over the 256 KiB the bridge keeps for a catch-up.
+    let piece = "x".repeat(64 * 1024);
+    for i in 0..5u64 {
+        stream(&mut rig, &s1, "p1", i * 64 * 1024, &piece);
+    }
+    assert!(live_pieces(&rig.take()).is_empty(), "it watches no session yet");
+    assert!(live_pieces(&watching(&mut rig, &late, Some(&s1))).is_empty(), "past the cap nothing is kept");
+
+    // A part that stays under the cap is still caught up whole.
+    watching(&mut rig, &late, None);
+    stream(&mut rig, &s1, "p2", 0, "small");
+    assert!(live_pieces(&rig.take()).is_empty(), "not watching it yet");
+    assert_eq!(
+        live_pieces(&watching(&mut rig, &late, Some(&s1))),
+        vec![(copy_for(&rig, &late), partial(&s1, "p2", 0, "small"))]
+    );
 }

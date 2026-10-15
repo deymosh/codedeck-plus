@@ -125,8 +125,9 @@ its keys and of its identity) and drops any other before decrypting, so
 another device's traffic never reaches the signer. A bridge sends the
 shared updates only to clients present: any command keeps this one present,
 the core sends `presence` after ten quiet minutes, and `presence {away}`
-when it stops (waiting at most 2 s for it to go out). See
-[`PROTOCOL.md`](PROTOCOL.md#clients-and-copies).
+when it stops (waiting at most 2 s for it to go out). Each `presence` also
+says which session this client shows live text for (see Live text below).
+See [`PROTOCOL.md`](PROTOCOL.md#clients-and-copies).
 
 Unprompted by the user, the core asks the identity to sign only: one
 `refresh-sessions` per machine on each (re)connect (a grant instead, for a
@@ -252,11 +253,17 @@ themselves are in [`PROTOCOL.md`](PROTOCOL.md#traffic-class-subscription-rules).
 ### Live text
 
 A reply the agent is still writing arrives as `partial` pieces (see
-[`PROTOCOL.md`](PROTOCOL.md#transcript-entries)). The core keeps one live
-row per part (`stores::live_text`, in memory only) and tells the host about
-the session on screen, with the app visible, through `CoreEvent::LiveText`,
-which carries the row's whole text: the transcript is not re-read for it, and
-a session opened mid-reply shows the reply whole at its next piece. A row
+[`PROTOCOL.md`](PROTOCOL.md#transcript-entries)), and only for the session
+this client says it watches: the core sends a `presence` naming the session
+on screen while the app is visible and nothing otherwise, so a backgrounded
+app and every session not on screen cost the bridge nothing per piece. A
+change is coalesced over 300 ms, so flicking through sessions sends one. The
+core keeps one live row per part (`stores::live_text`, in memory only) and
+tells the host about the session on screen, with the app visible, through
+`CoreEvent::LiveText`, which carries the row's whole text: the transcript is
+not re-read for it. A session opened mid-reply shows the reply whole at
+once: the bridge catches the client up on each live part with one piece from
+offset 0, which the store takes as replacing the row. A row
 goes when its entry lands, or when the heartbeat says the session stopped
 running (an error or an interrupt ends a turn without `turn_complete`). The
 screen types each row out at about thirty frames a second, at the pace that

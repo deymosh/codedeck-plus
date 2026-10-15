@@ -28,7 +28,7 @@ data over); v12 sends a copy of each message per client of an identity (see
 | Purpose | Kind | Storage |
 |---|---|---|
 | Session-list heartbeat (`sessions`) | **30515** | NIP-33 replaceable, one per client (`d` = the copy's recipient tag); NIP-40 expiry 1 day |
-| Live output / usage / partial text | **24515** | ephemeral — broadcast, never stored; loss is recoverable (sync / re-request / the completing entry) |
+| Live output / usage / partial text | **24515** | ephemeral — never stored; `partial` goes to the clients watching that session, loss is recoverable (sync / re-request / the completing entry) |
 | Phone→bridge commands | **4515** | stored, NIP-40 expiry 1 h |
 | Bridge→phone responses (sync chunks, acks, lifecycle, pairing) | **4516** | stored, NIP-40 expiry 1 h |
 
@@ -205,7 +205,18 @@ of a turn drops any row left over. An agent that does not stream sends no
 `partial` and its entries carry no `part`. Today the drivers stream only the
 main agent's reply: reasoning and a sub-agent's text are shown inside their
 tool group, so the kinds stay on the wire for later but cost nothing now.
-The phone shows live rows only for the session on screen.
+
+A `partial` goes only to the clients watching that session — the phone says
+which one it shows with its `presence`, and shows live rows for no other —
+so a backgrounded app and every session not on screen cost nothing per
+piece. The cost is one `presence` per change of screen (the phone coalesces
+rapid changes into one) and, for a client that starts watching a session
+mid-part, one `partial` per live part to catch it up: the bridge keeps what
+it passed on for each part, up to 256 KiB, and resends it whole from
+`offset` 0. The phone takes a piece from offset 0 as replacing the row, so
+the row is complete at once instead of waiting for the entry that completes
+the part. Past that size nothing is kept, and the row stays empty until
+that entry.
 
 **Cards.** Every `permission_request`, `question` group and `plan_approval` is
 closed by exactly one `resolved` entry with the same `requestId` — answered,
@@ -550,16 +561,25 @@ client's tags before and after a key rotation.
 - **Who gets a copy.** A reply to a command (an ack, a list, the heartbeat a
   `refresh-sessions` asks for, a sync's begin, chunks and end) goes to the
   client whose key encrypted the command, alone. Everything else (the
-  heartbeat, live output, cards, session changes) goes to each client
-  *present* now. An identity that has granted no key (or is not paired) is
-  addressed as itself, with the identity's own tag.
+  heartbeat, cards, session changes) goes to each client *present* now —
+  except live text (`partial`), which goes only to the present clients
+  *watching* that session (see Presence). An identity that has granted no
+  key (or is not paired) is addressed as itself, with the identity's own
+  tag.
 - **Presence.** Any command keeps its client present for 25 minutes
   (`PRESENCE_LEASE_SECS`); a running client with nothing else to say sends
-  `presence {}` every 10 (`PRESENCE_RENEW_SECS`), and `presence {away: true}`
-  when it stops, which ends its lease at once. A client away gets nothing;
-  when it is back its first command (or `presence`) earns it a heartbeat of
-  its own, and it syncs what it missed. A restarted bridge counts every
-  client present for the renewal period and a minute.
+  `presence {watching?}` every 10 (`PRESENCE_RENEW_SECS`), and
+  `presence {away: true}` when it stops, which ends its lease at once.
+  `watching` is the session whose live text this client shows — `null` or
+  absent meaning none. Every `presence` sets what a client watches (a
+  renewal says it again), `away` clears it, and any other command leaves it
+  as it was. A client that has not said — one that
+  has just connected, or whose bridge has just restarted — gets every
+  session's live text, so nothing on its screen is left frozen while it is
+  being asked. A client away gets nothing; when it is back its first
+  command (or `presence`) earns it a heartbeat of its own, and it syncs
+  what it missed. A restarted bridge counts every client present for the
+  renewal period and a minute.
 - **Reading.** A client subscribes with the tags of its live keys and of its
   identity, and drops any copy tagged otherwise, before decrypting it.
 - **The heartbeat** is addressable per copy: `d` = its recipient tag, so a

@@ -407,11 +407,21 @@ pub struct SessionKeyGrant {
 /// any command counts as presence too. A running client renews every
 /// [`PRESENCE_RENEW_SECS`]. `away` ends the lease at once: the client is
 /// stopping and wants nothing more until it says so again.
+///
+/// `watching` says which session this client shows live text for: only its
+/// `partial`s are sent to it, and only while it is present. Absent or
+/// `null` means it watches no session, so it gets no live text at all —
+/// every other kind of update still comes. This is the only command that
+/// changes what a client watches, and every `presence` does — a renewal
+/// says it again; any other command leaves it as it was.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct PresenceMsg {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub away: bool,
+    /// The session whose live text this client shows, or `None` for none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watching: Option<String>,
 }
 
 /// How long a `presence` (or any command) keeps a client present: two
