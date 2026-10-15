@@ -1,8 +1,8 @@
 /**
- * The Agent Client Protocol side of the DeepSeek Harness driver: JSON-RPC 2.0
- * over the newline-delimited stdio of a `dsh --profile acp` child — the ACP
- * v1 wire the framing here implements, typed by the protocol's own schema
- * package (a type-only import, so nothing of that package ships in the host).
+ * The Agent Client Protocol side of a driver: JSON-RPC 2.0 over the
+ * newline-delimited stdio of the agent's child process — the ACP v1 wire the
+ * framing here implements, typed by the protocol's own schema package (a
+ * type-only import, so nothing of that package ships in the host).
  *
  * Small on purpose: the host needs requests with their replies, the agent's
  * notifications, its `session/request_permission` asks answered asynchronously,
@@ -52,11 +52,14 @@ export interface AcpClientOptions {
   /** Diagnostics (the host's stderr). Never given message contents verbatim
    *  beyond what a protocol error already says. */
   log: (message: string) => void;
+  /** The tag every log line carries, so one agent's connection is told from
+   *  another's. */
+  tag: string;
 }
 
 /** Milliseconds a request may wait before it is abandoned. `initialize` gets
- *  one because a first run initializes the profile; a prompt does not, since
- *  a turn is as long as the model takes. */
+ *  one because a first run initializes the agent's state; a prompt does not,
+ *  since a turn is as long as the model takes. */
 export const INITIALIZE_TIMEOUT_MS = 120_000;
 
 interface Pending {
@@ -171,6 +174,10 @@ export class AcpClient {
     this.settleDone(closed);
   }
 
+  private log(message: string): void {
+    this.options.log(`[${this.options.tag}] ${message}`);
+  }
+
   private send(message: object): void {
     if (this.ending !== undefined) throw new Error(this.ending.error ?? 'the agent connection was closed');
     this.options.stdin.write(`${JSON.stringify(message)}\n`);
@@ -194,11 +201,11 @@ export class AcpClient {
     try {
       message = JSON.parse(line);
     } catch {
-      this.options.log(`[deepseek] dropped a malformed line from the agent: ${line.slice(0, 200)}`);
+      this.log(`dropped a malformed line from the agent: ${line.slice(0, 200)}`);
       return;
     }
     if (typeof message !== 'object' || message === null) {
-      this.options.log('[deepseek] dropped a non-object message from the agent');
+      this.log('dropped a non-object message from the agent');
       return;
     }
     const frame = message as { id?: WireId; method?: unknown; params?: unknown; result?: unknown; error?: unknown };
@@ -208,12 +215,12 @@ export class AcpClient {
       return;
     }
     if (frame.id === undefined || frame.id === null) {
-      this.options.log('[deepseek] dropped a message from the agent with no id and no method');
+      this.log('dropped a message from the agent with no id and no method');
       return;
     }
     const pending = this.pending.get(frame.id);
     if (!pending) {
-      this.options.log(`[deepseek] dropped a reply to unknown request ${String(frame.id)}`);
+      this.log(`dropped a reply to unknown request ${String(frame.id)}`);
       return;
     }
     this.pending.delete(frame.id);
@@ -234,7 +241,7 @@ export class AcpClient {
     try {
       (handler as (params: unknown) => void)(params);
     } catch (error) {
-      this.options.log(`[deepseek] ${method} handler failed: ${error instanceof Error ? error.message : String(error)}`);
+      this.log(`${method} handler failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -264,7 +271,7 @@ export class AcpClient {
     try {
       this.send(message);
     } catch (error) {
-      this.options.log(`[deepseek] could not answer the agent: ${error instanceof Error ? error.message : String(error)}`);
+      this.log(`could not answer the agent: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 }

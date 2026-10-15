@@ -3,11 +3,10 @@
  * transcript entries — the counterpart of the Claude driver's
  * `sdkMessageToEntries` and the OpenCode driver's `opencodeEventToEntries`.
  *
- * Pure: one update in, zero or more entries out, with the only state being
- * the facts a tool call's own update carried (`ToolCallFacts`), which the
- * harness's result update does not repeat. Two updates are not entries and
- * are the session's own: context usage (`usage_update`) and the option list
- * (`config_option_update`).
+ * The ACP part is the shared translation (acp/adapter); what the harness adds
+ * to it is its own: the tool names this profile mounts (tools.ts), the two
+ * calls whose card *is* the exchange, and the file changes it does not report
+ * as an ACP diff block.
  *
  * The harness sends the standard ACP updates for what it does — agent
  * messages and thoughts, generic tool call lifecycles, usage, config — and
@@ -18,10 +17,12 @@
  * (tools.ts), exactly as they are for the other agents.
  */
 import type { SessionUpdate } from '@agentclientprotocol/sdk';
-import { todosOf, toolLocations } from '../../sdk/tools';
-import { deepseekTool } from './tools';
-import { MAX_DIFF_LINES, truncateToolResult, toDiffLines, type DiffPayload } from '../../sdk/transcript';
+import { acpUpdateToEntries, type ToolCallMemory } from '../../acp/adapter';
+import { MAX_DIFF_LINES, toDiffLines, type DiffPayload } from '../../sdk/transcript';
 import type { OutputEntry } from '../../sdk/types';
+import { deepseekTool } from './tools';
+
+export type { ToolCallFacts, ToolCallMemory } from '../../acp/adapter';
 
 /**
  * The tools whose card *is* the exchange. The question tool asks through the
@@ -32,16 +33,6 @@ import type { OutputEntry } from '../../sdk/types';
  */
 const QUESTION_TOOLS = new Set(['ask_user_question', 'exit_plan_mode']);
 
-/** What a tool call's own update carried: its result update repeats neither
- *  the tool's name nor its input. */
-export interface ToolCallFacts {
-  name: string;
-  input: Record<string, unknown>;
-}
-
-/** Every tool call of one session, by id. */
-export type ToolCallMemory = Map<string, ToolCallFacts>;
-
 /** Convert one update into entries. `reportUnknownTool` is told every tool
  *  name no agent's table lists (`unknownToolReporter`). */
 export function deepseekUpdateToEntries(
@@ -49,109 +40,12 @@ export function deepseekUpdateToEntries(
   calls: ToolCallMemory,
   reportUnknownTool?: (toolName: string) => void,
 ): OutputEntry[] {
-  const ts = new Date().toISOString();
-  switch (update.sessionUpdate) {
-    case 'agent_message_chunk':
-      return textOf(update.content, 'agent', ts);
-    case 'agent_thought_chunk':
-      return textOf(update.content, 'thinking', ts);
-    case 'tool_call':
-      return toolCallEntries(update, calls, reportUnknownTool, ts);
-    case 'tool_call_update':
-      return toolResultEntries(update, calls, ts);
-    default:
-      return [];
-  }
+  return acpUpdateToEntries(update, calls, {
+    readToolCall: (name, input) => deepseekTool(name, input, reportUnknownTool),
+    hidden: (name) => QUESTION_TOOLS.has(name),
+    diffs: (name, input) => toolCallDiffs(name, input),
+  });
 }
-
-function textOf(content: unknown, role: 'agent' | 'thinking', ts: string): OutputEntry[] {
-  const block = content as { type?: unknown; text?: unknown } | null;
-  if (block?.type !== 'text' || typeof block.text !== 'string' || block.text === '') return [];
-  return [role === 'thinking' ? { entryType: 'thinking', text: block.text, timestamp: ts } : { entryType: 'text', role, text: block.text, timestamp: ts }];
-}
-
-/** One started tool call: its row, and the checklist when the call wrote one. */
-function toolCallEntries(
-  update: Extract<SessionUpdate, { sessionUpdate: 'tool_call' }>,
-  calls: ToolCallMemory,
-  reportUnknownTool: ((toolName: string) => void) | undefined,
-  ts: string,
-): OutputEntry[] {
-  const name = toolNameOf(update);
-  const input = record(update.rawInput);
-  calls.set(update.toolCallId, { name, input });
-  if (QUESTION_TOOLS.has(name)) return [];
-  const locations = toolLocations(input);
-  const call = deepseekTool(name, input, reportUnknownTool);
-  const todos = todosOf(input);
-  return [
-    {
-      entryType: 'tool_call',
-      callId: update.toolCallId,
-      toolName: name,
-      kind: call.kind,
-      title: call.title,
-      ...(locations.length > 0 ? { locations } : {}),
-      ...(call.input !== undefined ? { input: call.input } : {}),
-      timestamp: ts,
-    },
-    ...(todos ? [{ entryType: 'todos' as const, items: todos, callId: update.toolCallId, timestamp: ts }] : []),
-  ];
-}
-
-/** One finished tool call: its result text, and the file change it made when
- *  the harness's own input says what changed (its result update carries no
- *  diff block). A non-terminal update carries nothing new to show — the
- *  call's row is already there. */
-function toolResultEntries(
-  update: Extract<SessionUpdate, { sessionUpdate: 'tool_call_update' }>,
-  calls: ToolCallMemory,
-  ts: string,
-): OutputEntry[] {
-  const status = update.status ?? undefined;
-  if (status !== 'completed' && status !== 'failed') return [];
-  const facts = calls.get(update.toolCallId);
-  calls.delete(update.toolCallId);
-  if (facts !== undefined && QUESTION_TOOLS.has(facts.name)) return [];
-  const text = contentText(update.content);
-  const entries: OutputEntry[] = [
-    {
-      entryType: 'tool_result',
-      callId: update.toolCallId,
-      text: truncateToolResult(text),
-      ...(status === 'failed' ? { isError: true } : {}),
-      timestamp: ts,
-    },
-  ];
-  if (status === 'completed' && facts) {
-    for (const diff of toolCallDiffs(facts.name, facts.input)) {
-      entries.push({ entryType: 'diff', ...diff, callId: update.toolCallId, timestamp: ts });
-    }
-  }
-  return entries;
-}
-
-/** The tool's own name: ACP carries it as `name` when the agent has one, and
- *  the harness puts it in `title`. */
-function toolNameOf(update: Extract<SessionUpdate, { sessionUpdate: 'tool_call' }>): string {
-  return update.name ?? update.title;
-}
-
-/** Everything a result's content blocks say, one line each. */
-function contentText(content: unknown): string {
-  if (!Array.isArray(content)) return '';
-  const parts: string[] = [];
-  for (const item of content) {
-    const block = record(item);
-    if (block?.type !== 'content') continue;
-    const inner = record(block.content);
-    if (inner?.type === 'text' && typeof inner.text === 'string') parts.push(inner.text);
-    else if (inner?.type === 'image') parts.push('[image]');
-  }
-  return parts.join('\n');
-}
-
-// --- file changes ---
 
 /**
  * The files a completed call changed, from its own input. The harness's
@@ -216,8 +110,3 @@ function bounded(path: string, lines: DiffPayload['lines']): DiffPayload[] {
 function str(value: unknown): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined;
 }
-
-function record(value: unknown): Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
-

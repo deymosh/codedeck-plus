@@ -11,7 +11,7 @@ import { DeepSeekDriver } from '../driver';
 import { BRIDGE_SOCKET_ENV, QUESTION_MARKER } from '../plugin';
 import { DeepSeekMcp } from '../mcp';
 import { DeepSeekRuntime, dshHomeDir } from '../runtime';
-import { FakeHarness } from './fakeHarness';
+import { FakeAgent } from '../../../acp/__tests__/fakeAgent';
 
 /** A harness home in a temp directory, with the profile directory the CLI
  *  would create on its first run. */
@@ -22,10 +22,46 @@ function harnessHome(): string {
   return home;
 }
 
+/** The option state a session starts with, as the harness composes it. */
+function configOptions(currentModel = '["deepseek-official","deepseek-v4-flash"]'): unknown[] {
+  return [
+    {
+      id: 'model',
+      name: 'Model',
+      category: 'model',
+      type: 'select',
+      currentValue: currentModel,
+      options: [
+        {
+          group: 'deepseek-official',
+          name: 'DeepSeek',
+          options: [
+            { value: '["deepseek-official","deepseek-v4-flash"]', name: 'deepseek-v4-flash' },
+            { value: '["deepseek-official","deepseek-v4-pro"]', name: 'DeepSeek-V4-Pro' },
+          ],
+        },
+      ],
+    },
+    {
+      id: 'reasoning_effort',
+      name: 'Reasoning effort',
+      category: 'thought_level',
+      type: 'select',
+      currentValue: 'high',
+      options: [
+        { value: 'off', name: 'Off' },
+        { value: 'low', name: 'Low' },
+        { value: 'high', name: 'High' },
+        { value: 'max', name: 'Max' },
+      ],
+    },
+  ];
+}
+
 interface Harness {
   driver: DeepSeekDriver;
   runtime: DeepSeekRuntime;
-  harness: FakeHarness;
+  harness: FakeAgent;
   home: string;
   spawns: Array<{ command: string; args: string[]; env: Record<string, string> }>;
   /** What the runtime logged (the harness's own stderr lines included). */
@@ -40,7 +76,8 @@ function withDriver(
   options: { idleCloseMs?: number; env?: NodeJS.ProcessEnv; dshPath?: string; log?: (line: string) => void } = {},
 ): Harness {
   const home = harnessHome();
-  const harness = new FakeHarness();
+  const harness = new FakeAgent();
+  harness.options = configOptions();
   const spawns: Harness['spawns'] = [];
   const logs: string[] = [];
   const log = (line: string): void => {

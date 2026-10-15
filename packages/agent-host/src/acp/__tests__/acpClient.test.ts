@@ -1,9 +1,8 @@
 /**
- * The ACP wire client: what the driver sends and receives over the harness's
- * stdio. The harness itself is the fake in fakeHarness.ts; here the peer is
- * whatever a test writes, which is how the wire's own cases (a malformed
- * line, a reply to nothing, a message split across chunks, the child going
- * away) are covered.
+ * The ACP wire client: what a driver sends and receives over the agent's
+ * stdio. The agent itself is whatever a test writes here, which is how the
+ * wire's own cases (a malformed line, a reply to nothing, a message split
+ * across chunks, the child going away) are covered.
  */
 import { PassThrough } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
@@ -32,7 +31,7 @@ function wire(): Wire {
   out.on('data', (chunk: Buffer) => {
     for (const line of chunk.toString().split('\n')) if (line.trim() !== '') sent.push(JSON.parse(line));
   });
-  const client = new AcpClient({ stdin: out, stdout: incoming, log: (line) => logs.push(line) });
+  const client = new AcpClient({ stdin: out, stdout: incoming, log: (line) => logs.push(line), tag: 'test' });
   incoming.resume();
   return {
     client,
@@ -164,7 +163,7 @@ describe('the wire itself', () => {
   it('reads a message split across chunks, and tolerates CRLF', async () => {
     const w = new PassThrough();
     const incoming = new PassThrough();
-    const client = new AcpClient({ stdin: w, stdout: incoming, log: () => {} });
+    const client = new AcpClient({ stdin: w, stdout: incoming, log: () => {}, tag: 'test' });
     const updates = vi.fn();
     client.on('session/update', updates);
     const line = `${JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 's1' } })}\r\n`;
@@ -187,7 +186,7 @@ describe('the wire itself', () => {
     const w = await connected();
     w.client.on('session/update', () => {});
     const incoming = new PassThrough();
-    const client = new AcpClient({ stdin: new PassThrough(), stdout: incoming, log: () => {} });
+    const client = new AcpClient({ stdin: new PassThrough(), stdout: incoming, log: () => {}, tag: 'test' });
     const closed = client.closed;
     incoming.emit('error', new Error('EPIPE'));
     expect(await closed).toEqual({ error: 'EPIPE' });

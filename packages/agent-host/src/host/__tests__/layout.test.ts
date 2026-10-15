@@ -2,9 +2,11 @@
  * The source layout's import rules, so a driver stays a folder that can be
  * added or removed on its own:
  * - a driver imports only the driver SDK (`sdk/`), the installer
- *   (`install/`), the generated pins and types (`generated/`) and its own
- *   folder — never the host, never another driver;
- * - the SDK and the installer import no driver and nothing of the host;
+ *   (`install/`), the generated pins and types (`generated/`), the shared
+ *   ACP machinery (`acp/`) and its own folder — never the host, never another
+ *   driver;
+ * - the SDK, the installer and the ACP machinery import no driver and
+ *   nothing of the host;
  * - outside the drivers, only the module list (`host/modules.ts`) names one.
  */
 import * as fs from 'node:fs';
@@ -39,17 +41,17 @@ function violations(files: string[], allowed: (file: string, target: string) => 
 describe('source layout', () => {
   const all = sources(SRC);
 
-  it('a driver imports only the SDK, the installer, generated code and its own folder', () => {
+  it('a driver imports only the SDK, the installer, generated code, ACP and its own folder', () => {
     const drivers = all.filter((f) => rel(f).startsWith('drivers/'));
     const bad = violations(drivers, (file, target) => {
       const own = rel(file).split('/').slice(0, 2).join('/');
-      return ['sdk', 'install', 'generated', own].some((dir) => under(target, dir));
+      return ['sdk', 'install', 'generated', 'acp', own].some((dir) => under(target, dir));
     });
     expect(bad).toEqual([]);
   });
 
-  it('the SDK and the installer import no driver and nothing of the host', () => {
-    const shared = all.filter((f) => /^(sdk|install)\//.test(rel(f)) && !isTest(f));
+  it('the SDK, the installer and the ACP machinery import no driver and nothing of the host', () => {
+    const shared = all.filter((f) => /^(sdk|install|acp)\//.test(rel(f)) && !isTest(f));
     const bad = violations(shared, (_file, target) => !under(target, 'drivers') && !under(target, 'host'));
     expect(bad).toEqual([]);
   });
