@@ -66,6 +66,34 @@ pub struct PhoneClient {
     /// misses what happens before it renews.
     #[serde(skip)]
     pub present_until_ms: u64,
+    /// What the client watches for live text. Not stored either: a bridge
+    /// that has just restarted does not know, so it sends every session's
+    /// live text until the client says again.
+    #[serde(skip)]
+    pub watch: WatchState,
+}
+
+/// Which session's live text a client wants. Only a `partial` is filtered by
+/// it — every other update is not live text and goes to each present client.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum WatchState {
+    /// The client has not said yet (or the bridge has just restarted): it
+    /// gets every session's live text, the safe default that never leaves a
+    /// row frozen on screen.
+    #[default]
+    Unknown,
+    /// It said: `Some(session)` it watches, `None` it watches nothing.
+    Watching(Option<String>),
+}
+
+impl WatchState {
+    /// Whether a `partial` of `session` is this client's.
+    pub(crate) fn wants(&self, session: &str) -> bool {
+        match self {
+            WatchState::Unknown => true,
+            WatchState::Watching(watching) => watching.as_deref() == Some(session),
+        }
+    }
 }
 
 /// One copy of a message: for one client of an identity.

@@ -41,11 +41,14 @@
 //!   identity's client, the bridge's own) or that a client already rotated
 //!   away from is refused: a session key belongs to one client.
 
-use protocol::commands::{SessionKeyGrant, PRESENCE_LEASE_SECS, PRESENCE_RENEW_SECS, SESSION_KEY_MAX_LIFETIME_SECS};
+use protocol::commands::{
+    PhoneToBridge, SessionKeyGrant, PRESENCE_LEASE_SECS, PRESENCE_RENEW_SECS, SESSION_KEY_MAX_LIFETIME_SECS,
+};
 use protocol::crypto::npub_from_hex;
+use protocol::events::{BridgeToPhone, PartialMsg};
 
 use super::Engine;
-use crate::io::{store_keys, Addressee, Effect, PhoneClient};
+use crate::io::{store_keys, Addressee, Effect, PhoneClient, WatchState};
 
 /// The most clients an identity keeps. Each costs a copy of every message,
 /// so a client that keeps granting fresh keys cannot grow that without end.
@@ -117,7 +120,7 @@ impl Engine {
                 let dropped = phone.clients.remove(quietest);
                 log::info!("[Engine] {}... has too many clients; dropping {}...", short(identity), short(&dropped.key.pubkey_hex));
             }
-            phone.clients.push(PhoneClient { key: grant, previous: None, present_until_ms });
+            phone.clients.push(PhoneClient { key: grant, previous: None, present_until_ms, watch: WatchState::default() });
             log::info!("[Engine] Session key {key}... granted for a new client of {}...", short(identity));
         }
         self.store_paired();
@@ -183,8 +186,18 @@ impl Engine {
     /// it replaced) is present for a lease from now, or, `away`, no longer.
     /// Returns whether it was away until now, so wants a heartbeat of its
     /// own. A command under the identity's own key names no client.
-    pub(super) fn note_presence(&mut self, identity: &str, key: &str, away: bool) -> bool {
+    ///
+    /// `msg` is the command that carried it. A `presence` also says which
+    /// session the client watches — a client that starts watching one is
+    /// caught up on that session's live parts at once — and `away` means it
+    /// watches nothing. Any other command says the client is running and
+    /// leaves what it watches as it was.
+    pub(super) fn note_presence(&mut self, identity: &str, key: &str, msg: &PhoneToBridge) -> bool {
         let now = self.now();
+        let (away, watch) = match msg {
+            PhoneToBridge::Presence(m) => (m.away, Some(m.watching.clone())),
+            _ => (false, None),
+        };
         let Some(phone) = self.paired.iter_mut().find(|p| p.pubkey_hex == identity) else { return false };
         let holds = |c: &&mut PhoneClient| c.key.pubkey_hex == key || c.previous.as_ref().is_some_and(|k| k.pubkey_hex == key);
         let Some(client) = phone.clients.iter_mut().find(holds) else { return false };
@@ -193,7 +206,56 @@ impl Engine {
         if away && was_present {
             log::info!("[Engine] A client of {}... is away", short(identity));
         }
+        // A client that did not change what it watches is not caught up
+        // again: a renewal, or a second `presence` for the same session,
+        // would otherwise resend every live part.
+        let mut catch_up = None;
+        if let Some(watching) = watch {
+            let next = WatchState::Watching(if away { None } else { watching });
+            if next != client.watch {
+                if let WatchState::Watching(Some(session)) = &next {
+                    catch_up = Some((client.key.pubkey_hex.clone(), session.clone()));
+                }
+                client.watch = next;
+            }
+        }
+        if let Some((client_key, session_id)) = catch_up {
+            self.catch_up_live_text(identity, &client_key, &session_id);
+        }
         !away && !was_present
+    }
+
+    /// A client has just started watching `session`: send it, alone, one
+    /// `partial` per live part of that session that has kept its text, from
+    /// offset 0 — the whole of what the phones have — so the rows it now
+    /// shows are complete instead of waiting for the entry that completes
+    /// each part. A part that outgrew the cap has nothing to send, and a
+    /// session with no live parts nothing either.
+    fn catch_up_live_text(&mut self, identity: &str, client_key: &str, session_id: &str) {
+        let Some(run) = self.sessions.get(session_id).and_then(|s| s.run.as_ref()) else { return };
+        let messages: Vec<BridgeToPhone> = run
+            .parts
+            .iter()
+            .filter_map(|(key, part)| {
+                let text = part.kept_text()?;
+                Some(BridgeToPhone::Partial(PartialMsg {
+                    session_id: session_id.to_string(),
+                    key: key.clone(),
+                    entry_type: part.kind(),
+                    subagent: part.subagent(),
+                    offset: 0,
+                    text: text.to_string(),
+                }))
+            })
+            .collect();
+        if messages.is_empty() {
+            return;
+        }
+        log::info!("[Engine] Catching a client of {}... up on {} part(s) of {session_id}", short(identity), messages.len());
+        let to = vec![Addressee { phone: identity.to_string(), key: client_key.to_string() }];
+        for message in messages {
+            self.out.publish_addressed(to.clone(), message);
+        }
     }
 
     /// Every client counts as present until a running one has renewed: what
@@ -221,17 +283,44 @@ impl Engine {
         live.into_iter().filter(|c| c.present_until_ms > now_ms).map(|c| c.key.pubkey_hex.clone()).collect()
     }
 
+    /// [`Self::copy_keys`], for a `partial` of `session`: only clients that
+    /// watch it (or have not said what they watch) get a copy. An identity
+    /// with no client at all is unchanged — its one copy is the identity's
+    /// own, and nothing on that side renders live text.
+    fn copy_keys_watching(&self, identity: &str, now_ms: u64, session: &str) -> Vec<String> {
+        let now_secs = now_ms / 1000;
+        let Some(phone) = self.paired.iter().find(|p| p.pubkey_hex == identity) else { return vec![identity.to_string()] };
+        let live: Vec<&PhoneClient> = phone.clients.iter().filter(|c| c.key.expires_at > now_secs).collect();
+        if live.is_empty() {
+            return vec![identity.to_string()];
+        }
+        live.into_iter()
+            .filter(|c| c.present_until_ms > now_ms)
+            .filter(|c| c.watch.wants(session))
+            .map(|c| c.key.pubkey_hex.clone())
+            .collect()
+    }
+
     /// Turn every publish in `effects` to an identity into a copy for each
     /// of its present clients; one already for a client stays as it is.
+    /// Live text is narrowed further, to the clients watching that session.
     pub(super) fn address_publishes(&self, effects: &mut [Effect]) {
         let now = self.now();
         for effect in effects {
-            if let Effect::Publish { to, .. } = effect {
+            if let Effect::Publish { to, message } = effect {
+                let live_session = match message {
+                    BridgeToPhone::Partial(m) => Some(m.session_id.clone()),
+                    _ => None,
+                };
                 *to = to
                     .iter()
                     .flat_map(|a| {
                         if a.key.is_empty() {
-                            self.copy_keys(&a.phone, now).into_iter().map(|key| Addressee { phone: a.phone.clone(), key }).collect()
+                            let keys = match &live_session {
+                                Some(session) => self.copy_keys_watching(&a.phone, now, session),
+                                None => self.copy_keys(&a.phone, now),
+                            };
+                            keys.into_iter().map(|key| Addressee { phone: a.phone.clone(), key }).collect()
                         } else {
                             vec![a.clone()]
                         }

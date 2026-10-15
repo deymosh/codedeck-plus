@@ -31,6 +31,7 @@ use protocol::events::{
 
 use super::Engine;
 use crate::io::{Addressee, Effect};
+use crate::live::LivePart;
 use crate::out::TimerKind;
 use crate::session::{
     is_slash_command, runs_git_commit, strip_session_meta, title_from, Card, CardKind, Phase, Runner, StartKind,
@@ -688,7 +689,7 @@ impl Engine {
         if run.phase != Phase::Ready {
             return;
         }
-        let part = run.parts.entry(key.clone()).or_default();
+        let part = run.parts.entry(key.clone()).or_insert_with(|| LivePart::new(entry_type, subagent.clone()));
         let Some((offset, text)) = part.admit(offset, text, entry_type == PartialKind::Text) else { return };
         self.publish_all(BridgeToPhone::Partial(PartialMsg {
             session_id: session_id.to_string(),

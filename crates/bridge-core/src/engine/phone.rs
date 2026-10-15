@@ -83,10 +83,10 @@ impl Engine {
                 let Some((msg, key)) = self.ingest.accept(event, &self.config.keys, &keys, now_secs) else { return };
                 log::info!("[Engine] Received {} from {}...", type_name(&msg), short(&event.pubkey));
                 let client = Addressee { phone: event.pubkey.clone(), key: key.clone() };
-                // Any command says its client is running; `presence` says
-                // whether it still wants the shared updates.
-                let away = matches!(&msg, PhoneToBridge::Presence(m) if m.away);
-                if self.note_presence(&event.pubkey, &key, away) {
+                // Any command says its client is running; a `presence` also
+                // says whether it still wants the shared updates and which
+                // session it watches.
+                if self.note_presence(&event.pubkey, &key, &msg) {
                     self.want_list(client.clone());
                 }
                 self.requester = Some(client);

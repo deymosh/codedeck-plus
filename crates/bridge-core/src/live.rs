@@ -7,12 +7,23 @@
 //! comment — its completing entry, stripped, replaces the live row anyway.
 //! A piece that does not continue the part (one was lost, or came out of
 //! order) stops it too: the row stays as it is until the completing entry.
+//!
+//! What was passed on is also kept, up to [`CATCH_UP_CAP`], so a client that
+//! starts watching a session mid-part can be sent the part whole from offset
+//! 0 instead of waiting for the entry that completes it.
+
+use protocol::common::{PartialKind, Subagent};
 
 /// The start of the session-meta comment (see [`crate::session::strip_session_meta`]).
 const META_OPEN: &str = "<!--";
 
+/// The most of a part's text kept for a client that starts watching it
+/// mid-stream. Past this the part is too long to catch anyone up, and
+/// nothing more is kept for it.
+const CATCH_UP_CAP: usize = 256 * 1024;
+
 /// One part being streamed, as far as the bridge passed it on.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct LivePart {
     /// Where the driver's next piece must start (UTF-16 code units).
     expected: u64,
@@ -23,9 +34,27 @@ pub(crate) struct LivePart {
     held: String,
     /// Nothing more of this part is passed on.
     stopped: bool,
+    /// The entry this part completes, and the sub-agent it belongs to: what
+    /// a `partial` needs besides the text.
+    kind: PartialKind,
+    subagent: Option<Subagent>,
+    /// Everything passed on so far, for a client that starts watching
+    /// mid-part; `None` once it outgrew [`CATCH_UP_CAP`].
+    kept: Option<String>,
+}
+
+impl Default for LivePart {
+    fn default() -> Self {
+        Self::new(PartialKind::Text, None)
+    }
 }
 
 impl LivePart {
+    /// A part about to be streamed, completing an entry of `kind`.
+    pub fn new(kind: PartialKind, subagent: Option<Subagent>) -> Self {
+        Self { expected: 0, sent: 0, held: String::new(), stopped: false, kind, subagent, kept: Some(String::new()) }
+    }
+
     /// A piece of the part arrived: `text` from `offset`. Returns what to send
     /// the phones — its offset in what they have, and the text — if anything.
     /// `strip_meta` is set for a reply, whose stored entry has the comment
@@ -53,9 +82,39 @@ impl LivePart {
         if out.is_empty() {
             return None;
         }
+        self.keep(&out);
         let at = self.sent;
         self.sent += utf16_len(&out);
         Some((at, out))
+    }
+
+    /// Keep what is being passed on, until the part outgrows
+    /// [`CATCH_UP_CAP`]; past that it is dropped whole, so a catch-up never
+    /// sends a prefix that would only freeze the row.
+    fn keep(&mut self, out: &str) {
+        let Some(kept) = self.kept.as_mut() else { return };
+        kept.push_str(out);
+        if kept.len() > CATCH_UP_CAP {
+            self.kept = None;
+        }
+    }
+
+    /// The entry kind a `partial` of this part carries.
+    pub fn kind(&self) -> PartialKind {
+        self.kind
+    }
+
+    /// Its sub-agent, if any.
+    pub fn subagent(&self) -> Option<Subagent> {
+        self.subagent.clone()
+    }
+
+    /// Everything passed on so far, for a client that has just started
+    /// watching: the whole of what the phones have, from offset 0. `None`
+    /// when nothing has been passed on yet or the part outgrew
+    /// [`CATCH_UP_CAP`].
+    pub fn kept_text(&self) -> Option<&str> {
+        self.kept.as_deref().filter(|text| !text.is_empty())
     }
 }
 
@@ -113,5 +172,26 @@ mod tests {
         assert!(p.admit(0, "abc", true).is_some());
         assert_eq!(p.admit(5, "def", true), None);
         assert_eq!(p.admit(3, "def", true), None);
+    }
+
+    #[test]
+    fn what_was_passed_on_is_kept_for_a_catch_up() {
+        let mut p = LivePart::new(PartialKind::Thinking, None);
+        assert_eq!(p.kept_text(), None, "nothing yet");
+        p.admit(0, "a <", true);
+        p.admit(3, "b", true);
+        assert_eq!(p.kept_text(), Some("a <b"), "the pieces as the phones got them");
+        assert_eq!(p.kind(), PartialKind::Thinking);
+    }
+
+    #[test]
+    fn a_part_past_the_cap_keeps_nothing_for_a_catch_up() {
+        let mut p = LivePart::default();
+        let piece = "x".repeat(CATCH_UP_CAP / 2);
+        p.admit(0, &piece, false);
+        p.admit(piece.len() as u64, &piece, false);
+        assert_eq!(p.kept_text().map(str::len), Some(CATCH_UP_CAP), "at the cap it is still whole");
+        p.admit(piece.len() as u64 * 2, "!", false);
+        assert_eq!(p.kept_text(), None, "past it, dropped whole");
     }
 }
