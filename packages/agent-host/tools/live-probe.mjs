@@ -561,6 +561,13 @@ async function main() {
       ...(args.persona ? { persona: args.persona } : {}),
       ...(fakeSession?.provider ? { provider: fakeSession.provider } : {}),
     });
+    // A session the host refused never reports `ready`: without this the probe
+    // would sit out its whole timeout on something that cannot arrive, after
+    // having already printed why (see `handleFrame`).
+    if (failed) {
+      say('!! the session could not be started — see the error above');
+      return finish(1);
+    }
     await waitFor('the session to be ready', (value) => value.type === 'ready');
     // Who the session can run as, for an agent with personas: the list a
     // phone shows in the session's options.
