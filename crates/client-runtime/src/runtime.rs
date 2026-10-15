@@ -440,6 +440,7 @@ impl Core {
             stale_timer: None,
             last_connected_relays: Vec::new(),
             pair_timer: None,
+            unanswered_timer: None,
             undo_timer: None,
             backup_timer: None,
             backup_busy: false,
@@ -686,6 +687,9 @@ enum Msg {
     /// That check's relay probe finished.
     KeepaliveProbed(oneshot::Sender<()>),
     PairDeadline,
+    /// The earliest machine-settings change waiting for an answer is due to
+    /// be given up on.
+    UnansweredDeadline,
     Send {
         machine: String,
         msg: Box<PhoneToBridge>,
@@ -973,6 +977,9 @@ struct Loop {
     last_connected_relays: Vec<String>,
     /// CDX-040 pair-ack deadline.
     pair_timer: Option<AbortHandle>,
+    /// When the earliest machine-settings change still waiting for an answer
+    /// gives up (see [`client_core::stores::machines::SETTINGS_ANSWER_TIMEOUT_MS`]).
+    unanswered_timer: Option<AbortHandle>,
     /// The delete-controller's 4 s undo window.
     undo_timer: Option<AbortHandle>,
     /// The pending config backup save (see `runtime::backup`).
@@ -1168,6 +1175,12 @@ impl Loop {
                 Msg::FlushAcks => self.flush_acks(),
                 Msg::Send { machine, msg, reply } => self.on_send(machine, *msg, reply),
                 Msg::PairDeadline => self.on_pair_deadline(),
+                Msg::UnansweredDeadline => {
+                    if self.stores.machines.expire_unanswered(self.clock.now_ms()) {
+                        self.state_changed(SliceId::Machines);
+                    }
+                    self.rearm_unanswered_timer();
+                }
                 Msg::Intent { intent, reply } => {
                     // An image send keeps the reply and answers it when the
                     // send finishes off the loop; everything else is done now.
@@ -1368,6 +1381,17 @@ impl Loop {
             })
             .abort_handle(),
         );
+    }
+
+    /// Point the "did the machine answer?" timer at the earliest change still
+    /// waiting, arming or disarming it as that changes. A change answered
+    /// before its deadline leaves a timer that fires into a no-op, which is
+    /// cheaper than tracking every answer to disarm it.
+    fn rearm_unanswered_timer(&mut self) {
+        abort(&mut self.unanswered_timer);
+        let Some(deadline) = self.stores.machines.next_unanswered_deadline() else { return };
+        let delay = deadline.saturating_sub(self.clock.now_ms());
+        self.unanswered_timer = Some(self.arm(delay, Msg::UnansweredDeadline));
     }
 
     async fn on_relay_event(&mut self, event: NostrEvent) {
@@ -1798,6 +1822,9 @@ impl Loop {
         let result = apply_intent(&mut self.stores, intent, &self.keys, ctx);
         let session_file_send = result.session_file_send.clone();
         self.interpret_intent(result).await;
+        // A machine-settings change just sent may need a "did the machine
+        // answer?" deadline; re-arming here keeps that cheap and in one place.
+        self.rearm_unanswered_timer();
         if let Some(send) = session_file_send {
             self.spawn_session_file(send, reply.take());
         }
