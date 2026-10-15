@@ -473,12 +473,16 @@ describe('DeepSeekSession resume', () => {
     expect(ctx.logs.some((line) => /could not resume old-session/.test(line))).toBe(true);
   });
 
-  it('does not try a resume the harness says it does not support', async () => {
+  it.each([
+    ['leaves the capability out', false],
+    ['sets the capability to null', 'null'],
+  ] as const)('does not try a resume when the harness %s', async (_case, supportsResume) => {
     const ready = withDriver();
-    ready.harness.supportsResume = false;
-    await started(ready, { resume: 'old-session' });
+    ready.harness.supportsResume = supportsResume;
+    const ctx = await started(ready, { resume: 'old-session' });
     expect(ready.harness.resumed).toEqual([]);
     expect(ready.harness.newSessions).toHaveLength(1);
+    expect(ctx.entries().some((entry) => entry.entryType === 'notice')).toBe(false);
   });
 });
 

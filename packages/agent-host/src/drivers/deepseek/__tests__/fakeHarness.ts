@@ -102,8 +102,9 @@ export class FakeHarness {
   resumeError: string | undefined;
   /** Whether the harness accepts the values `set_config_option` is given. */
   acceptsOptions = true;
-  /** Whether the connection advertises `session/resume` at all. */
-  supportsResume = true;
+  /** Whether the connection advertises `session/resume`: `true` as `{}`,
+   *  `false` by leaving the field out, `'null'` as an explicit `null`. */
+  supportsResume: boolean | 'null' = true;
   /** Whether `session/new` succeeds. */
   newSessionError: string | undefined;
   /** Scripts one turn; the default completes at once. */
@@ -164,7 +165,7 @@ export class FakeHarness {
             sessionCapabilities: {
               close: {},
               list: {},
-              ...(this.supportsResume ? { resume: {} } : {}),
+              ...(this.supportsResume === true ? { resume: {} } : this.supportsResume === 'null' ? { resume: null } : {}),
             },
           },
           authMethods: [],
