@@ -134,27 +134,32 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
     },
     "session_options" to {
         Box(Modifier.background(Tokens.SurfaceRaised)) {
-            SessionOptionsList(DesignFixtures.claudeOptions, OptionsPage.Main, {}, {}, {}, {}, { _, _ -> }, {})
+            SessionOptionsList(DesignFixtures.claudeOptions, OptionsPage.Main, {}, {}, {}, {}, {}, { _, _ -> }, {})
         }
     },
     "session_options_more" to {
         Box(Modifier.background(Tokens.SurfaceRaised)) {
-            SessionOptionsList(DesignFixtures.opencodeOptions, OptionsPage.Main, {}, {}, {}, {}, { _, _ -> }, {})
+            SessionOptionsList(DesignFixtures.opencodeOptions, OptionsPage.Main, {}, {}, {}, {}, {}, { _, _ -> }, {})
         }
     },
     "session_options_models" to {
         Box(Modifier.background(Tokens.SurfaceRaised)) {
-            SessionOptionsList(DesignFixtures.opencodeOptions, OptionsPage.Models, {}, {}, {}, {}, { _, _ -> }, {})
+            SessionOptionsList(DesignFixtures.opencodeOptions, OptionsPage.Models, {}, {}, {}, {}, {}, { _, _ -> }, {})
+        }
+    },
+    "session_options_persona" to {
+        Box(Modifier.background(Tokens.SurfaceRaised)) {
+            SessionOptionsList(DesignFixtures.opencodeOptions, OptionsPage.Persona, {}, {}, {}, {}, {}, { _, _ -> }, {})
         }
     },
     "session_options_mcp" to {
         Box(Modifier.background(Tokens.SurfaceRaised)) {
-            SessionOptionsList(DesignFixtures.claudeOptions, OptionsPage.Mcp, {}, {}, {}, {}, { _, _ -> }, {})
+            SessionOptionsList(DesignFixtures.claudeOptions, OptionsPage.Mcp, {}, {}, {}, {}, {}, { _, _ -> }, {})
         }
     },
     "session_options_effort" to {
         Box(Modifier.background(Tokens.SurfaceRaised)) {
-            SessionOptionsList(DesignFixtures.claudeOptions, OptionsPage.Effort, {}, {}, {}, {}, { _, _ -> }, {})
+            SessionOptionsList(DesignFixtures.claudeOptions, OptionsPage.Effort, {}, {}, {}, {}, {}, { _, _ -> }, {})
         }
     },
     "session_context" to {
@@ -422,6 +427,7 @@ class DesignSnapshotTest {
     @Test fun home_nothing_paired() = paparazzi.page("home_nothing_paired")
     @Test fun session() = paparazzi.page("session")
     @Test fun session_composer_opencode() = paparazzi.page("session_composer_opencode")
+    @Test fun session_options_persona() = paparazzi.page("session_options_persona")
     @Test fun session_new_claude() = paparazzi.page("session_new_claude")
     @Test fun session_new_opencode() = paparazzi.page("session_new_opencode")
     @Test fun session_new_deepseek() = paparazzi.page("session_new_deepseek")

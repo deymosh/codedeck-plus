@@ -555,6 +555,17 @@ fun SessionScreen(
     }
     LaunchedEffect(machine, sessionId, supportsMcp, sessionLive) { requestMcp() }
 
+    // Personas, likewise once the session runs: the options sheet shows its
+    // row only when there is a choice, and the chip names a persona that is
+    // not the default. Asked again each time the sheet opens, since a
+    // project's own come and go with its files.
+    val supportsPersonas = agent?.supportsPersonas == true
+    fun requestPersonas() {
+        val id = agent?.id ?: return
+        if (supportsPersonas && sessionLive) dispatch(UniffiIntent.RequestPersonas(machine = machine, agent = id, sessionId = sessionId))
+    }
+    LaunchedEffect(machine, sessionId, supportsPersonas, sessionLive) { requestPersonas() }
+
     // A tap anywhere but the input takes the focus off it, before whatever
     // was tapped acts: the keyboard goes, and a sheet that opens does not
     // bring it back on closing (a quick prompt or a picked command, which
@@ -742,8 +753,12 @@ fun SessionScreen(
                     ?: agent?.efforts.orEmpty(),
                 effort = session?.effort,
                 mcp = session?.mcp?.takeIf { supportsMcp && it.servers.isNotEmpty() },
+                personas = session?.personas?.personas?.takeIf { supportsPersonas }.orEmpty(),
+                persona = session?.persona,
+                defaultPersona = agent?.defaultPersona,
             )
             var optionsSheetOpen by remember(machine, sessionId) { mutableStateOf(false) }
+            LaunchedEffect(optionsSheetOpen) { if (optionsSheetOpen) requestPersonas() }
             if (optionsSheetOpen) {
                 SessionOptionsSheet(
                     sessionOptions,
@@ -757,6 +772,11 @@ fun SessionScreen(
                         optionsSheetOpen = false
                         if (id != sessionModel) {
                             dispatch(UniffiIntent.SetOption(machine = machine, sessionId = sessionId, option = "model", value = id))
+                        }
+                    },
+                    onPersona = { id ->
+                        if (id != session?.persona) {
+                            dispatch(UniffiIntent.SetOption(machine = machine, sessionId = sessionId, option = "persona", value = id))
                         }
                     },
                     onMcpOpen = ::requestMcp,

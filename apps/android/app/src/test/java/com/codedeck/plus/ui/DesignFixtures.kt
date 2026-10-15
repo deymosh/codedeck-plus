@@ -26,6 +26,7 @@ import uniffi.client_ffi.UniffiSignIn
 import uniffi.client_ffi.UniffiPermissionRule
 import uniffi.client_ffi.UniffiAgent
 import uniffi.client_ffi.UniffiAgentDefaults
+import uniffi.client_ffi.UniffiAgentPersonas
 import uniffi.client_ffi.UniffiAgentModels
 import uniffi.client_ffi.UniffiAgentPlugins
 import uniffi.client_ffi.UniffiAvailablePlugin
@@ -51,6 +52,7 @@ import uniffi.client_ffi.UniffiMachineSummary
 import uniffi.client_ffi.UniffiModelEntry
 import uniffi.client_ffi.UniffiProviderProfileInfo
 import uniffi.client_ffi.UniffiOptionChoice
+import uniffi.client_ffi.UniffiPersona
 import uniffi.client_ffi.UniffiQuickPrompt
 import uniffi.client_ffi.UniffiSessionCommands
 import uniffi.client_ffi.UniffiSessionSummary
@@ -133,11 +135,17 @@ internal object DesignFixtures {
     val opencode = UniffiAgent(
         id = "opencode", displayName = "OpenCode",
         modes = listOf(UniffiOptionChoice("build", "Build", null), UniffiOptionChoice("plan", "Plan", null)),
-        efforts = emptyList(), defaultMode = "build", defaultEffort = null,
+        efforts = emptyList(), defaultMode = "build", defaultEffort = null, defaultPersona = "build",
         supportsModels = true, supportsUsage = false, supportsProviders = false, supportsProviderModels = true, supportsInterrupt = true, supportsCommands = true, supportsPlugins = true, supportsMcp = true, supportsTasks = true, supportsPermissionRules = true, supportsAccounts = true,
+        supportsPersonas = true,
         credentials = emptyList(),
         installState = "ready", removable = true, installError = null, actionBusy = null, actionFailure = null, style = opencodeStyle,
     )
+    /** OpenCode's own agent, a machine-wide one and a project's (with its colour). */
+    val buildPersona = UniffiPersona("build", "Build", "The default agent. Executes tools based on configured permissions.", null)
+    val docsPersona = UniffiPersona("docs-writer", "docs-writer", "Writes and edits documentation only", null)
+    val reviewerPersona = UniffiPersona("reviewer", "reviewer", "Reviews code without changing it", 0xFFE5C07Bu)
+
     /** An agent the bridge offers and the machine does not have yet: a name, nothing it supports. */
     val deepseek = UniffiAgent(
         id = "deepseek-harness", displayName = "DeepSeek Harness",
@@ -362,7 +370,11 @@ internal object DesignFixtures {
         relays = listOf("wss://relay.example.org", "wss://nostr.home.lan:4869"),
         lastHeartbeatAt = (NOW - 20_000).toULong(), machineOffline = false,
         defaultAgent = "claude-code",
-        agentDefaults = listOf(UniffiAgentDefaults("claude-code", mode = "acceptEdits", effort = "", model = "Z.ai/glm-5.3-flash")),
+        agentDefaults = listOf(
+            UniffiAgentDefaults("claude-code", mode = "acceptEdits", effort = "", model = "Z.ai/glm-5.3-flash"),
+            UniffiAgentDefaults("opencode", mode = "", effort = "", model = "", persona = "docs-writer"),
+        ),
+        personas = listOf(UniffiAgentPersonas("opencode", listOf(buildPersona, docsPersona), null)),
     )
     val buildBox = workstation.copy(
         pubkeyHex = "b".repeat(64), name = "Build box", host = "cli",
@@ -500,6 +512,7 @@ internal object DesignFixtures {
             (1..8).map { UniffiModelEntry("vendor/model-$it", "model-$it", "OpenRouter · vendor", null, emptyList()) },
         modes = opencode.modes, mode = "build", modePending = false,
         efforts = emptyList(), effort = null,
+        personas = listOf(buildPersona, docsPersona, reviewerPersona), persona = "reviewer", defaultPersona = "build",
     )
 
     /** A DeepSeek Harness session on its own model, asking first. */

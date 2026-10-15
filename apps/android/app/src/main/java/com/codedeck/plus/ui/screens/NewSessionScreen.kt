@@ -245,6 +245,10 @@ internal fun NewSessionBody(
                     mode = mode.ifEmpty { null },
                     effort = effort.ifEmpty { null },
                     model = model.ifEmpty { null },
+                    // Not offered here: a project can add personas only its
+                    // session lists. The agent falls back, and says so, where
+                    // the default one is missing.
+                    persona = defaultsOf(agent.id)?.persona?.ifEmpty { null },
                     providerId = providerId.ifEmpty { null },
                 ),
             )

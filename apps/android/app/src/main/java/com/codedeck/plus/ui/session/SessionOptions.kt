@@ -51,6 +51,7 @@ import com.codedeck.plus.ui.theme.Tokens
 import com.codedeck.plus.ui.transcript.rows.SheetHeader
 import uniffi.client_ffi.UniffiModelEntry
 import uniffi.client_ffi.UniffiOptionChoice
+import uniffi.client_ffi.UniffiPersona
 import uniffi.client_ffi.UniffiSessionMcp
 import androidx.compose.ui.graphics.Color
 
@@ -74,21 +75,34 @@ internal data class SessionOptions(
     val effort: String?,
     /** `null` hides the MCP row (no servers, or an agent without MCP). */
     val mcp: UniffiSessionMcp? = null,
+    /** The personas the session can switch to; fewer than two hides the row. */
+    val personas: List<UniffiPersona> = emptyList(),
+    /** The persona the session runs as, and the one it runs as by default. */
+    val persona: String? = null,
+    val defaultPersona: String? = null,
 ) {
     /** Whether the sheet has anything to change. */
-    val changeable: Boolean get() = models.isNotEmpty() || modes.size >= 2 || efforts.isNotEmpty() || mcp != null
+    val changeable: Boolean get() = models.isNotEmpty() || modes.size >= 2 || efforts.isNotEmpty() || mcp != null || personas.size >= 2
     val modeLabel: String? get() = modes.firstOrNull { it.id == mode }?.label ?: mode
     val effortLabel: String? get() = efforts.firstOrNull { it.id == effort }?.label ?: effort
+    val personaLabel: String? get() = personas.firstOrNull { it.id == persona }?.label ?: persona
+
+    /** The persona, when it is not the agent's default: who runs the session is then worth a word on the chip. */
+    val otherPersona: UniffiPersona? get() = persona?.takeIf { it != defaultPersona }?.let { id ->
+        personas.firstOrNull { it.id == id } ?: UniffiPersona(id = id, label = id, description = null, color = null)
+    }
 }
 
 /**
  * The composer's options chip: the model, then the effort, muted — what
- * the next turn runs on. The mode has its own chip ([SessionModeChip]).
- * Opens [SessionOptionsSheet].
+ * the next turn runs on — led by the persona when the session runs as
+ * another than its agent's default, in the persona's colour. The mode has
+ * its own chip ([SessionModeChip]). Opens [SessionOptionsSheet].
  */
 @Composable
 internal fun SessionOptionsChip(options: SessionOptions, onClick: () -> Unit) {
-    val description = listOfNotNull(options.modelName, options.effortLabel).joinToString(", ")
+    val persona = options.otherPersona
+    val description = listOfNotNull(persona?.label, options.modelName, options.effortLabel).joinToString(", ")
     Row(
         Modifier
             .heightIn(min = 40.dp)
@@ -99,6 +113,17 @@ internal fun SessionOptionsChip(options: SessionOptions, onClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
+        persona?.let {
+            Text(
+                it.label,
+                color = it.color?.let { argb -> Color(argb.toLong()) } ?: Tokens.Text,
+                fontSize = Tokens.TextSm,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = CHIP_PERSONA_MAX),
+            )
+        }
         Text(
             options.modelName ?: "Model",
             color = if (options.modelName != null) Tokens.Text else Tokens.TextMuted,
@@ -117,6 +142,9 @@ internal fun SessionOptionsChip(options: SessionOptions, onClick: () -> Unit) {
 
 /** Widest the chip's model name gets, even with room to spare. */
 private val CHIP_MODEL_MAX = 140.dp
+
+/** Widest the chip's persona name gets, so the model keeps its room. */
+private val CHIP_PERSONA_MAX = 88.dp
 
 /**
  * The mode the session runs in, beside the button that sends: always in
@@ -154,7 +182,7 @@ internal fun SessionModeChip(options: SessionOptions, color: Color?, onClick: ()
 private val MODE_CHIP_MAX = 96.dp
 
 /** The pages of [SessionOptionsList]: the main one, and one per longer choice. */
-internal enum class OptionsPage { Main, Models, Effort, Mode, Mcp }
+internal enum class OptionsPage { Main, Models, Persona, Effort, Mode, Mcp }
 
 /** [SessionOptionsList] in a bottom sheet. Back from one of its pages
  *  returns to the main page; only there does it close the sheet. A page
@@ -166,6 +194,7 @@ internal fun SessionOptionsSheet(
     onMode: (String) -> Unit,
     onEffort: (String) -> Unit,
     onModel: (String) -> Unit,
+    onPersona: (String) -> Unit,
     /** The MCP page opened: the servers' state is asked for again. */
     onMcpOpen: () -> Unit,
     onMcpToggle: (name: String, enabled: Boolean) -> Unit,
@@ -184,6 +213,7 @@ internal fun SessionOptionsSheet(
             onMode,
             onEffort,
             onModel,
+            onPersona,
             onMcpToggle,
             onClose = onDismiss,
             modifier = if (pageHeight != null) Modifier.height(pageHeight) else Modifier.onSizeChanged { mainHeight = it.height },
@@ -197,7 +227,8 @@ private const val SHORT_MODEL_LIST = 5
 /**
  * The session's options, laid out like a model picker: the models (the
  * first few, the one in use always among them, and "More models" for the
- * rest), then a row each for effort, mode and the session's MCP servers,
+ * rest), then a row each for the persona (who runs it), effort, mode and
+ * the session's MCP servers,
  * showing the current value. A row opens its own page; a pick there goes
  * back to the main page. Apart from the sheet so a snapshot can show it.
  */
@@ -209,6 +240,7 @@ internal fun SessionOptionsList(
     onMode: (String) -> Unit,
     onEffort: (String) -> Unit,
     onModel: (String) -> Unit,
+    onPersona: (String) -> Unit,
     onMcpToggle: (name: String, enabled: Boolean) -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
@@ -237,6 +269,7 @@ internal fun SessionOptionsList(
                 }
                 val rows = buildList<@Composable () -> Unit> {
                     if (options.models.size > SHORT_MODEL_LIST) add { NavigationRow("More models", null) { onPage(OptionsPage.Models) } }
+                    if (options.personas.size >= 2) add { NavigationRow("Agent", options.personaLabel) { onPage(OptionsPage.Persona) } }
                     if (options.efforts.isNotEmpty()) add { NavigationRow("Effort", options.effortLabel) { onPage(OptionsPage.Effort) } }
                     if (options.modes.size >= 2) add { NavigationRow("Mode", options.modeLabel) { onPage(OptionsPage.Mode) } }
                     options.mcp?.let { mcp -> add { McpRow(mcp) { onPage(OptionsPage.Mcp) } } }
@@ -264,6 +297,15 @@ internal fun SessionOptionsList(
                     provider?.let { ProviderLabel(it) }
                     models.forEach { m ->
                         ModelRow(m.label ?: m.id, provider = null, selected = m.id == options.model) { onModel(m.id) }
+                    }
+                }
+            }
+            OptionsPage.Persona -> {
+                SheetHeader("Agent", null, back)
+                options.personas.forEach { p ->
+                    ChoiceRow(p.label, p.description, selected = p.id == options.persona) {
+                        onPersona(p.id)
+                        onPage(OptionsPage.Main)
                     }
                 }
             }
