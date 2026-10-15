@@ -140,6 +140,7 @@ impl Host {
             mode: mode.map(Into::into),
             effort: None,
             model: None,
+            persona: None,
             resume: None,
             credentials: Default::default(),
             env: Default::default(),

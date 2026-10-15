@@ -549,6 +549,8 @@ impl Engine {
             mode: rec.mode.clone(),
             effort: rec.effort.clone(),
             model: rec.model.clone(),
+            // No session records a persona yet.
+            persona: None,
             // A new session starts a fresh conversation; a resumed or
             // restarted one continues the agent's, when it has one.
             resume: match run.start_kind {
@@ -579,7 +581,7 @@ impl Engine {
         }
         match event {
             SessionEvent::Ready {} => self.on_ready(session_id),
-            SessionEvent::Info { native_session_id, model, mode, title, context_window, context_percentage } => {
+            SessionEvent::Info { native_session_id, model, mode, title, persona: _, context_window, context_percentage } => {
                 let info = InfoUpdate { native_session_id, model, mode, title, context_window, context_percentage };
                 self.on_info(session_id, info);
             }

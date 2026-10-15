@@ -55,11 +55,12 @@ mod tests {
         bridge_rt(json!({"v":1,"id":"1","kind":"initialize","payload":{"bridgeVersion":"11.0.0"}}));
         let start = bridge_rt(json!({"v":1,"id":"2","kind":"start-session","payload":{
             "sessionId":"s1","agent":"claude-code","cwd":"/w","mode":"plan","effort":"high","model":"m",
-            "resume":"native-1","credentials":{"anthropic_api_key":"sk"},"env":{"GITHUB_TOKEN":"gh"},
+            "persona":"review","resume":"native-1","credentials":{"anthropic_api_key":"sk"},"env":{"GITHUB_TOKEN":"gh"},
             "provider":{"id":"p","label":"P","baseUrl":"https://x","authToken":"t","models":[{"id":"k"}],"defaultModel":"k"}
         }}));
         let BridgeMessage::StartSession(s) = start.message else { panic!("start-session") };
         assert_eq!(s.credentials["anthropic_api_key"].expose(), "sk");
+        assert_eq!(s.persona.as_deref(), Some("review"));
         bridge_rt(json!({"v":1,"id":"3","kind":"start-session","payload":{"sessionId":"s","agent":"fake","cwd":"/"}}));
         bridge_rt(json!({"v":1,"id":"4","kind":"end-session","payload":{"sessionId":"s"}}));
         bridge_rt(json!({"v":1,"id":"4b","kind":"delete-conversation","payload":{
@@ -73,6 +74,10 @@ mod tests {
         bridge_rt(json!({"v":1,"id":"8","kind":"list-models","payload":{"agent":"opencode"}}));
         bridge_rt(json!({"v":1,"id":"9","kind":"get-usage","payload":{"sessionId":"s"}}));
         bridge_rt(json!({"v":1,"id":"10","kind":"list-commands","payload":{"sessionId":"s"}}));
+        bridge_rt(json!({"v":1,"id":"10p","kind":"list-personas","payload":{"agent":"opencode"}}));
+        let personas = bridge_rt(json!({"v":1,"id":"10q","kind":"list-personas","payload":{"agent":"opencode","sessionId":"s"}}));
+        let BridgeMessage::ListPersonas { agent, session_id } = personas.message else { panic!("list-personas") };
+        assert_eq!((agent.as_str(), session_id.as_deref()), ("opencode", Some("s")));
         bridge_rt(json!({"v":1,"id":"11","kind":"list-plugins","payload":{"agent":"claude-code","available":true}}));
         bridge_rt(json!({"v":1,"id":"12","kind":"plugin-action","payload":{"agent":"claude-code","action":"remove-marketplace","target":"m"}}));
         bridge_rt(json!({"v":1,"id":"13","kind":"list-mcp","payload":{"agent":"claude-code"}}));
@@ -115,8 +120,8 @@ mod tests {
             "credentials":[{"id":"anthropic_api_key","label":"Anthropic API key","envVar":"ANTHROPIC_API_KEY"}],
             "install":{"state":"ready"}
         },{
-            "id":"opencode","displayName":"OpenCode","modes":[],"efforts":[],
-            "supports":{"models":false,"usage":false,"providers":false,"providerModels":true,"interrupt":true,"commands":false,"plugins":false,"mcp":false,"tasks":false,"permissionRules":true,"accounts":false,"personas":false},
+            "id":"opencode","displayName":"OpenCode","modes":[],"efforts":[],"defaultPersona":"build",
+            "supports":{"models":false,"usage":false,"providers":false,"providerModels":true,"interrupt":true,"commands":false,"plugins":false,"mcp":false,"tasks":false,"permissionRules":true,"accounts":false,"personas":true},
             "credentials":[],"unavailableReason":"The OpenCode server failed to start","install":{"state":"ready","removable":true}
         },{
             "id":"deepseek-harness","displayName":"DeepSeek Harness","modes":[],"efforts":[],
@@ -128,6 +133,12 @@ mod tests {
         host_rt(json!({"v":1,"id":"4","kind":"models","payload":{"models":[{"id":"m","label":"M"}],"defaultModel":"m"}}));
         host_rt(json!({"v":1,"id":"5","kind":"usage","payload":{}}));
         host_rt(json!({"v":1,"id":"7","kind":"commands","payload":{"commands":[{"name":"compact","argumentHint":"<focus>"}]}}));
+        let personas = host_rt(json!({"v":1,"id":"7p","kind":"personas","payload":{"personas":[
+            {"id":"build","label":"Build"},{"id":"review","label":"review","description":"Reviews code","color":"#E5C07B"}]}}));
+        let HostMessage::Personas { personas } = personas.message else { panic!("personas") };
+        assert_eq!(personas[1].id, "review");
+        assert_eq!(personas[1].color.as_deref(), Some("#E5C07B"));
+        host_rt(json!({"v":1,"id":"7q","kind":"personas","payload":{"personas":[]}}));
         host_rt(json!({"v":1,"id":"8","kind":"plugins","payload":{"installed":[{"id":"c@m","name":"c","enabled":true}],"marketplaces":[{"name":"m","source":"o/r"}],"toggles":true}}));
         host_rt(json!({"v":1,"id":"9","kind":"mcp-servers","payload":{"servers":[{"name":"gh","transport":"http","target":"https://x/mcp","headerKeys":["Authorization"],"enabled":true}],"toggles":true}}));
         host_rt(json!({"v":1,"id":"10","kind":"session-mcp","payload":{"servers":[{"name":"gh","status":"needs-auth"}],"toggles":true,"projectWide":true}}));
@@ -146,6 +157,7 @@ mod tests {
         host_rt(json!({"v":1,"kind":"session-event","payload":{"sessionId":"s","event":{
             "type":"info","nativeSessionId":"n","model":"m","mode":"plan","contextWindow":1000000,"contextPercentage":12.0}}}));
         host_rt(json!({"v":1,"kind":"session-event","payload":{"sessionId":"s","event":{"type":"info","mode":"default"}}}));
+        host_rt(json!({"v":1,"kind":"session-event","payload":{"sessionId":"s","event":{"type":"info","persona":"review"}}}));
         let entries = host_rt(json!({"v":1,"kind":"session-event","payload":{"sessionId":"s","event":{"type":"entries","entries":[
             {"timestamp":"t","entryType":"text","role":"agent","text":"hello"},
             {"timestamp":"t","entryType":"turn_complete"}

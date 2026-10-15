@@ -199,6 +199,7 @@ fn a_session_started_on_the_default_model_is_listed_with_it() {
         model: Some("m-default".into()),
         mode: None,
         title: None,
+        persona: None,
         context_window: None,
         context_percentage: None,
     });
@@ -302,6 +303,7 @@ fn a_title_the_agent_gives_wins_over_the_meta_topic() {
         model: None,
         mode: None,
         title: Some(title.into()),
+        persona: None,
         context_window: None,
         context_percentage: None,
     };
@@ -396,7 +398,7 @@ fn live_text_passes_on_unnumbered_until_its_entry_or_the_turn_ends() {
 fn info_native(rig: &mut Rig, s: &str, id: &str) {
     rig.host_event(
         s,
-        SessionEvent::Info { native_session_id: Some(id.into()), model: None, mode: None, title: None, context_window: None, context_percentage: None },
+        SessionEvent::Info { native_session_id: Some(id.into()), model: None, mode: None, title: None, persona: None, context_window: None, context_percentage: None },
     );
 }
 
