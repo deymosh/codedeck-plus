@@ -64,8 +64,9 @@ event-id set alongside the cursor so the replay is a no-op.
 
 Nothing in the wire names a particular coding agent. The heartbeat carries
 `agents: AgentDescriptor[]` — per agent its `id`, `displayName`, `modes[]`,
-`efforts[]`, `defaultMode`, `defaultEffort`, `supports {models, usage,
-providers, providerModels, interrupt, commands, plugins, mcp, tasks}`, `credentials[]` status,
+`efforts[]`, `defaultMode`, `defaultEffort`, `defaultPersona`, `supports {models, usage,
+providers, providerModels, interrupt, commands, plugins, mcp, tasks,
+permissionRules, accounts, personas}`, `credentials[]` status,
 `install` (below) and `styleHash` (see [Agent styles](#agent-styles)). Phones build every
 picker from it and offer a feature only when the session's agent `supports`
 it. Mode, effort and model values are opaque strings the bridge validates
@@ -143,11 +144,12 @@ shared by every bridge that runs it.
   replayed, so a phone applies a list only if its `rev` is greater than that
   of the newest one it applied for that machine (kept across restarts); an
   older one changes nothing and announces nothing.
-- **Options:** `set-option {sessionId, option: mode|effort|model, value}` →
+- **Options:** `set-option {sessionId, option: mode|effort|model|persona, value}` →
   `option-confirmed {sessionId, option, value}`. A refused value publishes
   nothing (the phone keeps what it knew); a refused effort or model confirms
   the value still in force. `option-confirmed` is also sent when the agent
-  changes its own mode (it entered plan mode, a plan approval switched it).
+  changes its own mode (it entered plan mode, a plan approval switched it)
+  or persona (the one it ran as was removed: it falls back to its default).
 - **`turnStartedAt`:** while a turn runs (waiting on the user included),
   when it started, as an ISO 8601 time on the bridge's clock; absent
   otherwise. A turn need not start with the user's message (a background
@@ -388,6 +390,34 @@ commands change while it runs (plugins, skills) — and answers an unknown,
 stopped or command-less session at once. As with `models`, an empty list
 always carries an `error`. A command runs by sending `/name args` as plain
 `input`; the agent's driver turns it into whatever its agent needs.
+
+### `personas`
+
+Some agents carry named configurations of their own — instructions, a
+model, tools they may never use — that a session can run as (OpenCode's
+primary agents, from `.opencode/agents/*.md` in a project or the machine's
+global configuration). For agents with `supports.personas`:
+
+- `personas-request {agent, sessionId?}` → `personas {agent, sessionId?,
+  personas[], error?}`: with a session, those it can switch to (its
+  project's and the machine's); without, the machine-wide ones a new session
+  can start as anywhere. Each is `{id, label, description?, color?}`
+  (`color` a `#RRGGBB` the client may ignore). As with `models`, an empty
+  list always carries an `error`; a stopped or unknown session is answered
+  at once.
+- `set-option {option: persona}` switches who runs the session;
+  `create-session {persona}` names one to start as. A persona the session's
+  directory lacks leaves the agent's `defaultPersona`, and the session says
+  so in its transcript; the session listing's `persona` is always the one
+  it runs as.
+
+A persona is **who** runs the session; the mode stays **how much** it may
+do without asking. What the persona forbids holds in every mode, the
+auto-approve one included.
+
+Cost: one small request and reply when a running session is opened and each
+time its options are opened, and one when an agent's page is opened —
+never on a timer, never pushed.
 
 ### `plugins`
 
@@ -754,7 +784,7 @@ The bridge's ids are `b1, b2, …`; the host's are `h1, h2, …`.
 | Request | Reply |
 |---|---|
 | `initialize {bridgeVersion}` | `initialized {hostVersion, agents: AgentInfo[]}` |
-| `start-session {sessionId, agent, cwd, mode?, effort?, model?, resume?, credentials, env, provider?}` | `ack` once starting (progress follows as events), or `error` |
+| `start-session {sessionId, agent, cwd, mode?, effort?, model?, persona?, resume?, credentials, env, provider?}` | `ack` once starting (progress follows as events), or `error` |
 | `end-session {sessionId}` | `ack`; no `ended` follows |
 | `delete-conversation {sessionId, agent, cwd, conversationId}` | `ack` once the agent's own record of a deleted session's conversation is gone (also when there was none), after `sessionId` finished ending; or `error` |
 | `prompt {sessionId, text}` | `ack` |
@@ -764,6 +794,7 @@ The bridge's ids are `b1, b2, …`; the host's are `h1, h2, …`.
 | `list-models {agent}` | `models {models, defaultModel?}` |
 | `get-usage {sessionId}` | `usage {usage?}`: plan limits, the session's cost, and `context?` — what fills its window (`usedTokens`, `windowTokens`, `categories[{name, tokens, kind: used\|free\|buffer\|deferred}]`, `groups[{name, tokens, items[{name, tokens}]}]`) when the agent can say |
 | `list-commands {sessionId}` | `commands {commands}` |
+| `list-personas {agent, sessionId?}` | `personas {personas}`: the session's, or without one the machine-wide ones |
 | `list-plugins {agent, available?}` | `plugins {installed, marketplaces?, toggles, available?}` |
 | `plugin-action {agent, action, target}` | `plugins {…}` once done (`available?` after a marketplace change, `message?` saying what was done), or `error` with the agent's reason |
 | `list-mcp {agent}` | `mcp-servers {servers, toggles}` |
@@ -797,7 +828,7 @@ Session events are notifications: `session-event {sessionId, event}` with
 | Event | Meaning |
 |---|---|
 | `ready` | The agent accepts prompts (once per `start-session`). |
-| `info` | Changed facts only: `nativeSessionId` (the resume target), `model`, `mode`, `title` (the agent named the session; wins over the bridge's title from the first message and the session-meta topic), `contextWindow`, `contextPercentage`. |
+| `info` | Changed facts only: `nativeSessionId` (the resume target), `model`, `mode`, `persona` (the one it runs as, chosen or fallen back to), `title` (the agent named the session; wins over the bridge's title from the first message and the session-meta topic), `contextWindow`, `contextPercentage`. |
 | `entries` | Transcript entries, in order (the bridge assigns seqs). |
 | `turn` | `running` / `idle`. |
 | `ended` | The session is gone: no `error` = a normal end; `resumeLost` = the conversation to resume no longer exists. The host forgets the session. |
