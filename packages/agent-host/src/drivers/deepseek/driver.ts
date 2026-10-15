@@ -332,7 +332,9 @@ export class DeepSeekSession implements DriverSession {
   private async openSession(): Promise<{ sessionId: string; configOptions: SessionConfigOption[]; resumed: boolean }> {
     const resume = this.params.resume;
     const resumable = this.process?.capabilities.sessionCapabilities?.resume;
-    if (resume && resumable !== undefined) {
+    // ACP spells "not supported" both as an absent field and as `null`;
+    // only an object (even an empty one) advertises `session/resume`.
+    if (resume && resumable != null) {
       try {
         const resumed = await this.client.request('session/resume', { sessionId: resume, cwd: this.cwd, mcpServers: [] });
         return { sessionId: resume, configOptions: resumed.configOptions ?? [], resumed: true };
