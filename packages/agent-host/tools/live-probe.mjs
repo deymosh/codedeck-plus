@@ -414,6 +414,18 @@ async function main() {
       case 'ended':
         say(`ended${event.error ? `: ${event.error}` : ''}`);
         if (event.error) failed = true;
+        // A session that is gone can never satisfy a waiter: reject them all
+        // so the probe reports why and exits, rather than sitting out its
+        // whole timeout on something that can no longer arrive. A probe past
+        // its own last step (its own `end-session`) has no waiter left, so
+        // that path is untouched.
+        if (!finished) {
+          for (const entry of [...waits]) {
+            waits.splice(waits.indexOf(entry), 1);
+            deadline.clear(entry);
+            entry.reject(new Error(`the session ended${event.error ? `: ${event.error}` : ''}`));
+          }
+        }
         break;
       default:
         say(`event: ${JSON.stringify(event)}`);
