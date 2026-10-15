@@ -387,6 +387,9 @@ export class OpenCodeSession implements DriverSession {
   private readonly reportUnknownTool: (toolName: string) => void;
   private ended = false;
   private mode: string;
+  /** The last mode switch still being applied to the server; the next one
+   *  waits for it. Never rejects. */
+  private agentSwitch: Promise<void> = Promise.resolve();
   /** The title last reported for the session. */
   private title: string | undefined;
   private model?: { providerID: string; id: string };
@@ -1258,9 +1261,16 @@ export class OpenCodeSession implements DriverSession {
         // switching the mode switches both: the plan agent (or OpenCode's own
         // default), and whether a tool call reaches the phone at all.
         const { client, session } = await this.ready;
-        const agent = value === PLAN_MODE ? PLAN_AGENT : BUILD_AGENT;
-        await client.session.switchAgent({ sessionID: session.id, agent }).catch(() => {});
-        await this.statePermissions(client, session.id, agent);
+        // The host runs a second switch while the first is still talking to
+        // the server: queued, each applies the mode set last, so the session
+        // ends on the agent and rules of the final one, never a mix.
+        const switched = this.agentSwitch.then(async () => {
+          const agent = this.mode === PLAN_MODE ? PLAN_AGENT : BUILD_AGENT;
+          await client.session.switchAgent({ sessionID: session.id, agent }).catch(() => {});
+          await this.statePermissions(client, session.id, agent);
+        });
+        this.agentSwitch = switched;
+        await switched;
         return;
       }
       case 'model': {
@@ -1299,13 +1309,15 @@ export class OpenCodeSession implements DriverSession {
     const agentRules = await Promise.resolve()
       .then(() => client.agent.get({ agentID: agent, location: { directory: this.cwd } }))
       .then(
-      (got) => got.data.permissions,
-      (err) => {
-        this.ctx.log(`[opencode] could not read agent ${agent}'s permissions: ${formatOpenCodeError(err)}`);
-        return [];
-      },
-    );
-    await client.session.update({ sessionID, permissions: permissionRules(this.mode, agentRules) }).catch(() => {});
+        (got) => got.data.permissions,
+        (err) => {
+          this.ctx.log(`[opencode] could not read agent ${agent}'s permissions: ${formatOpenCodeError(err)}`);
+          return [];
+        },
+      );
+    await client.session
+      .update({ sessionID, permissions: permissionRules(this.mode, agentRules) })
+      .catch((err) => this.ctx.log(`[opencode] could not set the session's permissions: ${formatOpenCodeError(err)}`));
   }
 
   /** Tell the server which model (and reasoning variant) the session runs. */

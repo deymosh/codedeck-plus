@@ -803,6 +803,42 @@ describe('OpenCode modes, models and effort', () => {
     await session.end();
   });
 
+  it('ends on the last of two overlapping mode switches, never a mix of both', async () => {
+    // The plan agent's rules come back late: unqueued, its update would land
+    // after the second switch's and leave plan's rules on the build agent.
+    const client = clientWith([]);
+    const get = asMock(client.agent.get);
+    const plain = get.getMockImplementation()!;
+    get.mockImplementation(async (input: { agentID: string }) => {
+      if (input.agentID === 'plan') await new Promise((r) => setTimeout(r, 30));
+      return plain(input);
+    });
+    const ctx = recordingContext();
+    const session = OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp' }, ctx);
+    await ctx.waitFor((e) => e.type === 'ready');
+    await Promise.all([session.setOption!('mode', 'plan'), session.setOption!('mode', 'default')]);
+    expect(client.session.switchAgent).toHaveBeenLastCalledWith({ sessionID: 'ses_1', agent: 'build' });
+    expect(client.session.update).toHaveBeenLastCalledWith({
+      sessionID: 'ses_1',
+      permissions: [
+        { action: '*', resource: '*', effect: 'allow' },
+        { action: '*', resource: '*', effect: 'allow' },
+        { action: 'read', resource: '*.env', effect: 'allow' },
+      ],
+    });
+    await session.end();
+  });
+
+  it('says so when the session\'s rules cannot be set', async () => {
+    const client = clientWith([]);
+    asMock(client.session.update).mockRejectedValue(new Error('boom'));
+    const ctx = recordingContext();
+    const session = OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp' }, ctx);
+    await ctx.waitFor((e) => e.type === 'ready');
+    expect(ctx.logs.some((l) => l.includes("could not set the session's permissions"))).toBe(true);
+    await session.end();
+  });
+
   it('keeps the mode\'s catch-all alone when the agent cannot be read', async () => {
     const client = clientWith([], { agent: { get: vi.fn(async () => { throw new Error('AgentNotFoundError'); }) } });
     const ctx = recordingContext();
