@@ -2348,7 +2348,7 @@ async fn a_quiet_client_renews_its_presence_and_says_when_it_goes_away() {
 /// phone's own deadline, with the reason, instead of spinning forever.
 #[tokio::test]
 async fn a_machine_settings_change_nobody_answers_stops_being_busy_at_the_deadline() {
-    use client_core::stores::machines::SETTINGS_ANSWER_TIMEOUT_MS;
+    use client_core::stores::machines::SLOW_SETTINGS_ANSWER_TIMEOUT_MS;
     LocalSet::new()
         .run_until(async {
             let mut mock = mock_relay().await;
@@ -2391,9 +2391,9 @@ async fn a_machine_settings_change_nobody_answers_stops_being_busy_at_the_deadli
 
             // The machine never answers; the phone's clock passes the
             // deadline and the timer armed for it fires.
-            *clock.0.borrow_mut() += SETTINGS_ANSWER_TIMEOUT_MS + 1;
+            *clock.0.borrow_mut() += SLOW_SETTINGS_ANSWER_TIMEOUT_MS + 1;
             tokio::time::pause();
-            tokio::time::advance(Duration::from_millis(SETTINGS_ANSWER_TIMEOUT_MS + 1)).await;
+            tokio::time::advance(Duration::from_millis(SLOW_SETTINGS_ANSWER_TIMEOUT_MS + 1)).await;
             tokio::time::resume();
             settle().await;
 

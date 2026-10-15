@@ -67,6 +67,12 @@ pub const CLOSE_RETRY_MS: u64 = 5 * 60 * 1000;
 /// the "did not answer" note.
 pub const SETTINGS_ANSWER_TIMEOUT_MS: u64 = 60_000;
 
+/// The same for the changes the bridge answers only once the work is done,
+/// which can take minutes: a plugin's install, update or removal (a
+/// marketplace clone, a package download) and an agent's removal. An agent's
+/// install is answered when it is taken up, and keeps the short deadline.
+pub const SLOW_SETTINGS_ANSWER_TIMEOUT_MS: u64 = 5 * 60_000;
+
 /// What the phone shows when a change went unanswered for
 /// [`SETTINGS_ANSWER_TIMEOUT_MS`].
 const NO_ANSWER: &str = "The machine did not answer. It may be offline; try again once it is back.";
@@ -80,7 +86,7 @@ enum Unanswered {
     /// marketplace change, by its target.
     Plugin { agent: String, target: String, action: PluginAction },
     /// An agent install or removal.
-    AgentAction { agent: String },
+    AgentAction { agent: String, action: AgentAction },
     /// A change to an agent's MCP servers, by the names it touched.
     Mcp { agent: String, action: McpAction, names: Vec<String> },
     /// Removals of saved permission rules, by their ids.
@@ -89,6 +95,22 @@ enum Unanswered {
     Account { agent: String, account: String },
     /// A switch of one server in a running session.
     SessionMcp { session_id: String, name: String },
+}
+
+impl Unanswered {
+    /// How long the bridge may take to answer it.
+    fn timeout_ms(&self) -> u64 {
+        match self {
+            Self::Plugin { .. } | Self::AgentAction { action: AgentAction::Remove, .. } => SLOW_SETTINGS_ANSWER_TIMEOUT_MS,
+            _ => SETTINGS_ANSWER_TIMEOUT_MS,
+        }
+    }
+}
+
+/// Whether `error` is the note left by giving up on a change, which any later
+/// answer from the machine makes stale (a real failure it reported is not).
+fn is_no_answer(error: &str) -> bool {
+    error == NO_ANSWER
 }
 
 /// A session the user deleted, kept until its bridge has dropped it too.
@@ -716,7 +738,7 @@ pub struct MachinesState {
     /// own key.
     pub agent_styles: AgentStyles,
     /// Every machine-settings change sent and not answered yet, with the
-    /// machine it went to and when (ms). In memory only, like the `busy`
+    /// machine it went to and when it is given up on (ms). In memory only, like the `busy`
     /// fields it settles: nothing here is worth surviving a restart, since a
     /// change in flight at the last shutdown was answered or not by then.
     unanswered: Vec<(String, Unanswered, u64)>,
@@ -1137,6 +1159,9 @@ impl MachinesState {
                 return;
             }
             p.error = None;
+            if p.failure.as_ref().is_some_and(|f| is_no_answer(&f.error)) {
+                p.failure = None;
+            }
             p.installed = msg.installed.clone();
             p.marketplaces = msg.marketplaces.clone();
             p.toggles = msg.toggles;
@@ -1193,7 +1218,7 @@ impl MachinesState {
             a.busy = Some(action);
             a.failure = None;
         });
-        self.record_unanswered(machine_pubkey, Unanswered::AgentAction { agent: agent.to_string() }, now);
+        self.record_unanswered(machine_pubkey, Unanswered::AgentAction { agent: agent.to_string(), action }, now);
     }
 
     pub fn apply_agent_ack(&mut self, machine_pubkey: &str, msg: &AgentAckMsg) {
@@ -1212,6 +1237,9 @@ impl MachinesState {
                 Some(error) => a.error = Some(error.clone()),
                 None => {
                     a.error = None;
+                    if a.failure.as_ref().is_some_and(|f| is_no_answer(&f.error)) {
+                        a.failure = None;
+                    }
                     a.servers = msg.servers.clone();
                     a.toggles = msg.toggles;
                 }
@@ -1317,6 +1345,9 @@ impl MachinesState {
         self.with_machine(machine_pubkey, |m| {
             let a = m.accounts.entry(msg.agent.clone()).or_default();
             a.busy.retain(|b| *b != msg.account);
+            if a.error.as_deref().is_some_and(is_no_answer) {
+                a.error = None;
+            }
             let Some(view) = &mut a.sign_in else { return };
             if view.account != msg.account {
                 return;
@@ -1404,11 +1435,12 @@ impl MachinesState {
     /// timestamp rather than adding a second entry: the answer settles it
     /// once, so it must be given up on once.
     fn record_unanswered(&mut self, machine_pubkey: &str, item: Unanswered, now: u64) {
+        let deadline = now.saturating_add(item.timeout_ms());
         if let Some(entry) = self.unanswered.iter_mut().find(|(m, u, _)| m == machine_pubkey && *u == item) {
-            entry.2 = now;
+            entry.2 = deadline;
             return;
         }
-        self.unanswered.push((machine_pubkey.to_string(), item, now));
+        self.unanswered.push((machine_pubkey.to_string(), item, deadline));
     }
 
     /// When the earliest unanswered change gives up, as a wall-clock ms — the
@@ -1416,11 +1448,12 @@ impl MachinesState {
     pub fn next_unanswered_deadline(&self) -> Option<u64> {
         self.unanswered
             .iter()
-            .map(|(_, _, sent_at)| sent_at.saturating_add(SETTINGS_ANSWER_TIMEOUT_MS))
+            .map(|(_, _, deadline)| *deadline)
             .min()
     }
 
-    /// Give up on every change sent before `now - SETTINGS_ANSWER_TIMEOUT_MS`
+    /// Give up on every change whose deadline ([`SETTINGS_ANSWER_TIMEOUT_MS`],
+    /// or [`SLOW_SETTINGS_ANSWER_TIMEOUT_MS`] after it was sent) has come,
     /// and settle whatever it still has busy, so a machine that never answers
     /// does not leave the UI spinning. A change already answered is dropped
     /// without change; one whose machine or session is gone is just dropped.
@@ -1429,7 +1462,7 @@ impl MachinesState {
         let all = std::mem::take(&mut self.unanswered);
         let mut due = Vec::new();
         for entry in all {
-            if entry.2.saturating_add(SETTINGS_ANSWER_TIMEOUT_MS) <= now {
+            if entry.2 <= now {
                 due.push(entry);
             } else {
                 self.unanswered.push(entry);
@@ -1457,7 +1490,7 @@ impl MachinesState {
                 p.failure = Some(PluginFailure { action, target, error: NO_ANSWER.into() });
                 true
             }
-            Unanswered::AgentAction { agent } => {
+            Unanswered::AgentAction { agent, .. } => {
                 let Some(a) = m.agent_actions.get_mut(&agent) else { return false };
                 if a.busy.is_none() {
                     return false;
@@ -2367,12 +2400,12 @@ mod tests {
         assert!(m.accounts["opencode"].busy.contains(&"a".to_string()));
         assert!(m.sessions["s1"].mcp.as_ref().unwrap().busy.contains(&"gh".to_string()));
 
-        // At the deadline each settles and says why.
+        // At the deadline each settles and says why — but the plugin change,
+        // which the bridge answers only once the install is done, keeps
+        // waiting until its own, longer one.
         assert!(st.expire_unanswered(done));
         let m = st.machine("pk").unwrap();
-        let p = &m.plugins["claude-code"];
-        assert!(p.busy.is_empty());
-        assert_eq!(p.failure.as_ref().unwrap().error, NO_ANSWER);
+        assert!(m.plugins["claude-code"].busy.contains(&"b@m".to_string()));
         assert!(m.agent_actions["opencode"].busy.is_none());
         assert_eq!(m.agent_actions["opencode"].failure.as_deref(), Some(NO_ANSWER));
         let mcp = &m.mcp["claude-code"];
@@ -2389,6 +2422,66 @@ mod tests {
         let session = m.sessions["s1"].mcp.as_ref().unwrap();
         assert!(session.busy.is_empty());
         assert_eq!(session.error.as_deref(), Some(NO_ANSWER));
+
+        assert!(!st.expire_unanswered(t + SLOW_SETTINGS_ANSWER_TIMEOUT_MS - 1));
+        assert!(st.expire_unanswered(t + SLOW_SETTINGS_ANSWER_TIMEOUT_MS));
+        let p = &st.machine("pk").unwrap().plugins["claude-code"];
+        assert!(p.busy.is_empty());
+        assert_eq!(p.failure.as_ref().unwrap().error, NO_ANSWER);
+    }
+
+    #[test]
+    fn an_agent_removal_waits_as_long_as_the_work_can_take_and_an_install_does_not() {
+        let mut st = MachinesState::default();
+        st.register_machine("pk", "m", None, None, &[]);
+        st.agent_action_sent("pk", "opencode", AgentAction::Remove, 0);
+        st.agent_action_sent("pk", "claude-code", AgentAction::Install, 0);
+        assert!(st.expire_unanswered(SETTINGS_ANSWER_TIMEOUT_MS));
+        let m = st.machine("pk").unwrap();
+        assert!(m.agent_actions["claude-code"].busy.is_none(), "an install is answered when taken up");
+        assert!(m.agent_actions["opencode"].busy.is_some(), "a removal is answered when done");
+        assert!(st.expire_unanswered(SLOW_SETTINGS_ANSWER_TIMEOUT_MS));
+        assert!(st.machine("pk").unwrap().agent_actions["opencode"].busy.is_none());
+    }
+
+    #[test]
+    fn any_later_answer_clears_a_did_not_answer_note_but_not_a_real_failure() {
+        let mut st = MachinesState::default();
+        st.register_machine("pk", "m", None, None, &[]);
+        st.plugin_action_sent("pk", "claude-code", PluginAction::Install, "b@m", 0);
+        st.mcp_action_sent("pk", "claude-code", McpAction::Add, &["fs".to_string()], 0);
+        st.account_action_sent("pk", "opencode", "a", false, 0);
+        assert!(st.expire_unanswered(SLOW_SETTINGS_ANSWER_TIMEOUT_MS));
+
+        // The machine is back: its lists and a sign-in answer arrive.
+        st.apply_plugins(
+            "pk",
+            &PluginsMsg { agent: "claude-code".into(), installed: vec![], marketplaces: None, toggles: false, available: None, error: None },
+        );
+        st.apply_mcp("pk", &McpServersMsg { agent: "claude-code".into(), servers: vec![], toggles: false, error: None });
+        st.apply_account_sign_in(
+            "pk",
+            &AccountSignInMsg {
+                agent: "opencode".into(),
+                account: "b".into(),
+                status: SignInStatus::Started,
+                attempt_id: None,
+                attempt: None,
+                error: None,
+            },
+        );
+        let m = st.machine("pk").unwrap();
+        assert!(m.plugins["claude-code"].failure.is_none());
+        assert!(m.mcp["claude-code"].failure.is_none());
+        assert!(m.accounts["opencode"].error.is_none());
+
+        // A failure the machine itself reported stays until the next change.
+        st.apply_mcp_ack(
+            "pk",
+            &McpAckMsg { agent: "claude-code".into(), action: McpAction::Add, names: vec!["fs".into()], success: false, error: Some("bad url".into()) },
+        );
+        st.apply_mcp("pk", &McpServersMsg { agent: "claude-code".into(), servers: vec![], toggles: false, error: None });
+        assert_eq!(st.machine("pk").unwrap().mcp["claude-code"].failure.as_ref().map(|f| f.error.as_str()), Some("bad url"));
     }
 
     #[test]
@@ -2447,18 +2540,18 @@ mod tests {
         let mut st = MachinesState::default();
         st.register_machine("pk", "m", None, None, &[]);
         st.plugin_action_sent("pk", "claude-code", PluginAction::Install, "b@m", 1_000);
-        assert_eq!(st.next_unanswered_deadline(), Some(1_000 + SETTINGS_ANSWER_TIMEOUT_MS));
+        assert_eq!(st.next_unanswered_deadline(), Some(1_000 + SLOW_SETTINGS_ANSWER_TIMEOUT_MS));
         st.plugin_action_sent("pk", "claude-code", PluginAction::Install, "b@m", 2_000);
         assert_eq!(
             st.next_unanswered_deadline(),
-            Some(2_000 + SETTINGS_ANSWER_TIMEOUT_MS),
+            Some(2_000 + SLOW_SETTINGS_ANSWER_TIMEOUT_MS),
             "the resend replaces the entry's time rather than adding a second"
         );
 
         // The first deadline passes without effect; the second gives up.
-        assert!(!st.expire_unanswered(1_000 + SETTINGS_ANSWER_TIMEOUT_MS));
+        assert!(!st.expire_unanswered(1_000 + SLOW_SETTINGS_ANSWER_TIMEOUT_MS));
         assert!(st.machine("pk").unwrap().plugins["claude-code"].busy.contains(&"b@m".to_string()));
-        assert!(st.expire_unanswered(2_000 + SETTINGS_ANSWER_TIMEOUT_MS));
+        assert!(st.expire_unanswered(2_000 + SLOW_SETTINGS_ANSWER_TIMEOUT_MS));
         assert!(st.machine("pk").unwrap().plugins["claude-code"].busy.is_empty());
     }
 
@@ -2468,7 +2561,7 @@ mod tests {
         st.register_machine("pk", "m", None, None, &[]);
         let t = 1_000;
         st.plugin_action_sent("pk", "claude-code", PluginAction::Install, "b@m", t);
-        assert!(st.expire_unanswered(t + SETTINGS_ANSWER_TIMEOUT_MS));
+        assert!(st.expire_unanswered(t + SLOW_SETTINGS_ANSWER_TIMEOUT_MS));
         assert!(st.machine("pk").unwrap().plugins["claude-code"].failure.is_some());
 
         // A late answer lands normally and replaces the "did not answer" note.
@@ -2494,7 +2587,7 @@ mod tests {
         st.register_machine("pk", "m", None, None, &[]);
         assert_eq!(st.next_unanswered_deadline(), None);
         st.agent_action_sent("pk", "opencode", AgentAction::Install, 5_000);
-        st.plugin_action_sent("pk", "claude-code", PluginAction::Install, "b@m", 1_000);
+        st.mcp_action_sent("pk", "claude-code", McpAction::Remove, &["fs".to_string()], 1_000);
         assert_eq!(st.next_unanswered_deadline(), Some(1_000 + SETTINGS_ANSWER_TIMEOUT_MS));
 
         // Giving up on the earliest leaves the later one in flight.
@@ -2510,7 +2603,7 @@ mod tests {
         st.register_machine("pk", "m", None, None, &[]);
         st.plugin_action_sent("pk", "claude-code", PluginAction::Install, "b@m", 0);
         st.remove_machine("pk");
-        assert!(!st.expire_unanswered(SETTINGS_ANSWER_TIMEOUT_MS));
+        assert!(!st.expire_unanswered(SLOW_SETTINGS_ANSWER_TIMEOUT_MS));
         assert_eq!(st.next_unanswered_deadline(), None);
     }
 
