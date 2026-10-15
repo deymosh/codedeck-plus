@@ -643,6 +643,9 @@ cmd_dev() {
       *) break ;;
     esac
   done
+  case "$limit" in
+    ''|*[!0-9]*) echo "CODEDECK_TIMEOUT must be a number of seconds (0 = no limit), not '$limit'" >&2; exit 2 ;;
+  esac
 
   # What the command is, and where it runs — relative to the repo root, which
   # both engines then translate. `dev vitest …` is the loop's most-run
