@@ -50,6 +50,8 @@ the vendored toolchain — the caller does not choose, and does not need to know
   The commands that hold a container open (`dev`, `android`, `live`) keep ONE
   long-lived container and sync the tree into it, so nothing re-tars the repo
   per command — that is what makes them fast enough for a loop of edits.
+  A git worktree gets a `dev`/`live` container of its own
+  (`codedeck-dev-<worktree>`, caches shared), so checkouts never take turns.
 - **Linux (e.g. inside a container that doesn't itself have Docker-in-Docker,
   or any bare Linux machine):** `scripts/install-toolchain.sh` installs the
   toolchain into `./toolchain/` (gitignored), independent of anything already
