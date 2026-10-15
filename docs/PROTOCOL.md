@@ -571,9 +571,9 @@ client's tags before and after a key rotation.
   `presence {watching?}` every 10 (`PRESENCE_RENEW_SECS`), and
   `presence {away: true}` when it stops, which ends its lease at once.
   `watching` is the session whose live text this client shows — `null` or
-  absent meaning none. It is the only command that changes what a client
-  watches; any other command, and a renewal that omits the field, leaves it
-  as it was, and `away` clears it. A client that has not said — one that
+  absent meaning none. Every `presence` sets what a client watches (a
+  renewal says it again), `away` clears it, and any other command leaves it
+  as it was. A client that has not said — one that
   has just connected, or whose bridge has just restarted — gets every
   session's live text, so nothing on its screen is left frozen while it is
   being asked. A client away gets nothing; when it is back its first

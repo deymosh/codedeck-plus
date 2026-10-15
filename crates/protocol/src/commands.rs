@@ -412,8 +412,8 @@ pub struct SessionKeyGrant {
 /// `partial`s are sent to it, and only while it is present. Absent or
 /// `null` means it watches no session, so it gets no live text at all —
 /// every other kind of update still comes. This is the only command that
-/// changes what a client watches: any other command, and a renewal that
-/// omits the field, leaves it as it was.
+/// changes what a client watches, and every `presence` does — a renewal
+/// says it again; any other command leaves it as it was.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct PresenceMsg {
