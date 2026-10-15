@@ -80,6 +80,8 @@ impl Catalog {
                 efforts: a.efforts.clone(),
                 default_mode: a.default_mode.clone(),
                 default_effort: a.default_effort.clone(),
+                // No agent the host runs reports personas yet.
+                default_persona: None,
                 supports: a.supports.clone(),
                 credentials: credentials(a),
                 install: a.install.clone(),

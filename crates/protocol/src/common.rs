@@ -637,6 +637,10 @@ pub struct AgentDescriptor {
     /// The effort a session runs at when none is chosen; one of `efforts`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_effort: Option<String>,
+    /// The [`Persona`] a session runs as when none is chosen (agents with
+    /// `supports.personas`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_persona: Option<String>,
     #[serde(default)]
     pub supports: AgentSupports,
     /// Credentials this agent can use, with their current status.
