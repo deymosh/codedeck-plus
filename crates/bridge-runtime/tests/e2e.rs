@@ -232,7 +232,11 @@ async fn a_phone_drives_the_real_bridge_through_a_relay() {
                 .await;
                 assert_eq!(listed.servers[0].target, "https://mcp.example/mcp");
                 assert_eq!(listed.servers[0].header_keys, ["Authorization"]);
-                assert!(!format!("{:?}", core.machines_view().await).contains("e2e-"), "no secret reaches the phone");
+                // The secrets themselves, not a shared prefix: the view also
+                // holds session uuids, and a uuid group ending in "e2e" reads
+                // as one, at random.
+                let view = format!("{:?}", core.machines_view().await);
+                assert!(!view.contains("e2e-secret") && !view.contains("e2e-query"), "no secret reaches the phone");
 
                 core.dispatch(Intent::ToggleSessionMcp { machine: machine.clone(), session_id: session.clone(), name: "gh".into(), enabled: false }).await;
                 until("the session to switch the server off", || async {
