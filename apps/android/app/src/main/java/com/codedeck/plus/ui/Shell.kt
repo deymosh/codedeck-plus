@@ -27,6 +27,7 @@ import com.codedeck.plus.ui.screens.LogsScreen
 import com.codedeck.plus.ui.screens.MachineSettingsScreen
 import com.codedeck.plus.ui.screens.PairingScreen
 import com.codedeck.plus.ui.screens.McpScreen
+import com.codedeck.plus.ui.screens.AgentSettingsScreen
 import com.codedeck.plus.ui.screens.PermissionRulesScreen
 import com.codedeck.plus.ui.screens.PluginsScreen
 import com.codedeck.plus.ui.screens.ProvidersScreen
@@ -49,7 +50,9 @@ private sealed interface Screen {
     data object Pairing : Screen
     /** A machine's settings page, opened from its name on the sessions list. */
     data class Machine(val machine: String) : Screen
-    /** One agent's plugins on a machine, opened from the machine's page. */
+    /** One agent's page on a machine, opened from the machine's page. */
+    data class Agent(val machine: String, val agent: String) : Screen
+    /** One agent's plugins on a machine, opened from the agent's page. */
     data class Plugins(val machine: String, val agent: String) : Screen
     data class Mcp(val machine: String, val agent: String) : Screen
     data class PermissionRules(val machine: String, val agent: String) : Screen
@@ -66,6 +69,7 @@ private fun Screen.parts(): List<String> = when (this) {
     Screen.Logs -> listOf("logs")
     Screen.Pairing -> listOf("pairing")
     is Screen.Machine -> listOf("machine", machine)
+    is Screen.Agent -> listOf("agent", machine, agent)
     is Screen.Plugins -> listOf("plugins", machine, agent)
     is Screen.Mcp -> listOf("mcp", machine, agent)
     is Screen.PermissionRules -> listOf("permission-rules", machine, agent)
@@ -78,7 +82,8 @@ private fun Screen.stateKey(): String = parts().joinToString("/")
  *  shallower one. */
 private fun Screen.depth(): Int = when (this) {
     Screen.Sessions -> 0
-    Screen.Logs, is Screen.Plugins, is Screen.Mcp, is Screen.PermissionRules, is Screen.Providers -> 2
+    Screen.Logs, is Screen.Agent -> 2
+    is Screen.Plugins, is Screen.Mcp, is Screen.PermissionRules, is Screen.Providers -> 3
     else -> 1
 }
 
@@ -94,6 +99,7 @@ private val ScreenSaver = listSaver<Screen, String>(
             "logs" -> Screen.Logs
             "pairing" -> Screen.Pairing
             "machine" -> Screen.Machine(saved[1])
+            "agent" -> Screen.Agent(saved[1], saved[2])
             "plugins" -> Screen.Plugins(saved[1], saved[2])
             "mcp" -> Screen.Mcp(saved[1], saved[2])
             "permission-rules" -> Screen.PermissionRules(saved[1], saved[2])
@@ -241,17 +247,19 @@ fun Shell(
     Box(Modifier.fillMaxSize()) {
         // System Back on any page returns to the sessions list, like each
         // page's own close/back control; Back on the list leaves the app.
-        // The log is opened from Settings and plugins from their machine's
-        // page, so Back returns there.
+        // The log is opened from Settings, an agent's page from its machine's
+        // and the agent's own pages (plugins, ...) from it, so Back returns
+        // there.
         if (screen != Screen.Sessions) {
             BackHandler {
                 go(
                     when (val current = screen) {
                         Screen.Logs -> Screen.Settings
-                        is Screen.Plugins -> Screen.Machine(current.machine)
-                        is Screen.Mcp -> Screen.Machine(current.machine)
-                        is Screen.PermissionRules -> Screen.Machine(current.machine)
-                        is Screen.Providers -> Screen.Machine(current.machine)
+                        is Screen.Agent -> Screen.Machine(current.machine)
+                        is Screen.Plugins -> Screen.Agent(current.machine, current.agent)
+                        is Screen.Mcp -> Screen.Agent(current.machine, current.agent)
+                        is Screen.PermissionRules -> Screen.Agent(current.machine, current.agent)
+                        is Screen.Providers -> Screen.Agent(current.machine, current.agent)
                         else -> Screen.Sessions
                     },
                 )
@@ -272,15 +280,22 @@ fun Shell(
                     core,
                     current.machine,
                     onBack = { go(Screen.Sessions) },
-                    onOpenProviders = { agent -> go(Screen.Providers(current.machine, agent)) },
-                    onOpenPlugins = { agent -> go(Screen.Plugins(current.machine, agent)) },
-                    onOpenMcp = { agent -> go(Screen.Mcp(current.machine, agent)) },
-                    onOpenPermissionRules = { agent -> go(Screen.PermissionRules(current.machine, agent)) },
+                    onOpenAgent = { agent -> go(Screen.Agent(current.machine, agent)) },
                 )
-                is Screen.Plugins -> PluginsScreen(core, current.machine, current.agent, onBack = { go(Screen.Machine(current.machine)) })
-                is Screen.Mcp -> McpScreen(core, current.machine, current.agent, onBack = { go(Screen.Machine(current.machine)) })
-                is Screen.PermissionRules -> PermissionRulesScreen(core, current.machine, current.agent, onBack = { go(Screen.Machine(current.machine)) })
-                is Screen.Providers -> ProvidersScreen(core, current.machine, current.agent, onBack = { go(Screen.Machine(current.machine)) })
+                is Screen.Agent -> AgentSettingsScreen(
+                    core,
+                    current.machine,
+                    current.agent,
+                    onBack = { go(Screen.Machine(current.machine)) },
+                    onOpenProviders = { go(Screen.Providers(current.machine, current.agent)) },
+                    onOpenPlugins = { go(Screen.Plugins(current.machine, current.agent)) },
+                    onOpenMcp = { go(Screen.Mcp(current.machine, current.agent)) },
+                    onOpenPermissionRules = { go(Screen.PermissionRules(current.machine, current.agent)) },
+                )
+                is Screen.Plugins -> PluginsScreen(core, current.machine, current.agent, onBack = { go(Screen.Agent(current.machine, current.agent)) })
+                is Screen.Mcp -> McpScreen(core, current.machine, current.agent, onBack = { go(Screen.Agent(current.machine, current.agent)) })
+                is Screen.PermissionRules -> PermissionRulesScreen(core, current.machine, current.agent, onBack = { go(Screen.Agent(current.machine, current.agent)) })
+                is Screen.Providers -> ProvidersScreen(core, current.machine, current.agent, onBack = { go(Screen.Agent(current.machine, current.agent)) })
                 Screen.Logs -> LogsScreen(onBack = { go(Screen.Settings) })
                 Screen.Pairing -> PairingScreen(core, onClose = { go(Screen.Sessions) })
                 is Screen.NewSession -> NewSessionScreen(

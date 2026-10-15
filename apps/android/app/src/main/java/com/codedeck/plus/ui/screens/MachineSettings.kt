@@ -117,59 +117,29 @@ internal fun machineOrLeave(core: CoreHost, pubkey: String, onGone: () -> Unit):
 internal fun shortKey(key: String): String = if (key.length <= 20) key else "${key.take(12)}…${key.takeLast(6)}"
 
 /**
- * One machine's page: who it is and whether it is up, its agents (installed
- * and removed from here), what its new sessions start with, the relays it is reached over, its direct link, the
- * credentials kept on it, its agents' AI providers, plugins, MCP servers and
- * saved permissions (each agent's on a page of its own, opened through
- * [onOpenProviders], [onOpenPlugins], [onOpenMcp] and
- * [onOpenPermissionRules]), and forgetting it. Pure — the
- * caller supplies the machine and a dispatcher — so it renders the same in
- * a snapshot.
+ * One machine's page: who it is and whether it is up, its agents — the one
+ * new sessions start on, and a row each that opens everything about that
+ * agent ([onOpenAgent]: its new-session defaults, keys, AI providers,
+ * plugins, MCP servers, saved permissions) or installs one it lacks — then
+ * what is the machine's own: the relays it is reached over, its direct link,
+ * the bridge's credentials, and forgetting it. Pure — the caller supplies
+ * the machine and a dispatcher — so it renders the same in a snapshot.
  */
 @Composable
 fun MachineSettingsContent(
     machine: UniffiMachineSummary,
     connectedRelays: Set<String>,
     credentialsStatus: UniffiCredentialsAck?,
-    providerProfileStatus: UniffiProviderProfileAck?,
     now: Long,
     dispatch: (UniffiIntent) -> Unit,
     onBack: () -> Unit,
-    onOpenProviders: (agent: String) -> Unit,
-    onOpenPlugins: (agent: String) -> Unit,
-    onOpenMcp: (agent: String) -> Unit,
-    onOpenPermissionRules: (agent: String) -> Unit,
+    onOpenAgent: (agent: String) -> Unit,
 ) {
-    // The model pickers need each agent's list, and the provider and plugin
-    // rows their counts: ask for them on opening, and again for an agent
-    // once it is installed.
-    val readyAgents = machine.agents.filter { it.ready }
-    LaunchedEffect(machine.pubkeyHex, readyAgents.map { it.id }) {
-        readyAgents.filter { it.supportsModels }.forEach { dispatch(UniffiIntent.RequestModels(machine.pubkeyHex, it.id)) }
-        if (providerAgents(machine).isNotEmpty()) dispatch(UniffiIntent.RequestProviderProfiles(machine.pubkeyHex))
-        readyAgents.filter { it.supportsPlugins }.forEach {
-            dispatch(UniffiIntent.RequestPlugins(machine.pubkeyHex, it.id, available = false))
-        }
-        readyAgents.filter { it.supportsMcp }.forEach { dispatch(UniffiIntent.RequestMcp(machine.pubkeyHex, it.id)) }
-    }
     var confirmRemove by remember(machine.pubkeyHex) { mutableStateOf(false) }
-    var removeAgent by remember(machine.pubkeyHex) { mutableStateOf<UniffiAgent?>(null) }
 
     Page(title = machineLabel(machine.name), onBack = onBack) {
         MachineHeader(machine, now)
-        if (machine.agents.isNotEmpty()) {
-            Group(title = "Agents", footer = "Installed on the machine at the version its bridge pins. Sessions start only on an installed agent.") {
-                machine.agents.forEachIndexed { i, agent ->
-                    if (i > 0) Divider()
-                    AgentInstallRow(
-                        agent,
-                        onInstall = { dispatch(UniffiIntent.AgentAction(machine.pubkeyHex, agent.id, "install")) },
-                        onRemove = { removeAgent = agent },
-                    )
-                }
-            }
-        }
-        NewSessionDefaults(machine, dispatch)
+        MachineAgents(machine, dispatch, onOpenAgent)
         MachineRelays(machine, connectedRelays, dispatch)
         Group(
             title = "Direct link",
@@ -178,52 +148,9 @@ fun MachineSettingsContent(
         ) {
             GroupBody { MachineDirectLink(machine, dispatch) }
         }
-        val hasCredentials = machine.credentials.isNotEmpty() || machine.agents.any { it.credentials.isNotEmpty() }
-        if (hasCredentials) {
+        if (machine.credentials.isNotEmpty()) {
             Group(title = "Credentials") {
-                GroupBody { MachineCredentials(machine, credentialsStatus, dispatch) }
-            }
-        }
-        val providerAgents = providerAgents(machine)
-        if (providerAgents.isNotEmpty()) {
-            Group(title = "AI providers", footer = "API endpoints an agent can use: a service, or a gateway of your own. Each is kept for one agent.") {
-                providerAgents.forEachIndexed { i, agent ->
-                    if (i > 0) Divider()
-                    val count = machine.providerProfiles.count { it.agent == agent.id }
-                    NavRow(agent.displayName, onClick = { onOpenProviders(agent.id) }, value = if (count == 1) "1 provider" else "$count providers")
-                }
-            }
-        }
-        val pluginAgents = machine.agents.filter { it.supportsPlugins }
-        if (pluginAgents.isNotEmpty()) {
-            Group(title = "Plugins", footer = "Installed on the machine, for every session of that agent.") {
-                pluginAgents.forEachIndexed { i, agent ->
-                    if (i > 0) Divider()
-                    val count = machine.plugins.firstOrNull { it.agent == agent.id }?.installed?.size
-                    NavRow(agent.displayName, onClick = { onOpenPlugins(agent.id) }, value = count?.let { "$it installed" })
-                }
-            }
-        }
-        val mcpAgents = machine.agents.filter { it.supportsMcp }
-        if (mcpAgents.isNotEmpty()) {
-            Group(title = "MCP servers", footer = "Tools every session of that agent can use, set up on the machine.") {
-                mcpAgents.forEachIndexed { i, agent ->
-                    if (i > 0) Divider()
-                    val count = machine.mcp.firstOrNull { it.agent == agent.id }?.servers?.size
-                    NavRow(agent.displayName, onClick = { onOpenMcp(agent.id) }, value = count?.let { if (it == 1) "1 server" else "$it servers" })
-                }
-            }
-        }
-        // Not asked for on opening: the rules are read only on their own page,
-        // and the count shows once they have been.
-        val ruleAgents = machine.agents.filter { it.supportsPermissionRules }
-        if (ruleAgents.isNotEmpty()) {
-            Group(title = "Permissions", footer = "What an agent runs without asking, from \"Always allow\" answers.") {
-                ruleAgents.forEachIndexed { i, agent ->
-                    if (i > 0) Divider()
-                    val count = machine.permissionRules.firstOrNull { it.agent == agent.id }?.rules?.size
-                    NavRow(agent.displayName, onClick = { onOpenPermissionRules(agent.id) }, value = count?.let { if (it == 1) "1 rule" else "$it rules" })
-                }
+                GroupBody { MachineCredentials(machine, credentialsStatus, dispatch, scope = CredentialScope.Bridge) }
             }
         }
         Group(footer = "Its sessions keep running on the machine; this phone forgets the pairing and its transcripts.") {
@@ -242,19 +169,6 @@ fun MachineSettingsContent(
                 onBack()
             },
             onDismiss = { confirmRemove = false },
-        )
-    }
-    removeAgent?.let { agent ->
-        ConfirmDialog(
-            title = "Remove ${agent.displayName}?",
-            body = "Its sessions on ${machineLabel(machine.name)} end, and what CodeDeck installed of it is deleted. " +
-                "Its settings and conversations stay; install it again here at any time.",
-            confirm = "Remove",
-            onConfirm = {
-                dispatch(UniffiIntent.AgentAction(machine.pubkeyHex, agent.id, "remove"))
-                removeAgent = null
-            },
-            onDismiss = { removeAgent = null },
         )
     }
 }
@@ -298,112 +212,49 @@ private fun MachineHeader(machine: UniffiMachineSummary, now: Long) {
 }
 
 /**
- * What a new session on this machine starts with: the agent, and for each
- * agent the mode, effort and model — each agent has its own, so they are
- * kept per agent.
+ * The machine's agents: which one a new session starts on (when more than
+ * one can run), then a row each — an installed one opens its page, one that
+ * is missing or failed offers its install right here.
  */
 @Composable
-private fun NewSessionDefaults(machine: UniffiMachineSummary, dispatch: (UniffiIntent) -> Unit) {
+private fun MachineAgents(machine: UniffiMachineSummary, dispatch: (UniffiIntent) -> Unit, onOpenAgent: (agent: String) -> Unit) {
     if (machine.agents.isEmpty()) {
-        Group(title = "New sessions", footer = "The agents appear once the bridge has been heard from.") {
-            ValueRow("Agent", subtitle = "Waiting for the bridge") {}
+        Group(title = "Agents", footer = "The agents appear once the bridge has been heard from.") {
+            ValueRow("Agents", subtitle = "Waiting for the bridge") {}
         }
         return
     }
-    // Only an installed agent runs sessions, so only those have defaults.
-    val agents = machine.agents.filter { it.ready }
-    if (agents.isEmpty()) {
-        Group(title = "New sessions", footer = "Install an agent above to start sessions on this machine.") {
-            ValueRow("Agent", subtitle = "None installed") {}
-        }
-        return
-    }
-    val firstAgent = agents.first()
-    Group(title = "New sessions", footer = "What a session started here begins with. You can still change any of it when you start one.") {
-        if (agents.size > 1) {
-            ValueRow("Agent") {
+    val ready = machine.agents.filter { it.ready }
+    Group(
+        title = "Agents",
+        footer = if (ready.isEmpty()) "Install an agent to start sessions on this machine." else "Installed at the version the bridge pins.",
+    ) {
+        if (ready.size > 1) {
+            val first = ready.first()
+            ValueRow("New sessions") {
                 SelectField(
-                    options = listOf(PickerOption("", "First available (${firstAgent.displayName})")) +
-                        agents.map { PickerOption(it.id, it.displayName) },
+                    options = listOf(PickerOption("", "First available (${first.displayName})")) +
+                        ready.map { PickerOption(it.id, it.displayName) },
                     // A chosen agent since removed reads as the first available, as it acts.
-                    selected = machine.defaultAgent?.takeIf { id -> agents.any { it.id == id } }.orEmpty(),
+                    selected = machine.defaultAgent?.takeIf { id -> ready.any { it.id == id } }.orEmpty(),
                     onSelect = { dispatch(UniffiIntent.SetDefaultAgent(machine.pubkeyHex, it.ifEmpty { null })) },
                 )
             }
             Divider()
         }
-        agents.forEachIndexed { index, agent ->
-            if (index > 0) Divider()
-            AgentDefaultsRows(machine, agent, showName = agents.size > 1, dispatch)
+        machine.agents.forEachIndexed { i, agent ->
+            if (i > 0) Divider()
+            if (agent.ready && agent.actionBusy == null) {
+                NavRow(agent.displayName, onClick = { onOpenAgent(agent.id) }, subtitle = installLine(agent).first)
+            } else {
+                AgentInstallRow(
+                    agent,
+                    onInstall = { dispatch(UniffiIntent.AgentAction(machine.pubkeyHex, agent.id, "install")) },
+                    onRemove = null,
+                )
+            }
         }
     }
-}
-
-@Composable
-private fun GroupScope.AgentDefaultsRows(
-    machine: UniffiMachineSummary,
-    agent: UniffiAgent,
-    showName: Boolean,
-    dispatch: (UniffiIntent) -> Unit,
-) {
-    val current = machine.agentDefaults.firstOrNull { it.agent == agent.id }
-    val mode = current?.mode.orEmpty()
-    val effort = current?.effort.orEmpty()
-    val model = current?.model.orEmpty()
-    fun set(mode: String = current?.mode.orEmpty(), effort: String = current?.effort.orEmpty(), model: String = current?.model.orEmpty()) {
-        dispatch(UniffiIntent.SetAgentDefaults(machine.pubkeyHex, agent.id, mode, effort, model))
-    }
-    if (showName) {
-        Text(
-            agent.displayName,
-            color = Tokens.Text,
-            fontSize = Tokens.TextMd,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(start = Tokens.Space4, end = Tokens.Space4, top = Tokens.Space3),
-        )
-    }
-    val models = machine.models.firstOrNull { it.agent == agent.id }
-    val modelList = models?.models.orEmpty()
-    if (agent.supportsModels) {
-        ValueRow("Model", subtitle = models?.error?.takeIf { modelList.isEmpty() }) {
-            SelectField(
-                options = buildList {
-                    add(PickerOption("", models?.defaultModel?.let { d -> "Default (${modelList.firstOrNull { it.id == d }?.label ?: d})" } ?: "Default"))
-                    addAll(modelPickerOptions(modelList))
-                    // A kept choice the bridge no longer lists stays visible, to see or clear.
-                    if (model.isNotEmpty() && modelList.none { it.id == model }) add(PickerOption(model, model))
-                },
-                selected = model,
-                onSelect = { set(model = it) },
-            )
-        }
-    }
-    if (agent.modes.isNotEmpty()) {
-        ValueRow("Mode") {
-            SelectField(
-                options = listOf(PickerOption("", defaultOptionLabel(agent.defaultMode, agent.modes.map { it.id to it.label }))) +
-                    agent.modes.map { PickerOption(it.id, it.label) },
-                selected = mode,
-                onSelect = { set(mode = it) },
-            )
-        }
-    }
-    if (agent.efforts.isNotEmpty()) {
-        ValueRow("Effort") {
-            SelectField(
-                options = listOf(PickerOption("", defaultOptionLabel(agent.defaultEffort, agent.efforts.map { it.id to it.label }))) +
-                    agent.efforts.map { PickerOption(it.id, it.label) },
-                selected = effort,
-                onSelect = { set(effort = it) },
-            )
-        }
-    }
-}
-
-/** "Default (Plan)": the agent's own default, named. */
-private fun defaultOptionLabel(id: String?, choices: List<Pair<String, String>>): String {
-    if (id.isNullOrEmpty()) return "Default"
-    return "Default (${choices.firstOrNull { it.first == id }?.second ?: id})"
 }
 
 /** The relays the machine is reached over: each with whether it is up, removable while another remains, and an add field. */
@@ -476,10 +327,7 @@ fun MachineSettingsScreen(
     core: CoreHost,
     pubkey: String,
     onBack: () -> Unit,
-    onOpenProviders: (agent: String) -> Unit,
-    onOpenPlugins: (agent: String) -> Unit,
-    onOpenMcp: (agent: String) -> Unit,
-    onOpenPermissionRules: (agent: String) -> Unit,
+    onOpenAgent: (agent: String) -> Unit,
 ) {
     val connection by core.connection.collectAsState()
     val ui by core.ui.collectAsState()
@@ -489,13 +337,9 @@ fun MachineSettingsScreen(
         machine = machine,
         connectedRelays = connection?.connectedRelays?.toSet().orEmpty(),
         credentialsStatus = ui?.credentialsStatus?.get(pubkey),
-        providerProfileStatus = ui?.providerProfileStatus?.get(pubkey),
         now = System.currentTimeMillis(),
         dispatch = { intent -> scope.launch { core.dispatch(intent) } },
         onBack = onBack,
-        onOpenProviders = onOpenProviders,
-        onOpenPlugins = onOpenPlugins,
-        onOpenMcp = onOpenMcp,
-        onOpenPermissionRules = onOpenPermissionRules,
+        onOpenAgent = onOpenAgent,
     )
 }
