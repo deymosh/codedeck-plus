@@ -77,6 +77,7 @@ the vendored toolchain — the caller does not choose, and does not need to know
 
 # The loop between checks: one long-lived container, tree synced in, caches warm.
 ./codedeck dev <cmd…>    # run <cmd> in it, at the repo root (bare: a shell)
+                         # without a terminal it stops after 30 min (--timeout S, 0 = never)
 ./codedeck dev vitest …  # the agent host's test files, run once
 ./codedeck android test  # the app's unit tests, then the counts and failures
 ./codedeck android lint  # lintDebug, then what the report says
