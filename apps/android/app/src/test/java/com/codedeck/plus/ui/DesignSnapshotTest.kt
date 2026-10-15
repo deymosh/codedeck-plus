@@ -22,6 +22,7 @@ import com.codedeck.plus.ui.screens.McpContent
 import com.codedeck.plus.ui.screens.PermissionRulesContent
 import com.codedeck.plus.ui.screens.ConnectionPage
 import com.codedeck.plus.ui.screens.LogsContent
+import com.codedeck.plus.ui.screens.AgentSettingsContent
 import com.codedeck.plus.ui.screens.MachineSettingsContent
 import com.codedeck.plus.ui.screens.MessagesPage
 import com.codedeck.plus.ui.screens.NewSessionBody
@@ -266,16 +267,18 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
     "settings_machine" to {
         MachineSettingsContent(
             machine = workstation, connectedRelays = setOf("wss://relay.example.org"), credentialsStatus = null,
-            providerProfileStatus = null, now = NOW, dispatch = {}, onBack = {}, onOpenProviders = {}, onOpenPlugins = {}, onOpenMcp = {}, onOpenPermissionRules = {},
+            now = NOW, dispatch = {}, onBack = {}, onOpenAgent = {},
         )
     },
     "settings_machine_update_needed" to {
         MachineSettingsContent(
             machine = workstation.copy(updateNeeded = "bridge"), connectedRelays = setOf("wss://relay.example.org"),
-            credentialsStatus = null, providerProfileStatus = null, now = NOW, dispatch = {}, onBack = {},
-            onOpenProviders = {}, onOpenPlugins = {}, onOpenMcp = {}, onOpenPermissionRules = {},
+            credentialsStatus = null, now = NOW, dispatch = {}, onBack = {}, onOpenAgent = {},
         )
     },
+    "settings_agent_opencode" to { AgentPage("opencode") },
+    "settings_agent_claude" to { AgentPage("claude-code") },
+    "settings_agent_not_installed" to { AgentPage("deepseek-harness") },
     "plugins" to { PluginsContent(workstation, "claude-code", dispatch = {}, onBack = {}) },
     "plugins_browse" to { PluginsContent(workstation, "claude-code", dispatch = {}, onBack = {}, startOnBrowse = true) },
     "mcp" to { McpContent(workstation, "claude-code", dispatch = {}, onBack = {}) },
@@ -373,6 +376,13 @@ private val opencodeLook = AgentLook.of("OpenCode", DesignFixtures.opencodeStyle
 private val deepseekLook = AgentLook.of("DeepSeek Harness", DesignFixtures.deepseekStyle, "ask")
 
 /** [content] drawn as a session of the agent [look] belongs to. */
+/** One agent's page on the workstation. */
+@Composable
+private fun AgentPage(agent: String) = AgentSettingsContent(
+    machine = workstation, agentId = agent, credentialsStatus = null, dispatch = {}, onBack = {},
+    onOpenProviders = {}, onOpenPlugins = {}, onOpenMcp = {}, onOpenPermissionRules = {},
+)
+
 @Composable
 private fun Styled(look: AgentLook, content: @Composable () -> Unit) =
     CompositionLocalProvider(LocalAgentLook provides look, content = content)
@@ -431,6 +441,9 @@ class DesignSnapshotTest {
     @Test fun pairing() = paparazzi.page("pairing")
     @Test fun settings() = paparazzi.page("settings")
     @Test fun settings_machine_update_needed() = paparazzi.page("settings_machine_update_needed")
+    @Test fun settings_agent_opencode() = paparazzi.page("settings_agent_opencode")
+    @Test fun settings_agent_claude() = paparazzi.page("settings_agent_claude")
+    @Test fun settings_agent_not_installed() = paparazzi.page("settings_agent_not_installed")
     @Test fun plugins() = paparazzi.page("plugins")
     @Test fun plugins_browse() = paparazzi.page("plugins_browse")
     @Test fun plugins_opencode() = paparazzi.page("plugins_opencode")

@@ -79,7 +79,7 @@ installed or started.
 ## Provider credentials
 
 OpenCode knows about 230 providers. The phone connects them on the
-machine's page: **AI providers → OpenCode → Connect a provider**. Pick one,
+machine's page: **OpenCode → AI providers → Connect a provider**. Pick one,
 then either type its API key or sign in to a subscription. This goes through
 OpenCode's own API, so it takes effect on the running server at once — the
 provider's models join the list, with no restart and no session cut.
@@ -140,7 +140,7 @@ Choosing it answers OpenCode's `always`, and OpenCode saves the rule for the
 project in its database. Every later session in that project — whatever its
 mode, Ask included — runs matching calls without asking, and the rule
 survives a restart of the server. The machine's page on the phone lists them
-under Permissions → OpenCode, by project, and removes them (OpenCode then
+under OpenCode → Saved permissions, by project, and removes them (OpenCode then
 asks again).
 
 ## What this does not do

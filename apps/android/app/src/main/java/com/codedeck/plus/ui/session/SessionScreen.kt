@@ -521,6 +521,13 @@ fun SessionScreen(
         val id = agent?.id
         if (id != null && agent.supportsModels) core.dispatch(UniffiIntent.RequestModels(machine = machine, agent = id))
     }
+    // A session bound to a provider profile, or an agent whose profiles add
+    // models, names its model from the profiles: asked for here, not left
+    // to whichever page happened to ask before.
+    val usesProfiles = agent?.supportsProviders == true || agent?.supportsProviderModels == true
+    LaunchedEffect(machine, usesProfiles) {
+        if (usesProfiles) core.dispatch(UniffiIntent.RequestProviderProfiles(machine = machine))
+    }
 
     val supportsUsage = agent?.supportsUsage == true
     val turnRunning = session?.state == "running"

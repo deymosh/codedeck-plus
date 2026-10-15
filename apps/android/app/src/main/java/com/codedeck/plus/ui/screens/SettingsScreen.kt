@@ -85,13 +85,15 @@ private const val UI_SCALE_DEFAULT = 1f
 internal sealed interface SettingsPage {
     data object Hub : SettingsPage
     data class Machine(val pubkey: String) : SettingsPage
-    /** One agent's plugins on a machine, opened from the machine's page. */
+    /** One agent's page on a machine, opened from the machine's page. */
+    data class Agent(val pubkey: String, val agent: String) : SettingsPage
+    /** One agent's plugins on a machine, opened from the agent's page. */
     data class Plugins(val pubkey: String, val agent: String) : SettingsPage
-    /** One agent's MCP servers on a machine, opened from the machine's page. */
+    /** One agent's MCP servers on a machine, opened from the agent's page. */
     data class Mcp(val pubkey: String, val agent: String) : SettingsPage
-    /** One agent's saved permissions on a machine, opened from the machine's page. */
+    /** One agent's saved permissions on a machine, opened from the agent's page. */
     data class PermissionRules(val pubkey: String, val agent: String) : SettingsPage
-    /** One agent's AI providers on a machine, opened from the machine's page. */
+    /** One agent's AI providers on a machine, opened from the agent's page. */
     data class Providers(val pubkey: String, val agent: String) : SettingsPage
     data object Appearance : SettingsPage
     data object Notifications : SettingsPage
@@ -104,6 +106,7 @@ internal sealed interface SettingsPage {
     fun save(): String = when (this) {
         Hub -> "hub"
         is Machine -> "machine:$pubkey"
+        is Agent -> "agent:$pubkey:$agent"
         is Plugins -> "plugins:$pubkey:$agent"
         is Mcp -> "mcp:$pubkey:$agent"
         is PermissionRules -> "permission-rules:$pubkey:$agent"
@@ -121,13 +124,15 @@ internal sealed interface SettingsPage {
     val depth: Int
         get() = when (this) {
             Hub -> 0
-            is Plugins, is Mcp, is PermissionRules, is Providers -> 2
+            is Agent -> 2
+            is Plugins, is Mcp, is PermissionRules, is Providers -> 3
             else -> 1
         }
 
     companion object {
         fun restore(saved: String): SettingsPage = when {
             saved.startsWith("machine:") -> Machine(saved.removePrefix("machine:"))
+            saved.startsWith("agent:") -> saved.split(':').let { Agent(it[1], it.drop(2).joinToString(":")) }
             saved.startsWith("plugins:") -> saved.split(':').let { Plugins(it[1], it.drop(2).joinToString(":")) }
             saved.startsWith("mcp:") -> saved.split(':').let { Mcp(it[1], it.drop(2).joinToString(":")) }
             saved.startsWith("permission-rules:") -> saved.split(':').let { PermissionRules(it[1], it.drop(2).joinToString(":")) }
@@ -189,16 +194,18 @@ fun SettingsScreen(
         pageKey = next.save()
     }
     val toHub = { open(SettingsPage.Hub) }
-    // A page of a machine's (its providers, plugins or MCP servers) goes back
-    // to the machine's page, where it was left; every other to the hub.
-    val machineOf = when (page) {
-        is SettingsPage.Plugins -> page.pubkey
-        is SettingsPage.Mcp -> page.pubkey
-        is SettingsPage.PermissionRules -> page.pubkey
-        is SettingsPage.Providers -> page.pubkey
+    // An agent's page goes back to its machine's, and a page of the agent's
+    // (its providers, plugins, MCP servers, permissions) to the agent's,
+    // where each was left; every other page to the hub.
+    val parent: SettingsPage? = when (page) {
+        is SettingsPage.Agent -> SettingsPage.Machine(page.pubkey)
+        is SettingsPage.Plugins -> SettingsPage.Agent(page.pubkey, page.agent)
+        is SettingsPage.Mcp -> SettingsPage.Agent(page.pubkey, page.agent)
+        is SettingsPage.PermissionRules -> SettingsPage.Agent(page.pubkey, page.agent)
+        is SettingsPage.Providers -> SettingsPage.Agent(page.pubkey, page.agent)
         else -> null
     }
-    val back = machineOf?.let { pubkey -> { open(SettingsPage.Machine(pubkey)) } } ?: toHub
+    val back = parent?.let { { open(it) } } ?: toHub
     if (page != SettingsPage.Hub) BackHandler(onBack = back)
 
     val view = settings
@@ -235,17 +242,23 @@ fun SettingsScreen(
                         machine = machine,
                         connectedRelays = connection?.connectedRelays?.toSet().orEmpty(),
                         credentialsStatus = ui?.credentialsStatus?.get(machine.pubkeyHex),
-                        providerProfileStatus = ui?.providerProfileStatus?.get(machine.pubkeyHex),
                         now = System.currentTimeMillis(),
                         dispatch = ::dispatch,
                         onBack = toHub,
-                        onOpenProviders = { agent -> open(SettingsPage.Providers(machine.pubkeyHex, agent)) },
-                        onOpenPlugins = { agent -> open(SettingsPage.Plugins(machine.pubkeyHex, agent)) },
-                        onOpenMcp = { agent -> open(SettingsPage.Mcp(machine.pubkeyHex, agent)) },
-                        onOpenPermissionRules = { agent -> open(SettingsPage.PermissionRules(machine.pubkeyHex, agent)) },
+                        onOpenAgent = { agent -> open(SettingsPage.Agent(machine.pubkeyHex, agent)) },
                     )
                 }
             }
+            is SettingsPage.Agent -> AgentSettingsScreen(
+                core,
+                page.pubkey,
+                page.agent,
+                onBack = back,
+                onOpenProviders = { open(SettingsPage.Providers(page.pubkey, page.agent)) },
+                onOpenPlugins = { open(SettingsPage.Plugins(page.pubkey, page.agent)) },
+                onOpenMcp = { open(SettingsPage.Mcp(page.pubkey, page.agent)) },
+                onOpenPermissionRules = { open(SettingsPage.PermissionRules(page.pubkey, page.agent)) },
+            )
             is SettingsPage.Plugins -> PluginsScreen(core, page.pubkey, page.agent, onBack = back)
             is SettingsPage.Mcp -> McpScreen(core, page.pubkey, page.agent, onBack = back)
             is SettingsPage.PermissionRules -> PermissionRulesScreen(core, page.pubkey, page.agent, onBack = back)

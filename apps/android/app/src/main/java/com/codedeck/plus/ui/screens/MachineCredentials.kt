@@ -14,7 +14,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import com.codedeck.plus.ui.components.Chip
 import com.codedeck.plus.ui.components.Field
@@ -30,7 +29,16 @@ import uniffi.client_ffi.UniffiMachineSummary
 import uniffi.client_ffi.UniffiTristate
 
 /** One set of credentials the bridge stores: its own (`agent == null`) or one agent's. */
-private data class CredentialGroup(val agent: String?, val title: String, val credentials: List<UniffiCredentialStatus>)
+private data class CredentialGroup(val agent: String?, val credentials: List<UniffiCredentialStatus>)
+
+/** Whose credentials a [MachineCredentials] block shows: the machine's page
+ *  holds the bridge's own, each agent's page that agent's. */
+internal sealed interface CredentialScope {
+    /** The bridge's own (e.g. a GitHub token). */
+    data object Bridge : CredentialScope
+
+    data class Agent(val id: String) : CredentialScope
+}
 
 /** A one-line status for a stored credential, from what the bridge reports. */
 internal fun credentialStatusText(status: UniffiCredentialStatus): String {
@@ -48,9 +56,9 @@ internal fun credentialStatusText(status: UniffiCredentialStatus): String {
 }
 
 /**
- * Machine credentials — every secret the bridge declares, its own (e.g. a
- * GitHub token) and each agent's (e.g. an API key), grouped by owner, with
- * whether each is set; "Change credentials" opens them for editing. A field
+ * Machine credentials — the secrets the bridge declares for one owner, as
+ * [scope] says: its own (e.g. a GitHub token) or one agent's (e.g. an API
+ * key), with whether each is set; "Change credentials" opens them for editing. A field
  * left blank is not sent (keeps the
  * stored value), a filled field overwrites, and Clear sends
  * [UniffiTristate.Clear] after a confirmation. All fields are password inputs
@@ -61,12 +69,16 @@ internal fun credentialStatusText(status: UniffiCredentialStatus): String {
  * the real ack arrives through the next `UiView` refresh.
  */
 @Composable
-fun MachineCredentials(machine: UniffiMachineSummary, status: UniffiCredentialsAck?, dispatch: (UniffiIntent) -> Unit) {
-    val groups = buildList {
-        if (machine.credentials.isNotEmpty()) add(CredentialGroup(null, "Bridge", machine.credentials))
-        machine.agents.filter { it.credentials.isNotEmpty() }.forEach {
-            add(CredentialGroup(it.id, it.displayName, it.credentials))
-        }
+internal fun MachineCredentials(
+    machine: UniffiMachineSummary,
+    status: UniffiCredentialsAck?,
+    dispatch: (UniffiIntent) -> Unit,
+    scope: CredentialScope,
+) {
+    val groups = when (scope) {
+        CredentialScope.Bridge -> listOfNotNull(machine.credentials.takeIf { it.isNotEmpty() }?.let { CredentialGroup(null, it) })
+        is CredentialScope.Agent -> machine.agents.filter { it.id == scope.id && it.credentials.isNotEmpty() }
+            .map { CredentialGroup(it.id, it.credentials) }
     }
     if (groups.isEmpty()) return
 
@@ -105,7 +117,6 @@ fun MachineCredentials(machine: UniffiMachineSummary, status: UniffiCredentialsA
         )
         groups.forEach { group ->
             Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
-                Text(group.title, color = Tokens.Text, fontSize = Tokens.TextMd, fontWeight = FontWeight.SemiBold)
                 group.credentials.forEach { cred ->
                     val dk = draftKey(group, cred.id)
                     if (open) {
@@ -151,7 +162,7 @@ fun MachineCredentials(machine: UniffiMachineSummary, status: UniffiCredentialsA
                 }
                 if (open) {
                     PrimaryButton(
-                        "Save ${group.title}",
+                        "Save",
                         onClick = { save(group) },
                         enabled = group.credentials.any { !drafts[draftKey(group, it.id)].isNullOrBlank() },
                         modifier = Modifier.fillMaxWidth(),

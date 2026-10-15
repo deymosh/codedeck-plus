@@ -35,7 +35,7 @@ internal fun agentPickerLabel(agent: UniffiAgent): String = when (agent.installS
 }
 
 /** Where the agent stands on the machine, and whether that is a failure. */
-private fun installLine(agent: UniffiAgent): Pair<String, Boolean> {
+internal fun installLine(agent: UniffiAgent): Pair<String, Boolean> {
     agent.actionFailure?.let { return it to true }
     return when {
         agent.actionBusy == "remove" -> "Removing…" to false

@@ -22,7 +22,7 @@ It signs in as the CLI would on that machine:
 - `CLAUDE_CODE_OAUTH_TOKEN` (for a subscription, a long-lived token from
   `claude setup-token`) or `ANTHROPIC_API_KEY` in the bridge's environment
   (under Docker, `.env`);
-- an API key set from the phone (Agents → Claude Code), checked with the
+- an API key set from the phone (the machine's page → Claude Code → Keys), checked with the
   smallest request when saved; an exported key wins over it;
 - or an existing `claude` login on the machine.
 
