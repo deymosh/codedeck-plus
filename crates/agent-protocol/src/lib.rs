@@ -111,16 +111,16 @@ mod tests {
         host_rt(json!({"v":1,"id":"1","kind":"initialized","payload":{"hostVersion":"1","agents":[{
             "id":"claude-code","displayName":"Claude Code",
             "modes":[{"id":"plan","label":"Plan"}],"efforts":[],"defaultMode":"default",
-            "supports":{"models":true,"usage":true,"providers":true,"providerModels":false,"interrupt":true,"commands":true,"plugins":true,"mcp":true,"tasks":true,"permissionRules":false,"accounts":false},
+            "supports":{"models":true,"usage":true,"providers":true,"providerModels":false,"interrupt":true,"commands":true,"plugins":true,"mcp":true,"tasks":true,"permissionRules":false,"accounts":false,"personas":false},
             "credentials":[{"id":"anthropic_api_key","label":"Anthropic API key","envVar":"ANTHROPIC_API_KEY"}],
             "install":{"state":"ready"}
         },{
             "id":"opencode","displayName":"OpenCode","modes":[],"efforts":[],
-            "supports":{"models":false,"usage":false,"providers":false,"providerModels":true,"interrupt":true,"commands":false,"plugins":false,"mcp":false,"tasks":false,"permissionRules":true,"accounts":false},
+            "supports":{"models":false,"usage":false,"providers":false,"providerModels":true,"interrupt":true,"commands":false,"plugins":false,"mcp":false,"tasks":false,"permissionRules":true,"accounts":false,"personas":false},
             "credentials":[],"unavailableReason":"The OpenCode server failed to start","install":{"state":"ready","removable":true}
         },{
             "id":"deepseek-harness","displayName":"DeepSeek Harness","modes":[],"efforts":[],
-            "supports":{"models":false,"usage":false,"providers":false,"providerModels":false,"interrupt":false,"commands":false,"plugins":false,"mcp":false,"tasks":false,"permissionRules":false,"accounts":false},
+            "supports":{"models":false,"usage":false,"providers":false,"providerModels":false,"interrupt":false,"commands":false,"plugins":false,"mcp":false,"tasks":false,"permissionRules":false,"accounts":false,"personas":false},
             "credentials":[],"install":{"state":"not_installed"}
         }]}}));
         host_rt(json!({"v":1,"id":"2","kind":"ack"}));
@@ -161,7 +161,7 @@ mod tests {
         let placeholder = |install: serde_json::Value| {
             json!({"v":1,"kind":"agent-changed","payload":{"agent":{
                 "id":"opencode","displayName":"OpenCode","modes":[],"efforts":[],
-                "supports":{"models":false,"usage":false,"providers":false,"providerModels":false,"interrupt":false,"commands":false,"plugins":false,"mcp":false,"tasks":false,"permissionRules":false,"accounts":false},
+                "supports":{"models":false,"usage":false,"providers":false,"providerModels":false,"interrupt":false,"commands":false,"plugins":false,"mcp":false,"tasks":false,"permissionRules":false,"accounts":false,"personas":false},
                 "credentials":[],"install":install}}})
         };
         let changed = host_rt(placeholder(json!({"state":"installing"})));

@@ -110,6 +110,11 @@ pub struct CreateSessionMsg {
     pub effort: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// The persona to run as (agents with `supports.personas`); one the
+    /// session's directory does not have leaves the agent's default, which
+    /// the session then says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persona: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -134,6 +139,17 @@ pub struct AgentStyleRequestMsg {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct ModelsRequestMsg {
     pub agent: String,
+}
+
+/// Ask for an agent's personas (agents with `supports.personas`): those a
+/// session can switch to, with `session_id`; otherwise those of the whole
+/// machine, which a new session can start as anywhere.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonasRequestMsg {
+    pub agent: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// Ask for an agent's plugins (agents with `supports.plugins`); with
@@ -502,6 +518,8 @@ pub enum PhoneToBridge {
     /// The slash commands a session understands (agents with
     /// `supports.commands`). Reply: `commands`.
     CommandsRequest(SessionIdMsg),
+    /// Reply: `personas`.
+    PersonasRequest(PersonasRequestMsg),
     PluginsRequest(PluginsRequestMsg),
     PluginAction(PluginActionMsg),
     AgentAction(AgentActionMsg),
@@ -565,6 +583,8 @@ mod tests {
         rt(&json!({"v":12,"type":"models-request","agent":"opencode"}));
         rt(&json!({"v":12,"type":"agent-style-request","agent":"opencode"}));
         rt(&json!({"v":12,"type":"commands-request","sessionId":"s"}));
+        rt(&json!({"v":12,"type":"personas-request","agent":"opencode"}));
+        rt(&json!({"v":12,"type":"personas-request","agent":"opencode","sessionId":"s"}));
         rt(&json!({"v":12,"type":"plugins-request","agent":"claude-code"}));
         rt(&json!({"v":12,"type":"plugins-request","agent":"claude-code","available":true}));
         rt(&json!({"v":12,"type":"plugin-action","agent":"claude-code","action":"add-marketplace","target":"me/skills"}));

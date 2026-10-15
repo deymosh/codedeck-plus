@@ -460,6 +460,13 @@ export type AgentSupports = {
 	 *  sign-in to a subscription — without restarting it.
 	 */
 	accounts?: boolean,
+	/**
+	 *  The agent has named configurations of its own a session can run as
+	 *  (OpenCode's primary agents): `personas-request` lists them, the
+	 *  `persona` session option picks one, and `create-session` may name
+	 *  one to start with.
+	 */
+	personas?: boolean,
 };
 
 /**  A plugin one of the known marketplaces offers and that is not installed. */
@@ -2162,7 +2169,9 @@ export type SessionMcpServer_Serialize = {
  *  The per-session options `set-option` changes and `option-confirmed`
  *  reports. Values are agent-defined strings (see [`AgentDescriptor`]).
  */
-export type SessionOption = "mode" | "effort" | "model";
+export type SessionOption = "mode" | "effort" | "model" | 
+/**  A [`Persona`] id (agents with `supports.personas`). */
+"persona";
 
 /**
  *  A sign-in under way: open `url` (on any device), and do what

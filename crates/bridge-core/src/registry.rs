@@ -77,6 +77,7 @@ impl SessionRecord {
             mode: self.mode.clone(),
             effort: self.effort.clone(),
             model: self.model.clone(),
+            persona: None,
             context_window: self.context_window,
             context_percentage: self.context_percentage,
             committed: self.committed.then_some(true),

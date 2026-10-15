@@ -7,7 +7,7 @@ use super::capabilities::BridgeHostKind;
 use super::common::{
     AgentAction, AgentDescriptor, AgentStyle, AvailablePlugin, CredentialStatus, InstalledPlugin, McpAction, McpServerInfo, OptionChoice, OutputEntry,
     AgentAccount, PermissionRule, SessionMcpServer, SignInAttempt, SignInStatus,
-    PartialKind, PluginAction, PluginMarketplace, ProviderProfileInfo, RemoteSessionInfo, SessionOption,
+    PartialKind, Persona, PluginAction, PluginMarketplace, ProviderProfileInfo, RemoteSessionInfo, SessionOption,
     Subagent, UsageData,
 };
 use crate::ranges::SeqRange;
@@ -149,7 +149,9 @@ pub struct SessionPendingMsg {
 #[serde(rename_all = "camelCase")]
 pub struct SessionReadyMsg {
     pub pending_id: String,
-    pub session: RemoteSessionInfo,
+    /// Boxed only to keep the message union small in memory; the wire is
+    /// the plain object.
+    pub session: Box<RemoteSessionInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -276,6 +278,20 @@ pub struct SlashCommand {
 pub struct CommandsMsg {
     pub session_id: String,
     pub commands: Vec<SlashCommand>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Reply to `personas-request`, for the session it named or, without one,
+/// for the whole machine. Like `models`, an empty list always comes with an
+/// `error` saying why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonasMsg {
+    pub agent: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    pub personas: Vec<Persona>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -508,6 +524,7 @@ pub enum BridgeToPhone {
     Models(ModelsMsg),
     AgentStyle(AgentStyleMsg),
     Commands(CommandsMsg),
+    Personas(PersonasMsg),
     Plugins(PluginsMsg),
     PluginAck(PluginAckMsg),
     AgentAck(AgentAckMsg),
@@ -621,6 +638,8 @@ mod tests {
         assert_eq!(m.style.unwrap().user_message, crate::common::UserMessageStyle::Unknown);
         rt(&json!({"v":12,"type":"commands","sessionId":"s","commands":[{"name":"compact","description":"Compact","argumentHint":"<focus>"},{"name":"p:x"}]}));
         rt(&json!({"v":12,"type":"commands","sessionId":"s","commands":[],"error":"not running"}));
+        rt(&json!({"v":12,"type":"personas","agent":"opencode","sessionId":"s","personas":[{"id":"build","label":"Build"},{"id":"review","label":"review","description":"Reviews","color":"#E5C07B"}]}));
+        rt(&json!({"v":12,"type":"personas","agent":"opencode","personas":[],"error":"not running"}));
         rt(&json!({"v":12,"type":"plugins","agent":"claude-code",
             "installed":[{"id":"c@m","name":"c","marketplace":"m","version":"1","description":"d","enabled":false}],
             "marketplaces":[{"name":"m","source":"me/skills"}],"toggles":true,

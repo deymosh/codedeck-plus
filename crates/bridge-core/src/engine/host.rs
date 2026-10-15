@@ -369,6 +369,8 @@ impl Engine {
                     SessionOption::Mode => &mut session.rec.mode,
                     SessionOption::Effort => &mut session.rec.effort,
                     SessionOption::Model => &mut session.rec.model,
+                    // Refused before it reaches the host.
+                    SessionOption::Persona => return,
                 };
                 *field = Some(value.clone());
                 self.registry_dirty |= session.listed;
@@ -380,7 +382,7 @@ impl Engine {
                 // A refused mode confirms nothing (the phone keeps what it
                 // knew); effort and model confirm the value still in force.
                 match option {
-                    SessionOption::Mode => None,
+                    SessionOption::Mode | SessionOption::Persona => None,
                     SessionOption::Effort => session.rec.effort.clone(),
                     SessionOption::Model => session.rec.model.clone(),
                 }
@@ -623,7 +625,7 @@ impl Engine {
         self.list_dirty = true;
         log::info!("[Engine] Session {session_id} ready");
         let info = self.remote_info(&self.sessions[session_id]);
-        self.publish_all(BridgeToPhone::SessionReady(SessionReadyMsg { pending_id: session_id.to_string(), session: info }));
+        self.publish_all(BridgeToPhone::SessionReady(SessionReadyMsg { pending_id: session_id.to_string(), session: Box::new(info) }));
     }
 
     fn on_info(&mut self, session_id: &str, info: InfoUpdate) {

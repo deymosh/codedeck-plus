@@ -41,6 +41,7 @@ fn type_name(msg: &PhoneToBridge) -> &'static str {
         PhoneToBridge::ModelsRequest(_) => "models-request",
         PhoneToBridge::AgentStyleRequest(_) => "agent-style-request",
         PhoneToBridge::CommandsRequest(_) => "commands-request",
+        PhoneToBridge::PersonasRequest(_) => "personas-request",
         PhoneToBridge::PluginsRequest(_) => "plugins-request",
         PhoneToBridge::PluginAction(_) => "plugin-action",
         PhoneToBridge::AgentAction(_) => "agent-action",
@@ -141,6 +142,8 @@ impl Engine {
             PhoneToBridge::ModelsRequest(m) => self.on_models_request(m.agent),
             PhoneToBridge::AgentStyleRequest(m) => self.on_agent_style_request(m.agent, phone),
             PhoneToBridge::CommandsRequest(m) => self.on_commands_request(m.session_id),
+            // No agent the host runs has personas yet.
+            PhoneToBridge::PersonasRequest(_) => {}
             PhoneToBridge::PluginsRequest(m) => self.on_plugins_request(m.agent, m.available),
             PhoneToBridge::PluginAction(m) => self.on_plugin_action(m),
             PhoneToBridge::AgentAction(m) => self.on_agent_action(m.agent, m.action),
@@ -262,6 +265,7 @@ impl Engine {
         let refused = match m.option {
             SessionOption::Mode => (!is_mode(agent, &m.value)).then(|| format!("not a {} mode", agent.id)),
             SessionOption::Effort => (!is_effort(agent, &m.value)).then(|| format!("not a {} effort level", agent.id)),
+            SessionOption::Persona => Some(format!("{} has no personas", agent.id)),
             // A session bound to a provider profile may only use that
             // profile's models: any other id would be sent to the provider.
             SessionOption::Model => session.rec.provider_id.as_ref().and_then(|pid| match self.profiles.get(pid) {
