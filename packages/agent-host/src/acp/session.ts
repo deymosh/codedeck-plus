@@ -1,0 +1,394 @@
+/**
+ * The ACP session base: one ACP session inside a shared process, with the
+ * lifecycle every ACP agent's driver needs — start (or resume) it, prompt it
+ * one turn at a time, cancel, change a config option, close it — and the
+ * dispatch of the updates and permission asks the process sends back.
+ *
+ * Everything an agent does differently enters through the abstract members:
+ * the environment a session's process runs in, how its tool calls read, how a
+ * permission ask becomes a card on the phone, its modes and its model and
+ * effort selection. What the base keeps is what ACP itself fixes: one prompt
+ * at a time, `session/new` or `session/resume`, the context meter, the turn
+ * markers, and the rule that an ask nobody answers is not a refusal.
+ */
+import type {
+  RequestPermissionRequest,
+  RequestPermissionResponse,
+  SessionConfigOption,
+  SessionNotification,
+  SessionUpdate,
+} from '@agentclientprotocol/sdk';
+import type { DriverSession, SessionContext } from '../sdk/driver';
+import { PERMISSION_ALLOW, PERMISSION_DENY, now, unknownToolReporter } from '../sdk/tools';
+import type { OutputEntry, PermissionRequest, SessionOption, StartSession, UsageData } from '../sdk/types';
+import type { ToolCallMemory } from './adapter';
+import type { AcpClient } from './acp';
+import type { AcpProcess, AcpProcessEvents, AcpRuntime } from './runtime';
+
+/** Where a running session registers, so the driver can end it when the
+ *  process it shares goes away. */
+export interface AcpSessionRegistry<H, E extends AcpProcessEvents> {
+  add(sessionId: string, session: AcpSession<H, E, AcpSessionDeps<H, E>>): void;
+  remove(sessionId: string): void;
+  events(): E;
+}
+
+/** What one session is built with, beyond its own parameters. */
+export interface AcpSessionDeps<H, E extends AcpProcessEvents> {
+  /** The runtime that owns the agent's processes. */
+  runtime: AcpRuntime<H, E>;
+  /** Where this session is registered while it runs. */
+  live: AcpSessionRegistry<H, E>;
+  /** Everything that must be true of the agent before a process starts. */
+  prepared: Promise<unknown>;
+  /** The tag this session's log lines carry. */
+  tag: string;
+  /** How this agent reads in the notices and errors a person sees. */
+  label: string;
+}
+
+export abstract class AcpSession<
+  H,
+  E extends AcpProcessEvents,
+  D extends AcpSessionDeps<H, E> = AcpSessionDeps<H, E>,
+> implements DriverSession {
+  /** What each tool call's own update carried, for its result and for the
+   *  permission card the agent asks about it. */
+  protected readonly calls: ToolCallMemory = new Map();
+  /** Told a tool name no agent's table lists, which the log then carries. */
+  protected readonly reportUnknownTool: (toolName: string) => void;
+  protected readonly cwd: string;
+  protected readonly env: Record<string, string>;
+  protected readonly ready: Promise<void>;
+  protected process?: AcpProcess<H>;
+  protected nativeId?: string;
+  protected options: SessionConfigOption[] = [];
+  private contextPercentage?: number;
+  private contextWindow?: number;
+  /** Whether the phone has been told the session is up: until then its model
+   *  travels in the identity info, not as a change. */
+  protected announced = false;
+  protected ended = false;
+  /** Prompts run one at a time: ACP refuses a second prompt while one is in
+   *  flight, so a message that cannot steer the running turn waits for it. */
+  private tail: Promise<unknown> = Promise.resolve();
+  /** Whether a `session/prompt` of this session is in flight — the turn a
+   *  message sent now can steer. */
+  protected promptInFlight = false;
+
+  constructor(
+    protected readonly params: StartSession,
+    protected readonly ctx: SessionContext,
+    protected readonly deps: D,
+  ) {
+    this.cwd = params.cwd;
+    this.reportUnknownTool = unknownToolReporter((message) => ctx.log(message));
+    this.env = this.buildEnv(params);
+    this.ready = this.init();
+    // init() reports its own failure as `ended`; nothing else awaits this
+    // rejection except prompt/interrupt, which catch it themselves.
+    this.ready.catch(() => {});
+  }
+
+  // --- what the agent does differently ---
+
+  /** The environment one session's process runs in. */
+  protected abstract buildEnv(params: StartSession): Record<string, string>;
+
+  /** Translate one `session/update` into the entries it shows on the phone. */
+  protected abstract translate(update: SessionUpdate, calls: ToolCallMemory): OutputEntry[];
+
+  /** Whether the session's mode allows every permission ask without asking. */
+  protected abstract autoApprove(): boolean;
+
+  /** The card one permission ask becomes on the phone. */
+  protected abstract permissionCard(request: RequestPermissionRequest): Omit<PermissionRequest, 'sessionId'>;
+
+  /** Apply the model and reasoning level the session was started with. */
+  protected abstract applySelection(): Promise<void>;
+
+  /** The mode the session runs in, as the identity info reports it. */
+  protected abstract mode(): string;
+
+  /** The model the session is on, as the identity info reports it. */
+  protected abstract modelLabel(): string | undefined;
+
+  /** The agent's own version, for the opening status line. */
+  protected abstract version(): Promise<string | undefined>;
+
+  /** Run a slash line this session knows as the agent's own command, and say
+   *  whether it was one (else the line is an ordinary prompt). */
+  protected async tryCommand(text: string): Promise<boolean> {
+    void text;
+    return false;
+  }
+
+  /** A message sent while a turn runs, which ACP cannot take as a second
+   *  prompt. The default waits for the turn to end. */
+  protected steer(text: string): void {
+    this.enqueue(text);
+  }
+
+  /** Called once a `session/prompt` settles, however it ended, before the
+   *  turn is marked complete: a driver whose messages can be steered into a
+   *  running turn clears that state here. */
+  protected promptSettled(): void {}
+
+  // --- the lifecycle ---
+
+  private async init(): Promise<void> {
+    try {
+      // The agent reads its configuration and mounts its plugins as it boots,
+      // so both have to be in place before a process starts.
+      await this.deps.prepared;
+      const process_ = await this.deps.runtime.acquire(this.env, this.deps.live.events());
+      this.process = process_;
+      // A session closed while its process was starting keeps nothing: the
+      // process it acquired is let go at once.
+      if (this.ended) {
+        this.abandon();
+        return;
+      }
+      const opened = await this.openSession();
+      this.nativeId = opened.sessionId;
+      this.options = opened.configOptions;
+      if (this.ended) {
+        this.abandon();
+        return;
+      }
+      process_.attach(opened.sessionId, {
+        update: (notification) => this.onUpdate(notification),
+        permission: (request) => this.onPermission(request),
+      });
+      this.deps.live.add(opened.sessionId, this);
+      await this.applySelection();
+      if (this.ended) return;
+      const model = this.modelLabel();
+      this.announced = true;
+      this.ctx.emit({ type: 'info', nativeSessionId: opened.sessionId, ...(model ? { model } : {}), mode: this.mode() });
+      // The version is said once, when a conversation starts — the model is
+      // on the phone's composer. A resumed one said it when it began.
+      if (!opened.resumed) {
+        const version = await this.version();
+        if (this.ended) return;
+        this.deliver({
+          entryType: 'status',
+          text: version ? `${this.deps.label} ${version}` : `${this.deps.label} session started`,
+          timestamp: now(),
+        });
+      }
+      this.ctx.emit({ type: 'ready' });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.deliver({ entryType: 'error', text: message, timestamp: now() });
+      this.finish(message);
+    }
+  }
+
+  /** Start a fresh conversation, or continue the one the bridge names. A
+   *  conversation the agent no longer has (removed, or started in another
+   *  workspace — it checks) falls back to a fresh one with a notice, as the
+   *  other drivers do: the transcript is the bridge's, the memory is the
+   *  agent's. */
+  private async openSession(): Promise<{ sessionId: string; configOptions: SessionConfigOption[]; resumed: boolean }> {
+    const resume = this.params.resume;
+    const resumable = this.process?.capabilities.sessionCapabilities?.resume;
+    // ACP spells "not supported" both as an absent field and as `null`;
+    // only an object (even an empty one) advertises `session/resume`.
+    if (resume && resumable != null) {
+      try {
+        const resumed = await this.client.request('session/resume', { sessionId: resume, cwd: this.cwd, mcpServers: [] });
+        return { sessionId: resume, configOptions: resumed.configOptions ?? [], resumed: true };
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        this.ctx.log(`[${this.deps.tag}] could not resume ${resume} (${reason}) — starting a fresh session`);
+        this.deliver({
+          entryType: 'notice',
+          kind: 'session_restart',
+          text:
+            `${this.deps.label} could not continue this conversation — starting a fresh one in the same workspace. ` +
+            'The transcript is preserved, but the model does not remember earlier turns.',
+          timestamp: now(),
+        });
+      }
+    }
+    const created = await this.client.request('session/new', { cwd: this.cwd, mcpServers: [] });
+    return { sessionId: created.sessionId, configOptions: created.configOptions ?? [], resumed: false };
+  }
+
+  /** The process this session shares went away, taking the session with it. */
+  endFromProcess(error: string): void {
+    this.finish(error);
+  }
+
+  /** One update of this session: entries for the transcript, and the two
+   *  updates that are session state rather than conversation. */
+  private onUpdate(notification: SessionNotification): void {
+    if (this.ended) return;
+    const update = notification.update;
+    if (update.sessionUpdate === 'usage_update') {
+      this.reportContext(update.used, update.size);
+      return;
+    }
+    if (update.sessionUpdate === 'config_option_update') {
+      this.options = update.configOptions;
+      return;
+    }
+    const entries = this.translate(update, this.calls);
+    if (entries.length > 0) this.ctx.emit({ type: 'entries', entries });
+  }
+
+  /** How full the context is, over the window the agent reports. */
+  private reportContext(used: number, size: number): void {
+    if (!(size > 0) || !Number.isFinite(used)) return;
+    const percentage = Math.max(0, Math.min(100, Math.round((used / size) * 100)));
+    if (percentage === this.contextPercentage && size === this.contextWindow) return;
+    this.contextPercentage = percentage;
+    this.contextWindow = size;
+    this.ctx.emit({ type: 'info', contextWindow: size, contextPercentage: percentage });
+  }
+
+  /**
+   * One permission ask. The choices are the two the agent offers — it may
+   * have no "always allow" to choose — and the card is the driver's, since
+   * only it knows what the call is.
+   */
+  private async onPermission(request: RequestPermissionRequest): Promise<RequestPermissionResponse> {
+    const allow = request.options.find((option) => option.kind === 'allow_once');
+    const reject = request.options.find((option) => option.kind === 'reject_once');
+    const refuse = (): RequestPermissionResponse =>
+      reject ? { outcome: { outcome: 'selected', optionId: reject.optionId } } : { outcome: { outcome: 'cancelled' } };
+    if (this.ended || !allow) return { outcome: { outcome: 'cancelled' } };
+    if (this.autoApprove()) return { outcome: { outcome: 'selected', optionId: allow.optionId } };
+
+    const outcome = await this.ctx.requestPermission(this.permissionCard(request));
+    if (outcome.outcome === 'cancelled') return { outcome: { outcome: 'cancelled' } };
+    return outcome.optionId === PERMISSION_ALLOW.id ? { outcome: { outcome: 'selected', optionId: allow.optionId } } : refuse();
+  }
+
+  protected deliver(entry: OutputEntry): void {
+    this.ctx.emit({ type: 'entries', entries: [entry] });
+  }
+
+  protected finish(error?: string): void {
+    if (this.ended) return;
+    this.ended = true;
+    this.abandon();
+    this.ctx.emit({ type: 'ended', ...(error ? { error } : {}) });
+  }
+
+  /** Let go of the process this session held. */
+  protected abandon(): void {
+    const process_ = this.process;
+    this.process = undefined;
+    if (this.nativeId !== undefined) {
+      process_?.detach(this.nativeId);
+      this.deps.live.remove(this.nativeId);
+    }
+    process_?.release();
+  }
+
+  /**
+   * One message from the user. While a turn runs, ACP takes no second prompt,
+   * so a message is handed to that turn instead when the driver can steer it,
+   * and waits for the turn to end otherwise.
+   */
+  prompt(text: string): void {
+    if (this.promptInFlight) {
+      this.steer(text);
+      return;
+    }
+    this.enqueue(text);
+  }
+
+  protected enqueue(text: string): void {
+    const next = this.tail.then(
+      () => this.runPrompt(text),
+      () => this.runPrompt(text),
+    );
+    this.tail = next.catch(() => {});
+  }
+
+  private async runPrompt(text: string): Promise<void> {
+    if (await this.tryCommand(text)) return;
+    try {
+      await this.ready;
+      const sessionId = this.nativeId;
+      if (this.ended || sessionId === undefined) return;
+      this.ctx.emit({ type: 'turn', state: 'running' });
+      this.promptInFlight = true;
+      try {
+        await this.client.request('session/prompt', { sessionId, prompt: [{ type: 'text', text }] });
+      } finally {
+        this.promptInFlight = false;
+        this.promptSettled();
+      }
+      this.endTurn();
+    } catch (error) {
+      if (this.ended) return;
+      this.deliver({ entryType: 'error', text: error instanceof Error ? error.message : String(error), timestamp: now() });
+      this.endTurn();
+    }
+  }
+
+  /** The turn is over: the transcript marks it and the phone stops showing
+   *  the agent as working. Every ending is one of these — a cancelled turn
+   *  and a failed one end the turn too. */
+  protected endTurn(): void {
+    if (this.ended) return;
+    this.deliver({ entryType: 'turn_complete', timestamp: now() });
+    this.ctx.emit({ type: 'turn', state: 'idle' });
+  }
+
+  async interrupt(): Promise<void> {
+    const sessionId = this.nativeId;
+    if (sessionId === undefined || this.ended) return;
+    // Best effort: an already-idle session has nothing to cancel.
+    try {
+      this.client.notify('session/cancel', { sessionId });
+    } catch {
+      // The connection is gone; `ended` has already said so.
+    }
+  }
+
+  abstract setOption(option: SessionOption, value: string): Promise<void>;
+
+  async getUsage(): Promise<UsageData | null> {
+    // Nothing to ask for: ACP carries no subscription usage.
+    return null;
+  }
+
+  async end(): Promise<void> {
+    if (this.ended) return;
+    const sessionId = this.nativeId;
+    const process_ = this.process;
+    this.ended = true;
+    if (sessionId !== undefined && process_) {
+      // Closing the session lets the agent cancel its work and flush; the
+      // conversation stays on disk for a later resume.
+      await process_.client.request('session/close', { sessionId }).catch(() => {});
+    }
+    this.abandon();
+  }
+
+  // --- shared plumbing ---
+
+  protected get client(): AcpClient {
+    const process_ = this.process;
+    if (!process_) throw new Error('the session has not started');
+    return process_.client;
+  }
+
+  protected optionOf(id: string): SessionConfigOption | undefined {
+    return this.options.find((option) => option.id === id);
+  }
+
+  /** Change one option and keep the state that comes back — the agent answers
+   *  every change with the complete option list. */
+  protected async setConfig(configId: string, value: string): Promise<void> {
+    const sessionId = this.nativeId;
+    if (!sessionId) throw new Error('the session has not started');
+    const result = await this.client.request('session/set_config_option', { sessionId, configId, value });
+    this.options = result.configOptions ?? this.options;
+  }
+}

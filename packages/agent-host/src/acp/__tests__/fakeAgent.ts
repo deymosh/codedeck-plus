@@ -1,14 +1,14 @@
 /**
- * A scripted DeepSeek Harness behind the driver's spawn seam: it answers the
- * ACP requests a session makes, in the shapes the real runtime sends, so the
- * driver can be tested without the CLI, a credential or a network.
+ * A scripted ACP agent behind a driver's spawn seam: it answers the ACP
+ * requests a session makes, in the shapes a real agent sends, so a driver
+ * can be tested without the CLI, a credential or a network.
  *
- * The shapes are the harness's own (`@deepseek-ai/dsh-acp`): a session's
- * option state, `tool_call` updates carrying the tool name as their title
- * with `kind: "other"`, permission asks that name only the tool call, and
- * stop reasons rather than a synthetic end. A test sets `onPrompt` to script
- * one turn — sending updates and asking for a permission — and everything
- * else is answered the way the harness would.
+ * The shapes are ACP's own: a session's option state, `tool_call` updates
+ * carrying the tool name as their title, permission asks that name only the
+ * tool call, and stop reasons rather than a synthetic end. A test sets
+ * `options` to the option state its agent composes, and `onPrompt` to script
+ * one turn — sending updates and asking for a permission — while everything
+ * else is answered the way an agent would.
  */
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
@@ -33,14 +33,14 @@ export class FakeChild extends EventEmitter {
     return true;
   }
 
-  /** The harness process dying on its own (a crash, a plugin error). */
+  /** The agent process dying on its own (a crash, a plugin error). */
   crash(code = 1): void {
     this.exitCode = code;
     this.emit('exit', code, null);
   }
 }
 
-/** One message the driver sent to the harness. */
+/** One message the driver sent to the agent. */
 interface Sent {
   id?: number | string;
   method?: string;
@@ -49,43 +49,7 @@ interface Sent {
   error?: unknown;
 }
 
-/** The option state a session starts with, as the harness composes it. */
-export function configOptions(currentModel = '["deepseek-official","deepseek-v4-flash"]'): unknown[] {
-  return [
-    {
-      id: 'model',
-      name: 'Model',
-      category: 'model',
-      type: 'select',
-      currentValue: currentModel,
-      options: [
-        {
-          group: 'deepseek-official',
-          name: 'DeepSeek',
-          options: [
-            { value: '["deepseek-official","deepseek-v4-flash"]', name: 'deepseek-v4-flash' },
-            { value: '["deepseek-official","deepseek-v4-pro"]', name: 'DeepSeek-V4-Pro' },
-          ],
-        },
-      ],
-    },
-    {
-      id: 'reasoning_effort',
-      name: 'Reasoning effort',
-      category: 'thought_level',
-      type: 'select',
-      currentValue: 'high',
-      options: [
-        { value: 'off', name: 'Off' },
-        { value: 'low', name: 'Low' },
-        { value: 'high', name: 'High' },
-        { value: 'max', name: 'Max' },
-      ],
-    },
-  ];
-}
-
-export class FakeHarness {
+export class FakeAgent {
   readonly child = new FakeChild();
   /** Requests the driver sent, in order. */
   readonly requests: Array<{ method: string; params: Record<string, unknown> }> = [];
@@ -97,10 +61,10 @@ export class FakeHarness {
   readonly closed: string[] = [];
   readonly setOptions: Array<{ sessionId: string; configId: string; value: string }> = [];
   /** The option state session/new and session/resume answer with. */
-  options: unknown[] = configOptions();
+  options: unknown[] = [];
   /** Make `session/resume` fail the way a missing conversation does. */
   resumeError: string | undefined;
-  /** Whether the harness accepts the values `set_config_option` is given. */
+  /** Whether the agent accepts the values `set_config_option` is given. */
   acceptsOptions = true;
   /** Whether the connection advertises `session/resume`: `true` as `{}`,
    *  `false` by leaving the field out, `'null'` as an explicit `null`. */
@@ -108,7 +72,7 @@ export class FakeHarness {
   /** Whether `session/new` succeeds. */
   newSessionError: string | undefined;
   /** Scripts one turn; the default completes at once. */
-  onPrompt: ((sessionId: string, text: string, harness: FakeHarness) => Promise<string> | string) | undefined;
+  onPrompt: ((sessionId: string, text: string, agent: FakeAgent) => Promise<string> | string) | undefined;
   private nextId = 1;
   private readonly pending = new Map<number | string, (message: Sent) => void>();
   private readonly inbound: Sent[] = [];
@@ -116,7 +80,7 @@ export class FakeHarness {
 
   constructor(readonly spawnFn: SpawnFn = (() => this.child) as unknown as SpawnFn) {
     this.child.stdin.on('data', (chunk: Buffer) => this.receive(chunk.toString()));
-    // Nothing reads the harness's own log here; keep the stream drained.
+    // Nothing reads the agent's own log here; keep the stream drained.
     this.child.stderr.resume();
   }
 
@@ -158,7 +122,7 @@ export class FakeHarness {
       case 'initialize':
         this.reply(id, {
           protocolVersion: 1,
-          agentInfo: { name: 'deepseek-harness-acp', version: '0.0.1' },
+          agentInfo: { name: 'fake-agent', version: '0.0.1' },
           agentCapabilities: {
             mcpCapabilities: { http: true },
             promptCapabilities: { image: false, audio: false, embeddedContext: false },
@@ -187,7 +151,7 @@ export class FakeHarness {
           return;
         }
         this.resumed.push(params);
-        // A harness that does not advertise resume does not serve it either.
+        // An agent that does not advertise resume does not serve it either.
         if (this.supportsResume !== true) {
           this.errorReply(id, -32601, 'Method not found: session/resume');
           return;
@@ -199,13 +163,13 @@ export class FakeHarness {
         const configId = String(params.configId);
         const value = String(params.value);
         this.setOptions.push({ sessionId: String(params.sessionId), configId, value });
-        // The harness answers a change with the complete, updated option
+        // The agent answers a change with the complete, updated option
         // state — including a current value the change did not accept.
         const option = this.options.find(
           (entry) => typeof entry === 'object' && entry !== null && (entry as { id?: string }).id === configId,
         ) as { options?: Array<{ value?: string; options?: Array<{ value?: string }> }> } | undefined;
-        // The harness offers a select option's values flat or grouped (its
-        // models come grouped by provider).
+        // A select option's values may be offered flat or grouped (an agent
+        // groups its models by provider).
         const offered =
           option?.options?.some((entry) =>
             Array.isArray(entry.options)
@@ -233,7 +197,7 @@ export class FakeHarness {
         try {
           stop = this.onPrompt ? await this.onPrompt(sessionId, text, this) : 'end_turn';
         } catch (error) {
-          // A turn that failed is a failed request, as the harness reports it.
+          // A turn that failed is a failed request, as an agent reports it.
           this.turnIds.delete(sessionId);
           this.errorReply(id, -32603, `Internal error: turn failed: ${error instanceof Error ? error.message : String(error)}`);
           return;
@@ -252,8 +216,8 @@ export class FakeHarness {
 
   private readonly turnIds = new Map<string, number | string>();
 
-  /** Finish the turn running in `sessionId`, as the harness does for a
-   *  cancelled prompt. */
+  /** Finish the turn running in `sessionId`, as an agent does for a cancelled
+   *  prompt. */
   resolveTurn(sessionId: string, reason: string): void {
     const id = this.turnIds.get(sessionId);
     if (id === undefined) return;
@@ -272,7 +236,7 @@ export class FakeHarness {
     this.send('session/update', { sessionId, update });
   }
 
-  /** One agent message chunk, as the harness derives it from a committed
+  /** One agent message chunk, as an agent derives it from a committed
    *  assistant message. */
   message(sessionId: string, text: string): void {
     this.update(sessionId, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } });
@@ -299,8 +263,8 @@ export class FakeHarness {
     this.update(sessionId, { sessionUpdate: 'usage_update', used, size });
   }
 
-  /** Ask the client to allow one tool call, as the harness does, and answer
-   *  with what it decided. */
+  /** Ask the client to allow one tool call, as an agent does, and answer with
+   *  what it decided. */
   askPermission(
     sessionId: string,
     toolCallId: string,

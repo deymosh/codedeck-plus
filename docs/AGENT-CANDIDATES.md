@@ -180,8 +180,12 @@ src/
   install/     agentInstall, lockfilePins — pinned runtimes
   generated/   driver-protocol types and lockfile pins (generated; stays
                put, since the Rust generator and CI's drift check name it)
-  acp/         (next) the ACP client and a generic ACP session/driver base,
-               extracted from drivers/deepseek
+  acp/         acp.ts — the JSON-RPC client; runtime.ts — the process pool
+               (one process per environment, shared, respawned, idle-closed);
+               session.ts — the session base (start, prompt, cancel, config,
+               permission asks); adapter.ts and options.ts — the update
+               translation and the option readers. The machinery every ACP
+               agent's driver shares, extracted from drivers/deepseek
   drivers/<agent>/   each exports one DriverModule from module.ts
 ```
 
@@ -194,15 +198,16 @@ what CodeDeck installed, and how to install and remove the pinned one.
 state) and `host/commands.ts` (the one-shot commands) iterate it, so adding
 an agent is one folder plus one line. `host/__tests__/layout.test.ts`
 fails the build when a driver imports anything outside `sdk/`, `install/`,
-`generated/` (and later `acp/`) or its own folder, or when anything but the
+`generated/`, `acp/` or its own folder, or when anything but the
 module list names a driver.
 
 ## Order
 
 1. Driver SDK layout and `DriverModule` registry (above), then install on
    demand on top of it (done, in the v1.3.0 cycle).
-2. Extract the generic ACP driver from the DeepSeek driver into `acp/`,
-   together with the first other ACP agent (Copilot), so the base has two
-   users.
+2. Extract the generic ACP driver from the DeepSeek driver into `acp/` (done),
+   then the first other ACP agent on it: Qwen Code. It is free to test — it
+   runs against a local OpenAI-compatible fake model — so the base gets a
+   second user without spending an account.
 3. Codex (native), Pi (RPC, with the permission gate).
 4. Tier 2 on the ACP driver, as users ask for them.

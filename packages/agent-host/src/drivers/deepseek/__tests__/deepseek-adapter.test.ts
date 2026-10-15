@@ -1,11 +1,13 @@
 /**
- * deepseekUpdateToEntries and toolCallDiffs — the DeepSeek Harness
- * translator, in the style of sdk-adapter.test.ts and opencode-adapter.test.ts.
+ * deepseekUpdateToEntries and toolCallDiffs — what the DeepSeek Harness adds
+ * to the shared ACP translation (acp/adapter): its tool names, the two calls
+ * whose card is the exchange, and the file changes its result update does not
+ * carry as an ACP diff.
  *
  * The updates are the ones the harness's own ACP module sends: assistant
  * messages and thoughts, generic tool call lifecycles whose kind is always
  * `other` and whose title is the tool's name, and usage. Nothing else — no
- * plans, no modes, no commands — which the last case covers.
+ * plans, no modes, no commands.
  */
 import { describe, expect, it } from 'vitest';
 import type { SessionUpdate } from '@agentclientprotocol/sdk';
@@ -23,34 +25,6 @@ function started(name: string, input: Record<string, unknown> = {}, calls: ToolC
   entries({ sessionUpdate: 'tool_call', toolCallId: 'c1', title: name, kind: 'other', status: 'in_progress', rawInput: input }, calls);
   return calls;
 }
-
-const text = (update: unknown): string => (entries(update)[0] as EntryOf<'text'>).text;
-
-describe('messages', () => {
-  it('renders an agent message chunk as agent text', () => {
-    expect(entries({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Done.' } })).toEqual([
-      { entryType: 'text', role: 'agent', text: 'Done.', timestamp: expect.any(String) },
-    ]);
-  });
-
-  it('drops an empty chunk', () => {
-    expect(entries({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '' } })).toEqual([]);
-  });
-
-  it('renders a thought as thinking', () => {
-    expect(entries({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'hmm' } })).toEqual([
-      { entryType: 'thinking', text: 'hmm', timestamp: expect.any(String) },
-    ]);
-  });
-
-  it('ignores the updates the harness never sends over ACP', () => {
-    // The automation profile carries no plans, commands, modes or terminal
-    // callbacks; a client must not invent entries for them.
-    expect(entries({ sessionUpdate: 'plan', entries: [{ content: 'x', status: 'pending', priority: 'low' }] })).toEqual([]);
-    expect(entries({ sessionUpdate: 'available_commands_update', availableCommands: [] })).toEqual([]);
-    expect(entries({ sessionUpdate: 'current_mode_update', currentModeId: 'plan' })).toEqual([]);
-  });
-});
 
 describe('tool calls', () => {
   it('summarizes a command, with its whole text as the call input', () => {
@@ -171,71 +145,6 @@ describe('tool calls', () => {
   });
 });
 
-describe('tool results', () => {
-  it('renders a completed call and forgets it', () => {
-    const calls = started('bash', { command: 'ls' });
-    const result = entries(
-      {
-        sessionUpdate: 'tool_call_update',
-        toolCallId: 'c1',
-        status: 'completed',
-        content: [{ type: 'content', content: { type: 'text', text: 'a.ts\nb.ts' } }],
-      },
-      calls,
-    );
-    expect(result).toEqual([
-      { entryType: 'tool_result', callId: 'c1', text: 'a.ts\nb.ts', timestamp: expect.any(String) },
-    ]);
-    expect(calls.size).toBe(0);
-  });
-
-  it('marks a failed call', () => {
-    const calls = started('bash', { command: 'ls' });
-    const result = entries(
-      {
-        sessionUpdate: 'tool_call_update',
-        toolCallId: 'c1',
-        status: 'failed',
-        content: [{ type: 'content', content: { type: 'text', text: 'not found' } }],
-      },
-      calls,
-    )[0] as EntryOf<'tool_result'>;
-    expect(result).toMatchObject({ entryType: 'tool_result', text: 'not found', isError: true });
-  });
-
-  it('shows an image result as a placeholder', () => {
-    const calls = started('read_image', { file_path: 'a.png' });
-    const result = entries(
-      {
-        sessionUpdate: 'tool_call_update',
-        toolCallId: 'c1',
-        status: 'completed',
-        content: [{ type: 'content', content: { type: 'image', data: 'AAAA', mimeType: 'image/png' } }],
-      },
-      calls,
-    );
-    expect((result[0] as EntryOf<'tool_result'>).text).toBe('[image]');
-  });
-
-  it('shows nothing for a progress update', () => {
-    const calls = started('bash', { command: 'ls' });
-    expect(
-      entries({ sessionUpdate: 'tool_call_update', toolCallId: 'c1', status: 'in_progress', content: [] }, calls),
-    ).toEqual([]);
-    expect(calls.size).toBe(1);
-  });
-
-  it('renders a result whose call was never seen', () => {
-    const result = entries({
-      sessionUpdate: 'tool_call_update',
-      toolCallId: 'gone',
-      status: 'completed',
-      content: [{ type: 'content', content: { type: 'text', text: 'orphan' } }],
-    });
-    expect(result).toEqual([{ entryType: 'tool_result', callId: 'gone', text: 'orphan', timestamp: expect.any(String) }]);
-  });
-});
-
 describe('file changes', () => {
   const diffOf = (parsed: OutputEntry[]): { path: string; lines: DiffLine[]; truncated?: boolean } => {
     const diff = parsed.find((entry): entry is EntryOf<'diff'> => entry.entryType === 'diff')!;
@@ -314,11 +223,5 @@ describe('toolCallDiffs', () => {
     expect(toolCallDiffs('write', { path: '/a/b.ts', file_text: 'x' })).toEqual([
       { path: '/a/b.ts', lines: [{ type: 'add', text: 'x' }] },
     ]);
-  });
-});
-
-describe('text helper', () => {
-  it('reads the text of a chunk', () => {
-    expect(text({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'hello' } })).toBe('hello');
   });
 });

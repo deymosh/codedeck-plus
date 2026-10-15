@@ -6,6 +6,10 @@
  * mid-session. Its `sdk` profile has none of the last three, and `headless`
  * is one-shot.
  *
+ * The ACP session lifecycle is the shared base (acp/session); what is the
+ * harness's own is here: its modes and efforts, its `[provider, model]` model
+ * ids, how its tool calls read (tools.ts), and the calls that ask the user.
+ *
  * What ACP does not carry — the harness's slash commands, the questions its
  * model asks, and a message for the turn that is running — reaches the
  * harness through CodeDeck's own plugin in the profile (plugin.ts), over a
@@ -22,28 +26,30 @@
  *  - a file change is reconstructed from the call's own arguments: the
  *    harness's result update carries no diff.
  */
-import type { RequestPermissionRequest, RequestPermissionResponse, SessionConfigOption, SessionNotification } from '@agentclientprotocol/sdk';
+import type { RequestPermissionRequest, SessionConfigOption, SessionUpdate } from '@agentclientprotocol/sdk';
 import type { Driver, DriverSession, McpManager, PluginManager, SessionContext, SessionMcpState } from '../../sdk/driver';
 import type { HttpGet, ProviderHttp } from '../../sdk/net';
 import { ANTHROPIC_API, checkToken, listModels } from '../../sdk/providerApi';
 import type { EndpointModel } from '../../sdk/providerModels';
 import { mcpStatus as mcpStatusOf } from '../../sdk/mcp';
 import { parseSlashCommand } from '../../sdk/commands';
-import { PERMISSION_ALLOW, PERMISSION_DENY, now, toolLocations, unknownToolReporter } from '../../sdk/tools';
+import { PERMISSION_ALLOW, PERMISSION_DENY, now, toolLocations } from '../../sdk/tools';
 import { deepseekTool } from './tools';
 import type {
   AgentInfo,
   McpStatus,
   ModelEntry,
   OutputEntry,
+  PermissionRequest,
   ProviderBinding,
   SessionMcpServer,
   SessionOption,
   SlashCommand,
   StartSession,
-  UsageData,
 } from '../../sdk/types';
 import { deepseekUpdateToEntries, type ToolCallMemory } from './adapter';
+import { selectChoices, type Choice } from '../../acp/options';
+import { AcpSession, type AcpSessionDeps, type AcpSessionRegistry } from '../../acp/session';
 import { DEEPSEEK_API_KEY_CREDENTIAL, DEEPSEEK_API_KEY_ENV, DEEPSEEK_BASE_URL_ENV, buildDeepSeekEnv } from './env';
 import { askPlugin, listSessionCommands, runSessionCommand, steerSession } from './bridge';
 import { HARNESS_PLUGIN, installHarnessPlugin, QUESTION_MARKER } from './plugin';
@@ -60,7 +66,7 @@ import {
   DSH_PROFILE,
   DeepSeekRuntime,
   dshProfileDir,
-  type DeepSeekProcess,
+  type DeepSeekChannel,
   type DeepSeekProcessEvents,
   type SpawnFn,
 } from './runtime';
@@ -100,51 +106,6 @@ const QUESTION_TIMEOUT_MS = 60_000;
 /** The harness's own option ids (standard ACP session config options). */
 const MODEL_CONFIG_ID = 'model';
 const EFFORT_CONFIG_ID = 'reasoning_effort';
-
-/** One choice of a session config option. */
-interface Choice {
-  /** The harness's own selector value (what `set_config_option` takes). */
-  value: string;
-  label: string;
-  /** Who serves it, as a person reads it (`DeepSeek`), when the option says. */
-  provider?: string;
-  description?: string;
-}
-
-/**
- * The choices of a select option. ACP lets an agent send them as one flat
- * list or grouped, and the harness groups its models by provider (one group
- * per configured provider, named after it) while its reasoning levels come
- * flat.
- */
-export function selectChoices(option: SessionConfigOption | undefined): Choice[] {
-  if (!option || option.type !== 'select') return [];
-  const choices: Choice[] = [];
-  for (const entry of option.options) {
-    if (!isGroup(entry)) {
-      choices.push({ value: entry.value, label: entry.name, ...(entry.description ? { description: entry.description } : {}) });
-      continue;
-    }
-    for (const inner of entry.options) {
-      choices.push({
-        value: inner.value,
-        label: inner.name,
-        provider: entry.name,
-        ...(inner.description ? { description: inner.description } : {}),
-      });
-    }
-  }
-  return choices;
-}
-
-/** ACP sends a select option's values either as one flat list or as groups;
- *  only a group entry carries values of its own. */
-function isGroup(entry: {
-  value?: unknown;
-  options?: unknown;
-}): entry is { name: string; group?: string; options: Array<{ value: string; name: string; description?: string | null }> } {
-  return Array.isArray(entry.options);
-}
 
 /**
  * One model as the phone sees it, in the shape the other drivers report: the
@@ -194,34 +155,19 @@ export function modelIdOf(value: string): string {
   return value;
 }
 
-export class DeepSeekSession implements DriverSession {
-  /** What each tool call's own update carried, for its result and for the
-   *  permission card the harness asks about it. */
-  private readonly calls: ToolCallMemory = new Map();
-  /** Told a tool name no agent's table lists, which the log then carries. */
-  private readonly reportUnknownTool: (toolName: string) => void;
-  private readonly cwd: string;
-  private readonly env: Record<string, string>;
-  private readonly ready: Promise<void>;
-  private mode: string;
-  private process?: DeepSeekProcess;
-  private nativeId?: string;
-  private options: SessionConfigOption[] = [];
-  private contextPercentage?: number;
-  private contextWindow?: number;
-  /** Whether the phone has been told the session is up: until then its model
-   *  travels in the identity info, not as a change. */
-  private announced = false;
+/** What one DeepSeek session is built with, beyond the shared ACP base. */
+interface DeepSeekSessionDeps extends AcpSessionDeps<DeepSeekChannel, DeepSeekProcessEvents> {
+  runtime: DeepSeekRuntime;
+  mcp: DeepSeekMcp;
+  baseEnv: NodeJS.ProcessEnv;
+}
+
+export class DeepSeekSession extends AcpSession<DeepSeekChannel, DeepSeekProcessEvents, DeepSeekSessionDeps> {
+  /** `ask` (every permission to the phone) or `default` (auto-approve). */
+  private sessionMode: string;
   /** The names this session's harness can run, from the last list fetched
    *  (dropped again on failure, so the next look asks again). */
   private commandNames?: Promise<Set<string>>;
-  private ended = false;
-  /** Prompts run one at a time: ACP refuses a second prompt while one is in
-   *  flight, so a message that cannot steer the running turn waits for it. */
-  private tail: Promise<unknown> = Promise.resolve();
-  /** Whether a `session/prompt` of this session is in flight — the turn a
-   *  message sent now can steer. */
-  private promptInFlight = false;
   /** Messages sent during the running turn, steered (or queued) one after
    *  another so they reach the model in the order they were sent. */
   private steering: Promise<unknown> = Promise.resolve();
@@ -229,135 +175,60 @@ export class DeepSeekSession implements DriverSession {
    *  after it waits too, so it never overtakes it. */
   private queuedBehindTurn = false;
 
-  constructor(
-    private readonly params: StartSession,
-    private readonly ctx: SessionContext,
-    private readonly deps: {
-      runtime: DeepSeekRuntime;
-      mcp: DeepSeekMcp;
-      baseEnv: NodeJS.ProcessEnv;
-      /** Where this session is registered while it runs, so the driver can
-       *  end it when the harness process it shares goes away. */
-      live: {
-        add(sessionId: string, session: DeepSeekSession): void;
-        remove(sessionId: string): void;
-        events(): DeepSeekProcessEvents;
-      };
-      /** The profile as it must be before a harness boots: the endpoint's
-       *  catalog written, the command plugin in place. */
-      prepared: Promise<unknown>;
-    },
-  ) {
-    this.cwd = params.cwd;
-    this.mode = params.mode ?? DEFAULT_MODE;
-    this.reportUnknownTool = unknownToolReporter((message) => this.ctx.log(message));
-    // Built here, not in `init`: a provider profile that cannot be used at
-    // all refuses the session before it starts, rather than after an error
-    // entry the phone would have to read.
-    this.env = buildDeepSeekEnv(params, deps.baseEnv);
-    this.ready = this.init();
-    // init() reports its own failure as `ended`; nothing else awaits this
-    // rejection except prompt/interrupt, which catch it themselves.
-    this.ready.catch(() => {});
-  }
-
-  private get client() {
-    const process_ = this.process;
-    if (!process_) throw new Error('the DeepSeek Harness session has not started');
-    return process_.client;
+  constructor(params: StartSession, ctx: SessionContext, deps: DeepSeekSessionDeps) {
+    super(params, ctx, deps);
+    this.sessionMode = params.mode ?? DEFAULT_MODE;
   }
 
   /** Where the plugin of the process holding this session answers. Every
    *  process has its own socket, so it is always this process's. */
   private get bridgeSocket(): string | undefined {
-    return this.process?.bridgeSocket;
+    return this.process?.handle.socket;
   }
 
-  /** The harness process this session shares went away, taking the session
-   *  with it. */
-  endFromProcess(error: string): void {
-    this.finish(error);
+  // --- the ACP base's hooks ---
+
+  protected override buildEnv(params: StartSession): Record<string, string> {
+    // Built as the session is constructed, not in `init`: a provider profile
+    // that cannot be used at all refuses the session before it starts, rather
+    // than after an error entry the phone would have to read.
+    return buildDeepSeekEnv(params, this.deps.baseEnv);
   }
 
-  private async init(): Promise<void> {
-    try {
-      // The harness reads its catalog and mounts its plugins as it boots, so
-      // both have to be in the profile before a process starts.
-      await this.deps.prepared;
-      const process_ = await this.deps.runtime.acquire(this.env, this.deps.live.events());
-      this.process = process_;
-      // A session closed while its harness was starting keeps nothing: the
-      // process it acquired is let go at once.
-      if (this.ended) {
-        this.abandon();
-        return;
-      }
-      const opened = await this.openSession();
-      this.nativeId = opened.sessionId;
-      this.options = opened.configOptions;
-      if (this.ended) {
-        this.abandon();
-        return;
-      }
-      process_.attach(opened.sessionId, {
-        update: (notification) => this.onUpdate(notification),
-        permission: (request) => this.onPermission(request),
-      });
-      this.deps.live.add(opened.sessionId, this);
-      await this.applySelection();
-      if (this.ended) return;
-      const model = this.currentModel();
-      this.announced = true;
-      this.ctx.emit({ type: 'info', nativeSessionId: opened.sessionId, ...(model ? { model: model.label } : {}), mode: this.mode });
-      // The version is said once, when a conversation starts — the model is
-      // on the phone's composer. A resumed one said it when it began.
-      if (!opened.resumed) {
-        const version = await this.deps.runtime.version();
-        if (this.ended) return;
-        this.deliver({ entryType: 'status', text: version ? `${DSH_LABEL} ${version}` : `${DSH_LABEL} session started`, timestamp: now() });
-      }
-      this.ctx.emit({ type: 'ready' });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.deliver({ entryType: 'error', text: message, timestamp: now() });
-      this.finish(message);
-    }
+  protected override translate(update: SessionUpdate, calls: ToolCallMemory): OutputEntry[] {
+    return deepseekUpdateToEntries(update, calls, this.reportUnknownTool);
   }
 
-  /** Start a fresh conversation, or continue the one the bridge names. A
-   *  conversation the harness no longer has (removed, or started in another
-   *  workspace — it checks) falls back to a fresh one with a notice, as the
-   *  other drivers do: the transcript is the bridge's, the memory is the
-   *  agent's. */
-  private async openSession(): Promise<{ sessionId: string; configOptions: SessionConfigOption[]; resumed: boolean }> {
-    const resume = this.params.resume;
-    const resumable = this.process?.capabilities.sessionCapabilities?.resume;
-    // ACP spells "not supported" both as an absent field and as `null`;
-    // only an object (even an empty one) advertises `session/resume`.
-    if (resume && resumable != null) {
-      try {
-        const resumed = await this.client.request('session/resume', { sessionId: resume, cwd: this.cwd, mcpServers: [] });
-        return { sessionId: resume, configOptions: resumed.configOptions ?? [], resumed: true };
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        this.ctx.log(`[deepseek] could not resume ${resume} (${reason}) — starting a fresh session`);
-        this.deliver({
-          entryType: 'notice',
-          kind: 'session_restart',
-          text:
-            `${DSH_LABEL} could not continue this conversation — starting a fresh one in the same workspace. ` +
-            'The transcript is preserved, but the model does not remember earlier turns.',
-          timestamp: now(),
-        });
-      }
-    }
-    const created = await this.client.request('session/new', { cwd: this.cwd, mcpServers: [] });
-    return { sessionId: created.sessionId, configOptions: created.configOptions ?? [], resumed: false };
+  protected override autoApprove(): boolean {
+    return this.sessionMode === AUTO_APPROVE_MODE;
+  }
+
+  /**
+   * The card one permission ask becomes. The harness names only the tool
+   * call, so the card comes from that call's own update — which the harness
+   * sends before it asks — and the choices are the two it offers: it has no
+   * "always allow" to choose.
+   */
+  protected override permissionCard(request: RequestPermissionRequest): Omit<PermissionRequest, 'sessionId'> {
+    const callId = request.toolCall.toolCallId;
+    const facts = this.calls.get(callId);
+    const toolName = facts?.name ?? request.toolCall.name ?? request.toolCall.title ?? 'tool';
+    const input = facts?.input ?? {};
+    const locations = toolLocations(input);
+    const call = deepseekTool(toolName, input, this.reportUnknownTool);
+    return {
+      requestId: callId,
+      toolName,
+      kind: call.kind,
+      title: call.title,
+      ...(locations.length > 0 ? { locations } : {}),
+      options: [PERMISSION_ALLOW, PERMISSION_DENY],
+    };
   }
 
   /** Apply the model and reasoning level the session was started with. The
    *  model goes first: which reasoning levels exist is the model's own. */
-  private async applySelection(): Promise<void> {
+  protected override async applySelection(): Promise<void> {
     const wanted = this.params.model;
     if (wanted) {
       const value = this.resolveModel(wanted);
@@ -394,152 +265,53 @@ export class DeepSeekSession implements DriverSession {
     }
   }
 
+  protected override mode(): string {
+    return this.sessionMode;
+  }
+
+  protected override modelLabel(): string | undefined {
+    return this.currentModel()?.label;
+  }
+
+  protected override version(): Promise<string | undefined> {
+    return this.deps.runtime.version();
+  }
+
+  // --- messages, commands and steering ---
+
   /**
-   * The value to select for a model the bridge names. Two shapes reach here:
-   * the model id this driver reports (what the phone was shown, and what a
-   * provider profile names), and the harness's own selector value. Anything
-   * else matches nothing, so it is refused rather than guessed at.
+   * A typed `/name` that this session's harness has runs as that command —
+   * `listCommands` is what makes the phone offer it, and the harness's own
+   * command registry is what runs it (`/compact` compacts, rather than being
+   * text the model reads). Anything else is a prompt.
    */
-  private resolveModel(model: string): string | undefined {
-    const choices = modelChoices(this.optionOf(MODEL_CONFIG_ID));
-    return (
-      choices.find((choice) => choice.value === model)?.value ?? choices.find((choice) => modelIdOf(choice.value) === model)?.value
-    );
-  }
-
-  private optionOf(id: string): SessionConfigOption | undefined {
-    return this.options.find((option) => option.id === id);
-  }
-
-  /** The model the session is on, as its option state describes it. */
-  private currentModel(): Choice | undefined {
-    const option = this.optionOf(MODEL_CONFIG_ID);
-    if (!option || option.type !== 'select') return undefined;
-    return (
-      modelChoices(option).find((choice) => choice.value === option.currentValue) ?? {
-        value: option.currentValue,
-        label: option.currentValue,
-      }
-    );
-  }
-
-  /** Change one option and keep the state that comes back — the harness
-   *  answers every change with the complete option list. */
-  private async setConfig(configId: string, value: string): Promise<void> {
-    const sessionId = this.nativeId;
-    if (!sessionId) throw new Error('the session has not started');
-    const result = await this.client.request('session/set_config_option', { sessionId, configId, value });
-    const before = this.currentModel()?.value;
-    this.options = result.configOptions ?? this.options;
-    const after = this.currentModel();
-    if (this.announced && configId === MODEL_CONFIG_ID && after && after.value !== before) {
-      this.ctx.emit({ type: 'info', model: after.label });
+  protected override async tryCommand(text: string): Promise<boolean> {
+    const command = parseSlashCommand(text);
+    if (command && (await this.knownCommands()).has(command.name)) {
+      await this.runCommand(text);
+      return true;
     }
-  }
-
-  /** One update of this session: entries for the transcript, and the two
-   *  updates that are session state rather than conversation. */
-  private onUpdate(notification: SessionNotification): void {
-    if (this.ended) return;
-    const update = notification.update;
-    if (update.sessionUpdate === 'usage_update') {
-      this.reportContext(update.used, update.size);
-      return;
-    }
-    if (update.sessionUpdate === 'config_option_update') {
-      this.options = update.configOptions;
-      return;
-    }
-    const entries = deepseekUpdateToEntries(update, this.calls, this.reportUnknownTool);
-    if (entries.length > 0) this.ctx.emit({ type: 'entries', entries });
-  }
-
-  /** How full the context is, over the window the harness reports. */
-  private reportContext(used: number, size: number): void {
-    if (!(size > 0) || !Number.isFinite(used)) return;
-    const percentage = Math.max(0, Math.min(100, Math.round((used / size) * 100)));
-    if (percentage === this.contextPercentage && size === this.contextWindow) return;
-    this.contextPercentage = percentage;
-    this.contextWindow = size;
-    this.ctx.emit({ type: 'info', contextWindow: size, contextPercentage: percentage });
+    return false;
   }
 
   /**
-   * One permission ask. The harness names only the tool call, so the card
-   * comes from that call's own update — which the harness sends before it
-   * asks — and the choices are the two it offers: it has no "always allow"
-   * to choose.
+   * A message sent while a turn runs: the harness's own steering, which its
+   * apps use for a message sent while the agent works, through the plugin —
+   * and the model reads it at its next step. A slash command is never
+   * steered: it runs as the harness's own command, so it waits for the turn
+   * to end like any other queued message.
    */
-  private async onPermission(request: RequestPermissionRequest): Promise<RequestPermissionResponse> {
-    const allow = request.options.find((option) => option.kind === 'allow_once');
-    const reject = request.options.find((option) => option.kind === 'reject_once');
-    const refuse = (): RequestPermissionResponse =>
-      reject ? { outcome: { outcome: 'selected', optionId: reject.optionId } } : { outcome: { outcome: 'cancelled' } };
-    if (this.ended || !allow) return { outcome: { outcome: 'cancelled' } };
-    if (this.mode === AUTO_APPROVE_MODE) return { outcome: { outcome: 'selected', optionId: allow.optionId } };
-
-    const callId = request.toolCall.toolCallId;
-    const facts = this.calls.get(callId);
-    const toolName = facts?.name ?? request.toolCall.name ?? request.toolCall.title ?? 'tool';
-    const input = facts?.input ?? {};
-    const locations = toolLocations(input);
-    const call = deepseekTool(toolName, input, this.reportUnknownTool);
-    const outcome = await this.ctx.requestPermission({
-      requestId: callId,
-      toolName,
-      kind: call.kind,
-      title: call.title,
-      ...(locations.length > 0 ? { locations } : {}),
-      options: [PERMISSION_ALLOW, PERMISSION_DENY],
-    });
-    if (outcome.outcome === 'cancelled') return { outcome: { outcome: 'cancelled' } };
-    return outcome.optionId === PERMISSION_ALLOW.id ? { outcome: { outcome: 'selected', optionId: allow.optionId } } : refuse();
-  }
-
-  private deliver(entry: OutputEntry): void {
-    this.ctx.emit({ type: 'entries', entries: [entry] });
-  }
-
-  private finish(error?: string): void {
-    if (this.ended) return;
-    this.ended = true;
-    this.abandon();
-    this.ctx.emit({ type: 'ended', ...(error ? { error } : {}) });
-  }
-
-  /** Let go of the harness process this session held. */
-  private abandon(): void {
-    const process_ = this.process;
-    this.process = undefined;
-    if (this.nativeId !== undefined) {
-      process_?.detach(this.nativeId);
-      this.deps.live.remove(this.nativeId);
-    }
-    process_?.release();
-  }
-
-  /**
-   * One message from the user. While a turn runs, ACP takes no second prompt,
-   * so a message is handed to that turn instead — the harness's own steering,
-   * which its apps use for a message sent while the agent works, through the
-   * plugin — and the model reads it at its next step. One the turn cannot take
-   * (a slash command, a turn just ending, no plugin) waits for the turn to end.
-   */
-  prompt(text: string): void {
-    if (this.promptInFlight && !parseSlashCommand(text)) {
-      const next = this.steering.then(() => this.steerOrQueue(text));
-      this.steering = next.catch(() => {});
+  protected override steer(text: string): void {
+    if (parseSlashCommand(text)) {
+      this.enqueue(text);
       return;
     }
-    this.enqueue(text);
+    const next = this.steering.then(() => this.steerOrQueue(text));
+    this.steering = next.catch(() => {});
   }
 
-  private enqueue(text: string): void {
-    const next = this.tail.then(
-      () => this.runPrompt(text),
-      () => this.runPrompt(text),
-    );
-    this.tail = next.catch(() => {});
+  protected override promptSettled(): void {
+    this.queuedBehindTurn = false;
   }
 
   private async steerOrQueue(text: string): Promise<void> {
@@ -550,38 +322,6 @@ export class DeepSeekSession implements DriverSession {
     }
     this.queuedBehindTurn = true;
     this.enqueue(text);
-  }
-
-  /**
-   * A typed `/name` that this session's harness has runs as that command —
-   * `listCommands` is what makes the phone offer it, and the harness's own
-   * command registry is what runs it (`/compact` compacts, rather than being
-   * text the model reads). Anything else is a prompt.
-   */
-  private async runPrompt(text: string): Promise<void> {
-    const command = parseSlashCommand(text);
-    if (command && (await this.knownCommands()).has(command.name)) {
-      await this.runCommand(text);
-      return;
-    }
-    try {
-      await this.ready;
-      const sessionId = this.nativeId;
-      if (this.ended || sessionId === undefined) return;
-      this.ctx.emit({ type: 'turn', state: 'running' });
-      this.promptInFlight = true;
-      try {
-        await this.client.request('session/prompt', { sessionId, prompt: [{ type: 'text', text }] });
-      } finally {
-        this.promptInFlight = false;
-        this.queuedBehindTurn = false;
-      }
-      this.endTurn();
-    } catch (error) {
-      if (this.ended) return;
-      this.deliver({ entryType: 'error', text: error instanceof Error ? error.message : String(error), timestamp: now() });
-      this.endTurn();
-    }
   }
 
   /** Run one command line and show what it said. A command is not a turn in
@@ -609,6 +349,44 @@ export class DeepSeekSession implements DriverSession {
     }
     this.endTurn();
   }
+
+  /**
+   * What this session's harness can run, asked of the harness itself (the
+   * command plugin) and cached until the session ends once it has been
+   * read. A list that could not be read is asked for again next time — the
+   * plugin may simply not be answering yet — and meanwhile every slash line
+   * is ordinary text, which is what a harness without the plugin does.
+   */
+  private knownCommands(): Promise<Set<string>> {
+    this.commandNames ??= this.ready
+      .then(() => this.sessionCommands())
+      .then((commands) => {
+        if (commands === undefined) this.commandNames = undefined;
+        return new Set((commands ?? []).map((command) => command.name));
+      })
+      .catch(() => {
+        this.commandNames = undefined;
+        return new Set<string>();
+      });
+    return this.commandNames;
+  }
+
+  /** The session's commands as its harness lists them, or `undefined` when
+   *  the plugin cannot be asked. */
+  private async sessionCommands(): Promise<SlashCommand[] | undefined> {
+    const socket = this.bridgeSocket;
+    const sessionId = this.nativeId;
+    if (socket === undefined || sessionId === undefined) return undefined;
+    return listSessionCommands(socket, sessionId, this.ctx.log);
+  }
+
+  async listCommands(): Promise<SlashCommand[]> {
+    await this.ready;
+    if (this.ended) return [];
+    return (await this.sessionCommands()) ?? [];
+  }
+
+  // --- the questions the model asks ---
 
   /**
    * The harness's model asked the user something, and the plugin pushed it
@@ -666,79 +444,53 @@ export class DeepSeekSession implements DriverSession {
     await askPlugin(socket, { method: 'answer', sessionId: this.nativeId, callId, ...answer }, QUESTION_TIMEOUT_MS, this.ctx.log);
   }
 
-  /** What this session's harness can run, asked of the harness itself (the
-   *  command plugin) and cached until the session ends once it has been
-   *  read. A list that could not be read is asked for again next time — the
-   *  plugin may simply not be answering yet — and meanwhile every slash line
-   *  is ordinary text, which is what a harness without the plugin does. */
-  private knownCommands(): Promise<Set<string>> {
-    this.commandNames ??= this.ready
-      .then(() => this.sessionCommands())
-      .then((commands) => {
-        if (commands === undefined) this.commandNames = undefined;
-        return new Set((commands ?? []).map((command) => command.name));
-      })
-      .catch(() => {
-        this.commandNames = undefined;
-        return new Set<string>();
-      });
-    return this.commandNames;
+  // --- the model and the session's own state ---
+
+  /**
+   * The value to select for a model the bridge names. Two shapes reach here:
+   * the model id this driver reports (what the phone was shown, and what a
+   * provider profile names), and the harness's own selector value. Anything
+   * else matches nothing, so it is refused rather than guessed at.
+   */
+  private resolveModel(model: string): string | undefined {
+    const choices = modelChoices(this.optionOf(MODEL_CONFIG_ID));
+    return (
+      choices.find((choice) => choice.value === model)?.value ?? choices.find((choice) => modelIdOf(choice.value) === model)?.value
+    );
   }
 
-  /** The session's commands as its harness lists them, or `undefined` when
-   *  the plugin cannot be asked. */
-  private async sessionCommands(): Promise<SlashCommand[] | undefined> {
-    const socket = this.bridgeSocket;
-    const sessionId = this.nativeId;
-    if (socket === undefined || sessionId === undefined) return undefined;
-    return listSessionCommands(socket, sessionId, this.ctx.log);
+  /** The model the session is on, as its option state describes it. */
+  private currentModel(): Choice | undefined {
+    const option = this.optionOf(MODEL_CONFIG_ID);
+    if (!option || option.type !== 'select') return undefined;
+    return (
+      modelChoices(option).find((choice) => choice.value === option.currentValue) ?? {
+        value: option.currentValue,
+        label: option.currentValue,
+      }
+    );
   }
 
-  async listCommands(): Promise<SlashCommand[]> {
-    await this.ready;
-    if (this.ended) return [];
-    return (await this.sessionCommands()) ?? [];
-  }
-
-  /** The turn is over: the transcript marks it and the phone stops showing
-   *  the agent as working. Every ending is one of these — a cancelled turn
-   *  and a failed one end the turn too. */
-  private endTurn(): void {
-    if (this.ended) return;
-    this.deliver({ entryType: 'turn_complete', timestamp: now() });
-    this.ctx.emit({ type: 'turn', state: 'idle' });
-  }
-
-  async interrupt(): Promise<void> {
-    const sessionId = this.nativeId;
-    if (sessionId === undefined || this.ended) return;
-    // Best effort: an already-idle session has nothing to cancel.
-    try {
-      this.client.notify('session/cancel', { sessionId });
-    } catch {
-      // The connection is gone; `ended` has already said so.
-    }
-  }
-
-  async setOption(option: SessionOption, value: string): Promise<void> {
+  override async setOption(option: SessionOption, value: string): Promise<void> {
     switch (option) {
       case 'mode':
         if (!DEEPSEEK_MODES.some((mode) => mode.id === value)) throw new Error(`${DSH_LABEL} has no mode '${value}'`);
-        this.mode = value;
+        this.sessionMode = value;
         return;
-      case 'model':
+      case 'model': {
+        // The harness answers a change with the complete option list, so the
+        // model it actually took is read back from there: the phone is told
+        // only when it differs from what it had.
+        const before = this.currentModel()?.value;
         await this.setConfig(MODEL_CONFIG_ID, this.resolveModel(value) ?? value);
+        const after = this.currentModel();
+        if (this.announced && after && after.value !== before) this.ctx.emit({ type: 'info', model: after.label });
         return;
+      }
       case 'effort':
         await this.setConfig(EFFORT_CONFIG_ID, value);
         return;
     }
-  }
-
-  async getUsage(): Promise<UsageData | null> {
-    // Nothing to ask for: the harness has no subscription usage, and its
-    // context meter arrives as session info.
-    return null;
   }
 
   /**
@@ -750,7 +502,7 @@ export class DeepSeekSession implements DriverSession {
   async mcpStatus(): Promise<SessionMcpState> {
     const state = await this.deps.mcp.list();
     const process_ = this.process;
-    const failures = process_?.mcpFailures() ?? new Map<string, string>();
+    const failures = process_?.handle.failures ?? new Map<string, string>();
     const configured = this.deps.mcp.version;
     const loaded = process_?.configVersion ?? Number.POSITIVE_INFINITY;
     const servers: SessionMcpServer[] = state.servers.map((server) => {
@@ -777,19 +529,6 @@ export class DeepSeekSession implements DriverSession {
       `${DSH_LABEL} attaches its MCP servers when it starts, so a running session cannot switch one. ` +
         'Change it in the MCP list: the next session uses the new set.',
     );
-  }
-
-  async end(): Promise<void> {
-    if (this.ended) return;
-    const sessionId = this.nativeId;
-    const process_ = this.process;
-    this.ended = true;
-    if (sessionId !== undefined && process_) {
-      // Closing the session lets the harness cancel its work and flush; the
-      // conversation stays on disk for a later resume.
-      await process_.client.request('session/close', { sessionId }).catch(() => {});
-    }
-    this.abandon();
   }
 }
 
@@ -826,18 +565,22 @@ export class DeepSeekDriver implements Driver {
   private prepared: Promise<unknown> = Promise.resolve();
   /** Sessions by the harness's own ids: a process serves several, and it is
    *  this map that ends them all when it goes away. */
-  private readonly sessions = new Map<string, DeepSeekSession>();
-  private readonly live = {
+  private readonly sessions = new Map<string, AcpSession<DeepSeekChannel, DeepSeekProcessEvents>>();
+  private readonly live: AcpSessionRegistry<DeepSeekChannel, DeepSeekProcessEvents> = {
     events: (): DeepSeekProcessEvents => ({
       ended: (sessionIds: readonly string[], error: string) => {
         for (const sessionId of sessionIds) this.sessions.get(sessionId)?.endFromProcess(error);
       },
       question: (line: string) => {
         const pushed = parseQuestionLine(line, QUESTION_MARKER);
-        if (pushed?.sessionId !== undefined) this.sessions.get(pushed.sessionId)?.askQuestion(pushed);
+        if (pushed?.sessionId === undefined) return;
+        // Only this driver's sessions ever register, so the narrowed type is
+        // the one its own updates are routed by.
+        const session = this.sessions.get(pushed.sessionId);
+        if (session instanceof DeepSeekSession) session.askQuestion(pushed);
       },
     }),
-    add: (sessionId: string, session: DeepSeekSession): void => {
+    add: (sessionId: string, session: AcpSession<DeepSeekChannel, DeepSeekProcessEvents>): void => {
       this.sessions.set(sessionId, session);
     },
     remove: (sessionId: string): void => {
@@ -964,6 +707,8 @@ export class DeepSeekDriver implements Driver {
       baseEnv: this.options.baseEnv ?? process.env,
       live: this.live,
       prepared: this.prepared,
+      tag: 'deepseek',
+      label: DSH_LABEL,
     });
   }
 
