@@ -25,7 +25,7 @@
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
-import { OpenCode, type ModelInfo, type OpenCodeClient, type PermissionAsked, type ProviderInfo, type SessionInfo, type V2Event } from '@opencode/client';
+import { OpenCode, type ModelInfo, type OpenCodeClient, type PermissionAsked, type PermissionRule, type ProviderInfo, type SessionInfo, type V2Event } from '@opencode/client';
 import { parseSlashCommand, slashCommand } from '../../sdk/commands';
 import type { Driver, DriverSession, McpManager, PermissionRuleManager, PluginManager, SessionContext, SessionMcpState } from '../../sdk/driver';
 import { PERMISSION_ALLOW, PERMISSION_ALLOW_ALWAYS, PERMISSION_DENY, toolLocations, unknownToolReporter } from '../../sdk/tools';
@@ -93,9 +93,12 @@ const OPENCODE_MODES = [
 /** The OpenCode agent the plan mode runs. In any other mode a prompt names
  *  none, so OpenCode uses its default agent (`build`, or the operator's). */
 const PLAN_AGENT = 'plan';
+/** The agent every other mode runs. */
+const BUILD_AGENT = 'build';
 
 /**
- * The permission rules a session runs under, from its mode.
+ * The permission rules a session runs under, from its mode and the rules of
+ * the agent it runs.
  *
  * V2's base policy ALLOWS every tool in the project: left alone, a session
  * would never ask, and the phone's approval card would never appear. The ask
@@ -103,9 +106,20 @@ const PLAN_AGENT = 'plan';
  * rule wins, and `*`/`*` matches everything — while the auto-approve mode
  * states the allow it already had, so a mode switch always lands on an
  * explicit rule rather than on whatever the operator configured.
+ *
+ * The session's rules are matched after the agent's own, so that catch-all
+ * alone would also override what the agent forbids (the plan agent's
+ * `edit` deny, a custom agent's `shell` deny). The agent's rules therefore
+ * follow it again, in their order: a deny stays a deny, and every other
+ * effect becomes the mode's — the mode decides whether a call asks, the
+ * agent what it may never do.
  */
-function permissionRules(mode: string): Array<{ action: string; resource: string; effect: 'allow' | 'deny' | 'ask' }> {
-  return [{ action: '*', resource: '*', effect: mode === AUTO_APPROVE_MODE ? 'allow' : 'ask' }];
+export function permissionRules(mode: string, agentRules: readonly PermissionRule[] = []): PermissionRule[] {
+  const effect = mode === AUTO_APPROVE_MODE ? 'allow' : 'ask';
+  return [
+    { action: '*', resource: '*', effect },
+    ...agentRules.map((rule): PermissionRule => ({ action: rule.action, resource: rule.resource, effect: rule.effect === 'deny' ? rule.effect : effect })),
+  ];
 }
 
 /** OpenCode's "always": it saves a rule for the project that every later
@@ -373,6 +387,9 @@ export class OpenCodeSession implements DriverSession {
   private readonly reportUnknownTool: (toolName: string) => void;
   private ended = false;
   private mode: string;
+  /** The last mode switch still being applied to the server; the next one
+   *  waits for it. Never rejects. */
+  private agentSwitch: Promise<void> = Promise.resolve();
   /** The title last reported for the session. */
   private title: string | undefined;
   private model?: { providerID: string; id: string };
@@ -520,6 +537,9 @@ export class OpenCodeSession implements DriverSession {
         .then(() => client.server.info())
         .then((info) => info.version, () => undefined);
       const { session, resumeLost } = await this.resolveSession(client, params);
+      // Before any prompt can run: until then the agent's denies are not in
+      // the session's rules.
+      await this.statePermissions(client, session.id, session.agent ?? (this.mode === PLAN_MODE ? PLAN_AGENT : BUILD_AGENT));
       // The "memory was lost" notice goes ahead of the session's first line.
       if (resumeLost) this.deliver({ type: 'resume-lost' });
       if (!this.ended) {
@@ -1241,8 +1261,16 @@ export class OpenCodeSession implements DriverSession {
         // switching the mode switches both: the plan agent (or OpenCode's own
         // default), and whether a tool call reaches the phone at all.
         const { client, session } = await this.ready;
-        await client.session.switchAgent({ sessionID: session.id, agent: value === PLAN_MODE ? PLAN_AGENT : 'build' }).catch(() => {});
-        await client.session.update({ sessionID: session.id, permissions: permissionRules(value) }).catch(() => {});
+        // The host runs a second switch while the first is still talking to
+        // the server: queued, each applies the mode set last, so the session
+        // ends on the agent and rules of the final one, never a mix.
+        const switched = this.agentSwitch.then(async () => {
+          const agent = this.mode === PLAN_MODE ? PLAN_AGENT : BUILD_AGENT;
+          await client.session.switchAgent({ sessionID: session.id, agent }).catch(() => {});
+          await this.statePermissions(client, session.id, agent);
+        });
+        this.agentSwitch = switched;
+        await switched;
         return;
       }
       case 'model': {
@@ -1272,6 +1300,24 @@ export class OpenCodeSession implements DriverSession {
         return;
       }
     }
+  }
+
+  /** Set the session's rules for its mode and for `agent`'s own rules. An
+   *  agent that cannot be read leaves only the mode's catch-all, which is
+   *  logged: nothing the agent forbids would then be refused. */
+  private async statePermissions(client: OpenCodeClient, sessionID: string, agent: string): Promise<void> {
+    const agentRules = await Promise.resolve()
+      .then(() => client.agent.get({ agentID: agent, location: { directory: this.cwd } }))
+      .then(
+        (got) => got.data.permissions,
+        (err) => {
+          this.ctx.log(`[opencode] could not read agent ${agent}'s permissions: ${formatOpenCodeError(err)}`);
+          return [];
+        },
+      );
+    await client.session
+      .update({ sessionID, permissions: permissionRules(this.mode, agentRules) })
+      .catch((err) => this.ctx.log(`[opencode] could not set the session's permissions: ${formatOpenCodeError(err)}`));
   }
 
   /** Tell the server which model (and reasoning variant) the session runs. */

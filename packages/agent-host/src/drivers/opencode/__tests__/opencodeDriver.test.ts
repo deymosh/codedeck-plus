@@ -23,6 +23,11 @@ type V2 = Record<string, unknown> & { type: string; data?: Record<string, unknow
  *  one, so this is how a test scripts one of them. */
 const asMock = (fn: unknown): ReturnType<typeof vi.fn> => fn as ReturnType<typeof vi.fn>;
 
+const AGENT_RULES: Record<string, Array<{ action: string; resource: string; effect: string }>> = {
+  build: [{ action: '*', resource: '*', effect: 'allow' }, { action: 'read', resource: '*.env', effect: 'ask' }],
+  plan: [{ action: '*', resource: '*', effect: 'allow' }, { action: 'edit', resource: '*', effect: 'deny' }, { action: 'edit', resource: '/plans/*', effect: 'allow' }],
+};
+
 /** A client whose event stream yields `events`, then stays open briefly so
  *  the ask → reply chains settle before the stream ends. */
 function clientWith(events: V2[], over: Record<string, unknown> = {}): OpenCodeClient {
@@ -55,6 +60,13 @@ function clientWith(events: V2[], over: Record<string, unknown> = {}): OpenCodeC
       remove: vi.fn(async () => undefined),
     },
     permission: { reply: vi.fn(async () => undefined) },
+    // Each agent's rules: OpenCode's catch-all allow, then what it forbids.
+    agent: {
+      get: vi.fn(async ({ agentID }: { agentID: string }) => ({
+        location: { directory: '/tmp' },
+        data: { id: agentID, name: agentID, mode: 'primary', hidden: false, request: {}, permissions: AGENT_RULES[agentID] ?? [] },
+      })),
+    },
     message: { list: vi.fn(async () => ({ data: [], cursor: {} })) },
     command: { list: vi.fn(async () => ({ location: { directory: '/tmp' }, data: [] })) },
     mcp: { list: vi.fn(async () => ({ location: { directory: '/tmp' }, data: [] })) },
@@ -757,11 +769,83 @@ describe('OpenCode modes, models and effort', () => {
     const ctx = recordingContext();
     const session = OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp' }, ctx);
     await ctx.waitFor((e) => e.type === 'ready');
+    // Before the first prompt, the build agent's own rules follow the catch-all.
+    expect(client.session.update).toHaveBeenLastCalledWith({
+      sessionID: 'ses_1',
+      permissions: [
+        { action: '*', resource: '*', effect: 'ask' },
+        { action: '*', resource: '*', effect: 'ask' },
+        { action: 'read', resource: '*.env', effect: 'ask' },
+      ],
+    });
     await session.setOption!('mode', 'plan');
     expect(client.session.switchAgent).toHaveBeenCalledWith({ sessionID: 'ses_1', agent: 'plan' });
-    expect(client.session.update).toHaveBeenCalledWith({ sessionID: 'ses_1', permissions: [{ action: '*', resource: '*', effect: 'ask' }] });
+    expect(client.agent.get).toHaveBeenLastCalledWith({ agentID: 'plan', location: { directory: '/tmp' } });
+    // The plan agent still may not edit, except its own plan files (which ask).
+    expect(client.session.update).toHaveBeenLastCalledWith({
+      sessionID: 'ses_1',
+      permissions: [
+        { action: '*', resource: '*', effect: 'ask' },
+        { action: '*', resource: '*', effect: 'ask' },
+        { action: 'edit', resource: '*', effect: 'deny' },
+        { action: 'edit', resource: '/plans/*', effect: 'ask' },
+      ],
+    });
     await session.setOption!('mode', 'default');
-    expect(client.session.update).toHaveBeenLastCalledWith({ sessionID: 'ses_1', permissions: [{ action: '*', resource: '*', effect: 'allow' }] });
+    expect(client.session.update).toHaveBeenLastCalledWith({
+      sessionID: 'ses_1',
+      permissions: [
+        { action: '*', resource: '*', effect: 'allow' },
+        { action: '*', resource: '*', effect: 'allow' },
+        { action: 'read', resource: '*.env', effect: 'allow' },
+      ],
+    });
+    await session.end();
+  });
+
+  it('ends on the last of two overlapping mode switches, never a mix of both', async () => {
+    // The plan agent's rules come back late: unqueued, its update would land
+    // after the second switch's and leave plan's rules on the build agent.
+    const client = clientWith([]);
+    const get = asMock(client.agent.get);
+    const plain = get.getMockImplementation()!;
+    get.mockImplementation(async (input: { agentID: string }) => {
+      if (input.agentID === 'plan') await new Promise((r) => setTimeout(r, 30));
+      return plain(input);
+    });
+    const ctx = recordingContext();
+    const session = OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp' }, ctx);
+    await ctx.waitFor((e) => e.type === 'ready');
+    await Promise.all([session.setOption!('mode', 'plan'), session.setOption!('mode', 'default')]);
+    expect(client.session.switchAgent).toHaveBeenLastCalledWith({ sessionID: 'ses_1', agent: 'build' });
+    expect(client.session.update).toHaveBeenLastCalledWith({
+      sessionID: 'ses_1',
+      permissions: [
+        { action: '*', resource: '*', effect: 'allow' },
+        { action: '*', resource: '*', effect: 'allow' },
+        { action: 'read', resource: '*.env', effect: 'allow' },
+      ],
+    });
+    await session.end();
+  });
+
+  it('says so when the session\'s rules cannot be set', async () => {
+    const client = clientWith([]);
+    asMock(client.session.update).mockRejectedValue(new Error('boom'));
+    const ctx = recordingContext();
+    const session = OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp' }, ctx);
+    await ctx.waitFor((e) => e.type === 'ready');
+    expect(ctx.logs.some((l) => l.includes("could not set the session's permissions"))).toBe(true);
+    await session.end();
+  });
+
+  it('keeps the mode\'s catch-all alone when the agent cannot be read', async () => {
+    const client = clientWith([], { agent: { get: vi.fn(async () => { throw new Error('AgentNotFoundError'); }) } });
+    const ctx = recordingContext();
+    const session = OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp', mode: 'plan' }, ctx);
+    await ctx.waitFor((e) => e.type === 'ready');
+    expect(client.session.update).toHaveBeenLastCalledWith({ sessionID: 'ses_1', permissions: [{ action: '*', resource: '*', effect: 'ask' }] });
+    expect(ctx.logs.some((l) => l.includes("could not read agent plan's permissions"))).toBe(true);
     await session.end();
   });
 
