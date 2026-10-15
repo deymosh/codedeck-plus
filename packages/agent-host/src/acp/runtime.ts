@@ -51,6 +51,11 @@ export interface AcpSessionHandler {
   update(notification: SessionNotification): void;
   /** The agent is asking the user to allow or refuse a tool call. */
   permission(request: RequestPermissionRequest): Promise<RequestPermissionResponse>;
+  /** An extension request the agent sent for this session — a method ACP
+   *  does not define, whose params carry the `sessionId` it routes by.
+   *  `undefined` leaves it to the default `-32601`, so a method the driver
+   *  does not claim is refused at once rather than left hanging. */
+  extRequest?(method: string, params: Record<string, unknown>): Promise<unknown> | undefined;
 }
 
 /** What the driver is told about a process, whichever sessions it serves. */
@@ -79,6 +84,9 @@ export interface AcpProcess<H> {
   readonly client: AcpClient;
   /** What the agent said it implements, from `initialize`. */
   readonly capabilities: NonNullable<InitializeResponse['agentCapabilities']>;
+  /** What the agent said about itself in `initialize` — its name and version
+   *  — when it said anything. */
+  readonly agentInfo: InitializeResponse['agentInfo'];
   readonly pid: number | undefined;
   /** What the driver's spawn spec attached to this process. */
   readonly handle: H;
@@ -158,6 +166,7 @@ class AgentProcess<H> implements AcpProcess<H> {
   /** What the agent answered `initialize` with; filled in by the runtime
    *  before the process is handed to a session. */
   capabilities: NonNullable<InitializeResponse['agentCapabilities']> = {};
+  agentInfo: InitializeResponse['agentInfo'] = null;
   readonly configVersion: number;
   private readonly handlers = new Map<string, AcpSessionHandler>();
   private readonly decoder = new StringDecoder('utf8');
@@ -187,6 +196,14 @@ class AgentProcess<H> implements AcpProcess<H> {
         return { outcome: { outcome: 'cancelled' } };
       }
       return handler.permission(request);
+    });
+    // A method ACP does not define is the driver's, routed to the session its
+    // params name. One no session claims stays unclaimed, and the client
+    // answers `-32601`.
+    this.client.onUnknownRequest((method, params) => {
+      const sessionId = (params as { sessionId?: unknown } | null)?.sessionId;
+      const handler = typeof sessionId === 'string' ? this.handlers.get(sessionId) : undefined;
+      return handler?.extRequest?.(method, params as Record<string, unknown>);
     });
 
     // The agent logs its own diagnostics on stderr (ACP owns stdout).
@@ -378,6 +395,7 @@ export abstract class AcpRuntime<H = undefined, E extends AcpProcessEvents = Acp
         { timeoutMs: INITIALIZE_TIMEOUT_MS },
       );
       process_.capabilities = initialized.agentCapabilities ?? {};
+      process_.agentInfo = initialized.agentInfo;
     } catch (error) {
       process_.client.finish({ error: 'the agent did not initialize' });
       await process_.close();

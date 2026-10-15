@@ -32,6 +32,11 @@ export type ToolCallMemory = Map<string, ToolCallFacts>;
 
 /** How one agent's updates read beyond the standard ACP shape. */
 export interface AcpUpdateTranslation {
+  /** The name of one tool call. ACP carries it as the call's `name` when the
+   *  agent has one, and the agent puts it in `title` otherwise; an agent that
+   *  keeps its real tool name in `_meta` (Qwen Code) supplies it here, so its
+   *  table is keyed by the name the tool actually has. */
+  toolName?(update: Extract<SessionUpdate, { sessionUpdate: 'tool_call' }>): string;
   /** The agent-neutral read of one tool call: its kind, the title the phone
    *  shows, and the call's input when it says more than the title. */
   readToolCall(name: string, input: Record<string, unknown>): ToolCallRead;
@@ -78,7 +83,7 @@ function toolCallEntries(
   translation: AcpUpdateTranslation,
   ts: string,
 ): OutputEntry[] {
-  const name = toolNameOf(update);
+  const name = toolNameOf(update, translation);
   const input = record(update.rawInput);
   calls.set(update.toolCallId, { name, input });
   if (translation.hidden?.(name)) return [];
@@ -91,7 +96,7 @@ function toolCallEntries(
       callId: update.toolCallId,
       toolName: name,
       kind: call.kind,
-      title: call.title,
+      title: titleOf(call, name, update),
       ...(locations.length > 0 ? { locations } : {}),
       ...(call.input !== undefined ? { input: call.input } : {}),
       timestamp: ts,
@@ -102,7 +107,10 @@ function toolCallEntries(
 
 /** One finished tool call: its result text, and whatever the driver adds for
  *  a completed one. A non-terminal update carries nothing new to show — the
- *  call's row is already there. */
+ *  call's row is already there — but it may refine what the call's own start
+ *  update said (an agent that opens a call with no arguments and fills them
+ *  in as it starts running, as Qwen Code does), so its arguments are kept for
+ *  the result's diff. */
 function toolResultEntries(
   update: Extract<SessionUpdate, { sessionUpdate: 'tool_call_update' }>,
   calls: ToolCallMemory,
@@ -110,7 +118,12 @@ function toolResultEntries(
   ts: string,
 ): OutputEntry[] {
   const status = update.status ?? undefined;
-  if (status !== 'completed' && status !== 'failed') return [];
+  if (status !== 'completed' && status !== 'failed') {
+    const facts = calls.get(update.toolCallId);
+    const input = record(update.rawInput);
+    if (facts !== undefined && Object.keys(input).length > 0) facts.input = input;
+    return [];
+  }
   const facts = calls.get(update.toolCallId);
   calls.delete(update.toolCallId);
   if (facts !== undefined && translation.hidden?.(facts.name)) return [];
@@ -133,9 +146,25 @@ function toolResultEntries(
 }
 
 /** The tool's own name: ACP carries it as `name` when the agent has one, and
- *  the agent puts it in `title` otherwise. */
-function toolNameOf(update: Extract<SessionUpdate, { sessionUpdate: 'tool_call' }>): string {
-  return update.name ?? update.title;
+ *  the agent puts it in `title` otherwise. A driver that keeps the real name
+ *  elsewhere (Qwen Code's `_meta.toolName`) answers with it. */
+function toolNameOf(
+  update: Extract<SessionUpdate, { sessionUpdate: 'tool_call' }>,
+  translation: AcpUpdateTranslation,
+): string {
+  return translation.toolName?.(update) ?? update.name ?? update.title;
+}
+
+/** The row's title. The agent's own title is used when the call's arguments
+ *  gave none of their own — it is what the agent chose to show, and reads
+ *  better than the bare tool name the read falls back to (Qwen Code's first
+ *  `tool_call` carries no arguments and the title `Shell`). */
+function titleOf(
+  call: ToolCallRead,
+  name: string,
+  update: Extract<SessionUpdate, { sessionUpdate: 'tool_call' }>,
+): string {
+  return call.title === name && update.title !== name && update.title !== '' ? update.title : call.title;
 }
 
 /** Everything a result's content blocks say, one line each. */

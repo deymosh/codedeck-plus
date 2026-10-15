@@ -82,6 +82,7 @@ export class AcpClient {
   private readonly pending = new Map<WireId, Pending>();
   private readonly notifications = new Map<string, (params: never) => void>();
   private readonly requests = new Map<string, (params: never) => Promise<unknown>>();
+  private unknownRequest: ((method: string, params: unknown) => Promise<unknown> | undefined) | undefined;
   private nextId = 1;
   private buffer = '';
   private ending: AcpClosed | undefined;
@@ -156,6 +157,17 @@ export class AcpClient {
   /** Answer one kind of request the agent sends. */
   onRequest<M extends keyof ClientRequestParamsByMethod>(method: M, handler: RequestHandler<M>): void {
     this.requests.set(method, handler as (params: never) => Promise<unknown>);
+  }
+
+  /**
+   * Answer a request whose method no handler was registered for — an agent's
+   * own extension method (Qwen Code's `craft/drainMidTurnQueue`), which ACP
+   * does not define and this client cannot type. Returning `undefined` leaves
+   * it to the default `-32601`, so a method nobody knows is refused at once
+   * rather than left hanging.
+   */
+  onUnknownRequest(handler: (method: string, params: unknown) => Promise<unknown> | undefined): void {
+    this.unknownRequest = handler;
   }
 
   /** Stop reading and end every pending request. Idempotent. */
@@ -250,6 +262,22 @@ export class AcpClient {
   private async answer(id: WireId, method: string, params: unknown): Promise<void> {
     const handler = this.requests.get(method);
     if (!handler) {
+      // An agent's own extension method: the driver's fallback gets it, and
+      // one it does not claim is refused at once.
+      try {
+        const result = await this.unknownRequest?.(method, params);
+        if (result !== undefined) {
+          this.reply({ jsonrpc: '2.0', id, result });
+          return;
+        }
+      } catch (error) {
+        this.reply({
+          jsonrpc: '2.0',
+          id,
+          error: { code: -32603, message: error instanceof Error ? error.message : String(error) },
+        });
+        return;
+      }
       this.reply({ jsonrpc: '2.0', id, error: { code: -32601, message: `Method not found: ${method}` } });
       return;
     }
