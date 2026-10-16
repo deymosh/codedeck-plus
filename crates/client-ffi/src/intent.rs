@@ -502,6 +502,63 @@ pub enum UniffiIntent {
     DisableBackup {
         delete: bool,
     },
+
+    // --- terminals (see `docs/TERMINAL.md`) ---
+    /// Open a real shell on `machine` — one whose heartbeat advertises the
+    /// `terminal` capability. `session` starts it in that session's
+    /// directory; the phone never names a path. The answer lands in
+    /// `UniffiUiView.terminals.attached` (`terminal-opened`, or a refusal).
+    OpenTerminal {
+        machine: String,
+        session: Option<String>,
+        cols: u16,
+        rows: u16,
+    },
+    /// Put a terminal the machine's list names on screen, read-only,
+    /// replaying what the bridge still holds. Output arrives on
+    /// `CoreListener.on_event(CoreEvent.TerminalOutput)`.
+    AttachTerminal {
+        machine: String,
+        term: String,
+    },
+    /// Leave the terminal on screen: the bridge stops sending its output. The
+    /// shell keeps running.
+    DetachTerminal {
+        machine: String,
+    },
+    /// Type into the terminal on screen. `alternate_screen` is what the
+    /// emulator reports: on the normal screen printable bytes wait for a key
+    /// a program acts on (or a pause), on the alternate screen they go after
+    /// a short window. Pacing, sequencing and retries are the core's.
+    TerminalInput {
+        machine: String,
+        term: String,
+        bytes: Vec<u8>,
+        alternate_screen: bool,
+    },
+    /// Paste: the bytes go as one event.
+    TerminalPaste {
+        machine: String,
+        term: String,
+        bytes: Vec<u8>,
+    },
+    /// The emulator's window changed; only the writer's size counts.
+    ResizeTerminal {
+        machine: String,
+        term: String,
+        cols: u16,
+        rows: u16,
+    },
+    /// Become the terminal's writer, so its input is this device's.
+    TakeOverTerminal {
+        machine: String,
+        term: String,
+    },
+    /// Hang up the shell.
+    CloseTerminal {
+        machine: String,
+        term: String,
+    },
 }
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -695,6 +752,22 @@ impl TryFrom<UniffiIntent> for Intent {
             UniffiIntent::SetBackupRelay { url } => Intent::SetBackupRelay(url),
             UniffiIntent::BackupNow => Intent::BackupNow,
             UniffiIntent::DisableBackup { delete } => Intent::DisableBackup { delete },
+            UniffiIntent::OpenTerminal { machine, session, cols, rows } => {
+                Intent::OpenTerminal { machine, session, cols, rows }
+            }
+            UniffiIntent::AttachTerminal { machine, term } => Intent::AttachTerminal { machine, term },
+            UniffiIntent::DetachTerminal { machine } => Intent::DetachTerminal { machine },
+            UniffiIntent::TerminalInput { machine, term, bytes, alternate_screen } => {
+                Intent::TerminalInput { machine, term, bytes, alternate_screen }
+            }
+            UniffiIntent::TerminalPaste { machine, term, bytes } => {
+                Intent::TerminalPaste { machine, term, bytes }
+            }
+            UniffiIntent::ResizeTerminal { machine, term, cols, rows } => {
+                Intent::ResizeTerminal { machine, term, cols, rows }
+            }
+            UniffiIntent::TakeOverTerminal { machine, term } => Intent::TakeOverTerminal { machine, term },
+            UniffiIntent::CloseTerminal { machine, term } => Intent::CloseTerminal { machine, term },
         })
     }
 }
@@ -924,5 +997,82 @@ mod tests {
         let intent = UniffiIntent::DismissPendingSession { pending_id: "p1".into() };
         let mapped: Intent = intent.try_into().unwrap();
         assert_eq!(mapped, Intent::DismissPendingSession { pending_id: "p1".into() });
+    }
+
+    #[test]
+    fn the_terminal_intents_map_field_for_field() {
+        let mapped: Intent = UniffiIntent::OpenTerminal {
+            machine: "m".into(),
+            session: Some("s1".into()),
+            cols: 100,
+            rows: 40,
+        }
+        .try_into()
+        .unwrap();
+        assert_eq!(
+            mapped,
+            Intent::OpenTerminal { machine: "m".into(), session: Some("s1".into()), cols: 100, rows: 40 }
+        );
+
+        let mapped: Intent = UniffiIntent::AttachTerminal { machine: "m".into(), term: "t1".into() }
+            .try_into()
+            .unwrap();
+        assert_eq!(mapped, Intent::AttachTerminal { machine: "m".into(), term: "t1".into() });
+
+        let mapped: Intent = UniffiIntent::DetachTerminal { machine: "m".into() }.try_into().unwrap();
+        assert_eq!(mapped, Intent::DetachTerminal { machine: "m".into() });
+
+        let mapped: Intent = UniffiIntent::TerminalInput {
+            machine: "m".into(),
+            term: "t1".into(),
+            bytes: b"\x1b[A".to_vec(),
+            alternate_screen: true,
+        }
+        .try_into()
+        .unwrap();
+        assert_eq!(
+            mapped,
+            Intent::TerminalInput {
+                machine: "m".into(),
+                term: "t1".into(),
+                bytes: b"\x1b[A".to_vec(),
+                alternate_screen: true,
+            }
+        );
+
+        let mapped: Intent = UniffiIntent::TerminalPaste {
+            machine: "m".into(),
+            term: "t1".into(),
+            bytes: b"pasted".to_vec(),
+        }
+        .try_into()
+        .unwrap();
+        assert_eq!(
+            mapped,
+            Intent::TerminalPaste { machine: "m".into(), term: "t1".into(), bytes: b"pasted".to_vec() }
+        );
+
+        let mapped: Intent = UniffiIntent::ResizeTerminal {
+            machine: "m".into(),
+            term: "t1".into(),
+            cols: 132,
+            rows: 43,
+        }
+        .try_into()
+        .unwrap();
+        assert_eq!(
+            mapped,
+            Intent::ResizeTerminal { machine: "m".into(), term: "t1".into(), cols: 132, rows: 43 }
+        );
+
+        let mapped: Intent = UniffiIntent::TakeOverTerminal { machine: "m".into(), term: "t1".into() }
+            .try_into()
+            .unwrap();
+        assert_eq!(mapped, Intent::TakeOverTerminal { machine: "m".into(), term: "t1".into() });
+
+        let mapped: Intent = UniffiIntent::CloseTerminal { machine: "m".into(), term: "t1".into() }
+            .try_into()
+            .unwrap();
+        assert_eq!(mapped, Intent::CloseTerminal { machine: "m".into(), term: "t1".into() });
     }
 }

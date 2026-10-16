@@ -904,6 +904,29 @@ object NoHandle
 /**
  * @suppress
  */
+public object FfiConverterULong: FfiConverter<ULong, Long> {
+    override fun lift(value: Long): ULong {
+        return value.toULong()
+    }
+
+    override fun read(buf: ByteBuffer): ULong {
+        return lift(buf.getLong())
+    }
+
+    override fun lower(value: ULong): Long {
+        return value.toLong()
+    }
+
+    override fun allocationSize(value: ULong) = 8UL
+
+    override fun write(value: ULong, buf: ByteBuffer) {
+        buf.putLong(value.toLong())
+    }
+}
+
+/**
+ * @suppress
+ */
 public object FfiConverterBoolean: FfiConverter<Boolean, Byte> {
     override fun lift(value: Byte): Boolean {
         return value.toInt() != 0
@@ -978,6 +1001,25 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
         val byteBuf = toUtf8(value)
         buf.putInt(byteBuf.limit())
         buf.put(byteBuf)
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterByteArray: FfiConverterRustBuffer<ByteArray> {
+    override fun read(buf: ByteBuffer): ByteArray {
+        val len = buf.getInt()
+        val byteArr = ByteArray(len)
+        buf.get(byteArr)
+        return byteArr
+    }
+    override fun allocationSize(value: ByteArray): ULong {
+        return 4UL + value.size.toULong()
+    }
+    override fun write(value: ByteArray, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        buf.put(value)
     }
 }
 
@@ -1181,6 +1223,25 @@ sealed class CoreEvent {
     }
     
     /**
+     * Output a terminal on screen produced: `bytes` (already base64-decoded)
+     * start at `offset`, a byte offset into everything that terminal has
+     * written. On its own event, never a view: a shell can produce megabytes
+     * a second, and a view snapshot per frame would slow every other slice
+     * down. The consumer draws the bytes and advances its own cursor.
+     */
+    data class TerminalOutput(
+        val `machine`: kotlin.String, 
+        val `term`: kotlin.String, 
+        val `offset`: kotlin.ULong, 
+        val `bytes`: kotlin.ByteArray) : CoreEvent()
+        
+    {
+        
+
+        companion object
+    }
+    
+    /**
      * The correlated response to `Intent::CreateFolder` — matched by
      * `request_id` off this stream (no store, no view: nothing to persist or
      * re-fetch for a one-shot RPC-style exchange).
@@ -1245,13 +1306,19 @@ public object FfiConverterTypeCoreEvent : FfiConverterRustBuffer<CoreEvent>{
                 FfiConverterString.read(buf),
                 FfiConverterOptionalString.read(buf),
                 )
-            7 -> CoreEvent.FolderAck(
+            7 -> CoreEvent.TerminalOutput(
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                FfiConverterULong.read(buf),
+                FfiConverterByteArray.read(buf),
+                )
+            8 -> CoreEvent.FolderAck(
                 FfiConverterString.read(buf),
                 FfiConverterBoolean.read(buf),
                 FfiConverterOptionalString.read(buf),
                 FfiConverterOptionalString.read(buf),
                 )
-            8 -> CoreEvent.Ping
+            9 -> CoreEvent.Ping
             else -> throw RuntimeException("invalid enum value, something is very wrong!!")
         }
     }
@@ -1302,6 +1369,16 @@ public object FfiConverterTypeCoreEvent : FfiConverterRustBuffer<CoreEvent>{
                 + FfiConverterString.allocationSize(value.`sessionId`)
                 + FfiConverterString.allocationSize(value.`key`)
                 + FfiConverterOptionalString.allocationSize(value.`text`)
+            )
+        }
+        is CoreEvent.TerminalOutput -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`machine`)
+                + FfiConverterString.allocationSize(value.`term`)
+                + FfiConverterULong.allocationSize(value.`offset`)
+                + FfiConverterByteArray.allocationSize(value.`bytes`)
             )
         }
         is CoreEvent.FolderAck -> {
@@ -1359,8 +1436,16 @@ public object FfiConverterTypeCoreEvent : FfiConverterRustBuffer<CoreEvent>{
                 FfiConverterOptionalString.write(value.`text`, buf)
                 Unit
             }
-            is CoreEvent.FolderAck -> {
+            is CoreEvent.TerminalOutput -> {
                 buf.putInt(7)
+                FfiConverterString.write(value.`machine`, buf)
+                FfiConverterString.write(value.`term`, buf)
+                FfiConverterULong.write(value.`offset`, buf)
+                FfiConverterByteArray.write(value.`bytes`, buf)
+                Unit
+            }
+            is CoreEvent.FolderAck -> {
+                buf.putInt(8)
                 FfiConverterString.write(value.`requestId`, buf)
                 FfiConverterBoolean.write(value.`success`, buf)
                 FfiConverterOptionalString.write(value.`path`, buf)
@@ -1368,7 +1453,7 @@ public object FfiConverterTypeCoreEvent : FfiConverterRustBuffer<CoreEvent>{
                 Unit
             }
             is CoreEvent.Ping -> {
-                buf.putInt(8)
+                buf.putInt(9)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }

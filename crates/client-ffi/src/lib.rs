@@ -52,9 +52,10 @@ pub use signer::{
 };
 use observer::UniffiObserver;
 pub use views::{
-    UniffiMachinesView, UniffiOutboxView, UniffiPairingCandidateView, UniffiPairingView,
-    UniffiPendingSessionsView, UniffiQuickPromptsView, UniffiSettingsView, UniffiTranscriptDelta,
-    UniffiUiView,
+    UniffiAttachedTerminal, UniffiMachinesView, UniffiOutboxView, UniffiPairingCandidateView,
+    UniffiPairingView, UniffiPendingSessionsView, UniffiQuickPromptsView, UniffiSettingsView,
+    UniffiTerminalEnded, UniffiTerminalInfo, UniffiTerminalRefusal, UniffiTerminalsView,
+    UniffiTranscriptDelta, UniffiUiView,
 };
 use views::{
     build_uniffi_machines_view, build_uniffi_outbox_view, build_uniffi_pairing_view,
