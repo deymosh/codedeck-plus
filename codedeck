@@ -140,6 +140,9 @@ do not take turns (the caches stay shared); `live` runs in it too:
   dev --sync-only          Sync the tree and install dependencies, then stop
   dev --no-sync            Skip the sync (the tree has not changed)
   dev --reset              Recreate the container from scratch first
+  dev --timeout SECONDS    Stop <cmd> after this long (default 1800, or
+                           CODEDECK_TIMEOUT; 0 = never). Only a command with
+                           no terminal is stopped: a shell is someone typing
   clean [--yes]            Remove the containers this script keeps (the dev
                            and Android ones, and any a killed run left), after
                            asking. Volumes are kept — the caches live there
@@ -600,11 +603,39 @@ ensure_local_deps() {
 }
 
 # One command in the dev container, with the tree in step first.
+# How long a `dev` command with no terminal may run, in seconds (0: no
+# limit). Such a command is a script or an agent, and nothing would ever stop
+# one that hangs — a watch left open, a session waiting on an answer that
+# never comes; closing the `docker exec` client does not stop it either, so
+# the limit is applied inside, where the process lives.
+DEV_TIMEOUT_DEFAULT=1800
+
+# `timeout` around a command, unless the limit is 0. `--kill-after` follows
+# up a command that ignores the TERM.
+with_timeout() {
+  local limit="$1"; shift
+  if [ "$limit" = 0 ]; then "$@"; else timeout --kill-after=15s "${limit}s" "$@"; fi
+}
+
+# What a command stopped by `with_timeout` means, said once, after it.
+report_timeout() {
+  local code="$1" limit="$2"
+  if [ "$code" = 124 ] || [ "$code" = 137 ]; then
+    [ "$limit" != 0 ] && echo "==> Stopped after ${limit}s (dev --timeout SECONDS, or CODEDECK_TIMEOUT=0 for no limit)" >&2
+  fi
+  return "$code"
+}
+
 cmd_dev() {
-  local reset=0 sync=1 only_sync=0
+  local reset=0 sync=1 only_sync=0 limit="${CODEDECK_TIMEOUT:-$DEV_TIMEOUT_DEFAULT}"
   while [ $# -gt 0 ]; do
     case "$1" in
       --reset) reset=1; shift ;;
+      --timeout)
+        case "${2:-}" in
+          ''|*[!0-9]*) echo "dev --timeout needs a number of seconds" >&2; exit 2 ;;
+        esac
+        limit="$2"; shift 2 ;;
       --no-sync) sync=0; shift ;;
       --sync-only) only_sync=1; shift ;;
       --) shift; break ;;
@@ -612,6 +643,9 @@ cmd_dev() {
       *) break ;;
     esac
   done
+  case "$limit" in
+    ''|*[!0-9]*) echo "CODEDECK_TIMEOUT must be a number of seconds (0 = no limit), not '$limit'" >&2; exit 2 ;;
+  esac
 
   # What the command is, and where it runs — relative to the repo root, which
   # both engines then translate. `dev vitest …` is the loop's most-run
@@ -646,7 +680,11 @@ cmd_dev() {
       [ "$only_sync" = 1 ] && return 0
       cd "${workdir:-.}"
       if [ $# -eq 0 ]; then exec "${SHELL:-bash}"; fi
-      exec "$@"
+      if [ -t 0 ] && [ -t 1 ]; then exec "$@"; fi
+      local code=0
+      with_timeout "$limit" "$@" || code=$?
+      report_timeout "$code" "$limit"
+      return
       ;;
   esac
 
@@ -666,8 +704,14 @@ cmd_dev() {
   if [ $# -eq 0 ]; then
     MSYS_NO_PATHCONV=1 exec docker exec -i ${tty[@]+"${tty[@]}"} -w "$DEV_ROOT" "$DEV_CONTAINER" sh
   fi
-  MSYS_NO_PATHCONV=1 exec docker exec -i ${tty[@]+"${tty[@]}"} \
-    -w "$DEV_ROOT${workdir:+/$workdir}" "$DEV_CONTAINER" "$@"
+  if [ ${#tty[@]} -gt 0 ] || [ "$limit" = 0 ]; then
+    MSYS_NO_PATHCONV=1 exec docker exec -i ${tty[@]+"${tty[@]}"} \
+      -w "$DEV_ROOT${workdir:+/$workdir}" "$DEV_CONTAINER" "$@"
+  fi
+  local code=0
+  MSYS_NO_PATHCONV=1 docker exec -i -w "$DEV_ROOT${workdir:+/$workdir}" "$DEV_CONTAINER" \
+    timeout --kill-after=15s "${limit}s" "$@" || code=$?
+  report_timeout "$code" "$limit"
 }
 
 # --- The Android container: the phone's tests, lint and snapshots. ---
