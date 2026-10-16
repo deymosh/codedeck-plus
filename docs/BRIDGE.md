@@ -234,7 +234,8 @@ accepting it. Plain `http://` on the port redirects to
 A browser signs in with a paired phone: the page shows a code and a QR, and
 on the phone the machine's page, "Sign in a browser", scans or types it. The
 browser then stays signed in for 30 days (a cookie only the bridge can read,
-sent only over HTTPS) or until it signs out. Until then it sees only the
+sent only over HTTPS), until it signs out, or until the bridge restarts: the
+bridge keeps signed-in browsers in memory only. Until then it sees only the
 sign-in page. The page shows what the heartbeat carries — the bridge, the
 direct link, the agents and their credential status, the sessions — and never
 a secret.
