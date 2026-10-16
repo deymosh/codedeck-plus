@@ -70,6 +70,7 @@ fn spawn_dispatch_observe_and_shutdown_all_work_over_the_real_ffi_surface() {
         db_path,
         None,
         false,
+        String::new(),
     )
     .expect("core spawns");
 
@@ -126,6 +127,7 @@ fn dropping_an_in_flight_dispatch_future_does_not_lose_the_intent() {
             db_path,
             None,
             false,
+            String::new(),
         )
         .expect("core spawns"),
     );

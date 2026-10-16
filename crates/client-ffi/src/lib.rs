@@ -287,6 +287,12 @@ impl Core {
         // before Settings has ever been touched.
         proxy: Option<String>,
         tor: bool,
+        // This phone's name for the bridge (`Build.MODEL`, prefixed with the
+        // manufacturer when it needs one) — sent on every session-key grant,
+        // shown in the bridge's terminal allowlist and in a refusal. Empty
+        // becomes no name; the core sanitizes and caps it (see
+        // `CoreConfig::device_label`).
+        device_label: String,
     ) -> Result<Arc<Self>, CoreInitError> {
         android_log::install();
         log::info!("Core::new: tor={tor} proxy={proxy:?} db_path={db_path}");
@@ -311,7 +317,7 @@ impl Core {
                     let clock: Rc<dyn Clock> = Rc::new(SystemClock);
                     let entropy: Rc<dyn Entropy> = Rc::new(TimeEntropy);
                     let signer = Rc::new(signer::SignerAdapter::new(identity, identity_pubkey));
-                    let config = CoreConfig::new(signer, proxy, tor);
+                    let config = CoreConfig::new(signer, proxy, tor, Some(device_label));
 
                     let conn = match open_native_db(&db_path) {
                         Ok(conn) => Rc::new(RefCell::new(conn)),
@@ -554,6 +560,7 @@ mod tests {
             db_path,
             None,
             false,
+            String::new(),
         )
         .expect("core spawns");
         let expected = protocol::crypto::keypair_from_secret_hex(SEC_PHONE).unwrap();
@@ -581,6 +588,7 @@ mod tests {
                 db_path,
                 None,
                 false,
+                String::new(),
             )
         };
         let core = spawn(db_path.clone()).expect("core spawns");
@@ -609,6 +617,7 @@ mod tests {
             db_path.clone(),
             None,
             false,
+            String::new(),
         )
         .expect("core spawns");
         assert!(!persisted_tor_proxy_enabled(db_path.clone()));

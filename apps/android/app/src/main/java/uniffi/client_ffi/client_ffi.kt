@@ -967,7 +967,7 @@ internal object UniffiLib {
     ): Long
     external fun uniffi_client_ffi_fn_free_core(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    external fun uniffi_client_ffi_fn_constructor_core_new(`identity`: Long,`sessionKeys`: RustBuffer.ByValue,`listener`: Long,`notifier`: Long,`http`: RustBuffer.ByValue,`dbPath`: RustBuffer.ByValue,`proxy`: RustBuffer.ByValue,`tor`: Byte,uniffi_out_err: UniffiRustCallStatus, 
+    external fun uniffi_client_ffi_fn_constructor_core_new(`identity`: Long,`sessionKeys`: RustBuffer.ByValue,`listener`: Long,`notifier`: Long,`http`: RustBuffer.ByValue,`dbPath`: RustBuffer.ByValue,`proxy`: RustBuffer.ByValue,`tor`: Byte,`deviceLabel`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Long
     external fun uniffi_client_ffi_fn_method_core_connection_view(`ptr`: Long,
     ): Long
@@ -1333,7 +1333,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_client_ffi_checksum_method_uniffisessionkeystore_save() and 0xFFFF) != 1939) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_client_ffi_checksum_constructor_core_new() and 0xFFFF) != 39996) {
+    if ((lib.uniffi_client_ffi_checksum_constructor_core_new() and 0xFFFF) != 27654) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1997,7 +1997,7 @@ open class Core: Disposable, AutoCloseable, CoreInterface
      * Hydration reads the whole local database, so this can take seconds on
      * a slow device: never call it on a UI or service main thread.
      */
-    constructor(`identity`: UniffiIdentitySigner, `sessionKeys`: UniffiSessionKeyStore?, `listener`: CoreListener, `notifier`: UniffiNotifier, `http`: UniffiHttpFetch?, `dbPath`: kotlin.String, `proxy`: kotlin.String?, `tor`: kotlin.Boolean) :
+    constructor(`identity`: UniffiIdentitySigner, `sessionKeys`: UniffiSessionKeyStore?, `listener`: CoreListener, `notifier`: UniffiNotifier, `http`: UniffiHttpFetch?, `dbPath`: kotlin.String, `proxy`: kotlin.String?, `tor`: kotlin.Boolean, `deviceLabel`: kotlin.String) :
         this(UniffiWithHandle, 
     uniffiRustCallWithError(CoreInitException) { _status ->
     UniffiLib.uniffi_client_ffi_fn_constructor_core_new(
@@ -2010,7 +2010,8 @@ open class Core: Disposable, AutoCloseable, CoreInterface
         FfiConverterOptionalTypeUniffiHttpFetch.lower(`http`),
         FfiConverterString.lower(`dbPath`),
         FfiConverterOptionalString.lower(`proxy`),
-        FfiConverterBoolean.lower(`tor`),_status)
+        FfiConverterBoolean.lower(`tor`),
+        FfiConverterString.lower(`deviceLabel`),_status)
 }
     )
 
