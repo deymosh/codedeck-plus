@@ -119,7 +119,8 @@ internal fun shortKey(key: String): String = if (key.length <= 20) key else "${k
  * plugins, MCP servers, saved permissions) or installs one it lacks — its
  * terminals ([onOpenTerminal]: a new one, or one of [terminals]), then
  * what is the machine's own: the relays it is reached over, its direct link,
- * the bridge's credentials, and forgetting it. Pure — the caller supplies
+ * its web page and signing a browser in to it ([onOpenWebSignIn]), the
+ * bridge's credentials, and forgetting it. Pure — the caller supplies
  * the machine and a dispatcher — so it renders the same in a snapshot.
  */
 @Composable
@@ -133,6 +134,7 @@ fun MachineSettingsContent(
     onOpenAgent: (agent: String) -> Unit,
     terminals: List<UniffiTerminalInfo>,
     onOpenTerminal: (term: String?) -> Unit,
+    onOpenWebSignIn: () -> Unit,
 ) {
     var confirmRemove by remember(machine.pubkeyHex) { mutableStateOf(false) }
 
@@ -148,6 +150,7 @@ fun MachineSettingsContent(
         ) {
             GroupBody { MachineDirectLink(machine, dispatch) }
         }
+        MachineWebPageGroup(machine, onOpenWebSignIn)
         if (machine.credentials.isNotEmpty()) {
             Group(title = "Credentials") {
                 GroupBody { MachineCredentials(machine, credentialsStatus, dispatch, scope = CredentialScope.Bridge) }
@@ -329,6 +332,7 @@ fun MachineSettingsScreen(
     onBack: () -> Unit,
     onOpenAgent: (agent: String) -> Unit,
     onOpenTerminal: (term: String?) -> Unit,
+    onOpenWebSignIn: () -> Unit,
 ) {
     val connection by core.connection.collectAsState()
     val ui by core.ui.collectAsState()
@@ -344,5 +348,6 @@ fun MachineSettingsScreen(
         onOpenAgent = onOpenAgent,
         terminals = ui?.terminals?.byMachine?.get(pubkey).orEmpty(),
         onOpenTerminal = onOpenTerminal,
+        onOpenWebSignIn = onOpenWebSignIn,
     )
 }

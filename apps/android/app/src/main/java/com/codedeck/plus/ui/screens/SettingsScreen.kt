@@ -87,6 +87,8 @@ private const val UI_SCALE_DEFAULT = 1f
 internal sealed interface SettingsPage {
     data object Hub : SettingsPage
     data class Machine(val pubkey: String) : SettingsPage
+    /** Signing a browser in to a machine's web page, opened from the machine's page. */
+    data class WebSignIn(val pubkey: String) : SettingsPage
     /** One agent's page on a machine, opened from the machine's page. */
     data class Agent(val pubkey: String, val agent: String) : SettingsPage
     /** One agent's plugins on a machine, opened from the agent's page. */
@@ -110,6 +112,7 @@ internal sealed interface SettingsPage {
     fun save(): String = when (this) {
         Hub -> "hub"
         is Machine -> "machine:$pubkey"
+        is WebSignIn -> "web-sign-in:$pubkey"
         is Agent -> "agent:$pubkey:$agent"
         is Plugins -> "plugins:$pubkey:$agent"
         is Mcp -> "mcp:$pubkey:$agent"
@@ -129,7 +132,7 @@ internal sealed interface SettingsPage {
     val depth: Int
         get() = when (this) {
             Hub -> 0
-            is Agent, is Terminal -> 2
+            is Agent, is Terminal, is WebSignIn -> 2
             is Plugins, is Mcp, is PermissionRules, is Providers -> 3
             else -> 1
         }
@@ -137,6 +140,7 @@ internal sealed interface SettingsPage {
     companion object {
         fun restore(saved: String): SettingsPage = when {
             saved.startsWith("machine:") -> Machine(saved.removePrefix("machine:"))
+            saved.startsWith("web-sign-in:") -> WebSignIn(saved.removePrefix("web-sign-in:"))
             saved.startsWith("agent:") -> saved.split(':').let { Agent(it[1], it.drop(2).joinToString(":")) }
             saved.startsWith("plugins:") -> saved.split(':').let { Plugins(it[1], it.drop(2).joinToString(":")) }
             saved.startsWith("mcp:") -> saved.split(':').let { Mcp(it[1], it.drop(2).joinToString(":")) }
@@ -200,12 +204,13 @@ fun SettingsScreen(
         pageKey = next.save()
     }
     val toHub = { open(SettingsPage.Hub) }
-    // An agent's page goes back to its machine's, and a page of the agent's
+    // An agent's page and a web sign-in go back to their machine's, and a page of the agent's
     // (its providers, plugins, MCP servers, permissions) to the agent's,
     // where each was left; every other page to the hub.
     val parent: SettingsPage? = when (page) {
         is SettingsPage.Agent -> SettingsPage.Machine(page.pubkey)
         is SettingsPage.Terminal -> SettingsPage.Machine(page.pubkey)
+        is SettingsPage.WebSignIn -> SettingsPage.Machine(page.pubkey)
         is SettingsPage.Plugins -> SettingsPage.Agent(page.pubkey, page.agent)
         is SettingsPage.Mcp -> SettingsPage.Agent(page.pubkey, page.agent)
         is SettingsPage.PermissionRules -> SettingsPage.Agent(page.pubkey, page.agent)
@@ -257,10 +262,12 @@ fun SettingsScreen(
                         onOpenAgent = { agent -> open(SettingsPage.Agent(machine.pubkeyHex, agent)) },
                         terminals = ui?.terminals?.byMachine?.get(machine.pubkeyHex).orEmpty(),
                         onOpenTerminal = { term -> open(SettingsPage.Terminal(machine.pubkeyHex, term)) },
+                        onOpenWebSignIn = { open(SettingsPage.WebSignIn(machine.pubkeyHex)) },
                     )
                 }
             }
             is SettingsPage.Terminal -> TerminalScreen(core, page.pubkey, page.term, session = null, onBack = back)
+            is SettingsPage.WebSignIn -> WebSignInScreen(core, page.pubkey, onBack = back)
             is SettingsPage.Agent -> AgentSettingsScreen(
                 core,
                 page.pubkey,
