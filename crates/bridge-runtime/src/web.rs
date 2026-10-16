@@ -197,6 +197,10 @@ pub struct Web {
     devices: RefCell<Vec<DeviceView>>,
     /// When `lastSeenMs` was last written to disk.
     last_persist_ms: Cell<u64>,
+    /// Where the browsers file is written, off the bridge's thread.
+    writer: Writer,
+    /// Page requests being served now ([`MAX_PAGE_REQUESTS`]).
+    serving: Cell<usize>,
 }
 
 impl Web {
@@ -235,6 +239,8 @@ impl Web {
             config_fields: RefCell::new(config.fields),
             devices: RefCell::default(),
             last_persist_ms: Cell::new(0),
+            writer: Writer::spawn(),
+            serving: Cell::new(0),
         })
     }
 
@@ -417,9 +423,7 @@ impl Web {
             .collect();
         sessions.sort_by(|a, b| a.since_ms.cmp(&b.since_ms).then_with(|| a.key.cmp(&b.key)));
         let Ok(json) = serde_json::to_vec_pretty(&sessions) else { return };
-        if let Err(e) = crate::state::write_private(&self.sessions_path, &json) {
-            log::warn!("[Web] cannot write {}: {e}", self.sessions_path.display());
-        }
+        self.writer.write(self.sessions_path.clone(), json);
     }
 
     /// The page stopped showing a pending browser's code: the engine must not
@@ -522,17 +526,9 @@ impl Web {
         if changes.is_empty() {
             return bad_request("", "nothing to change");
         }
-        match crate::config::write_web_settings(&self.config_file, &changes) {
-            Ok(()) => {
-                let keys: Vec<&str> = changes.iter().map(|(key, _)| key.as_str()).collect();
-                log::info!("[Web] config changed by {}: keys {}", &by[..8.min(by.len())], keys.join(", "));
-                Response::json(200, serde_json::json!({ "ok": true, "restartNeeded": true }).to_string())
-            }
-            Err(err) => {
-                log::warn!("[Web] config write failed: {err}");
-                Response::error(500)
-            }
-        }
+        let mut response = Response::json(200, serde_json::json!({ "ok": true, "restartNeeded": true }).to_string());
+        response.config_write = Some(ConfigWrite { path: self.config_file.clone(), changes, by: by[..8.min(by.len())].to_string() });
+        response
     }
 }
 
@@ -589,10 +585,66 @@ fn evict_oldest(browsers: &mut HashMap<String, Browser>, cap: usize, which: impl
     }
 }
 
+/// Page requests served at once; past it a request is answered 503.
+const MAX_PAGE_REQUESTS: usize = 16;
+
+/// Writes files in order on a thread of its own. The bridge runs on one
+/// thread, and a write ends in an fsync that a slow disk (or a Docker
+/// Desktop volume) can hold for tens of milliseconds — time every relay and
+/// phone link would otherwise wait. Writes keep their order, so the file on
+/// disk is always the latest one handed over.
+struct Writer {
+    tx: std::sync::mpsc::Sender<WriterJob>,
+}
+
+enum WriterJob {
+    Write(PathBuf, Vec<u8>),
+    /// Answered once every earlier write is done (tests).
+    #[cfg(test)]
+    Flush(std::sync::mpsc::Sender<()>),
+}
+
+impl Writer {
+    fn spawn() -> Self {
+        let (tx, rx) = std::sync::mpsc::channel::<WriterJob>();
+        let spawned = std::thread::Builder::new().name("codedeck-web-writer".into()).spawn(move || {
+            for job in rx {
+                match job {
+                    WriterJob::Write(path, bytes) => {
+                        if let Err(e) = crate::state::write_private(&path, &bytes) {
+                            log::warn!("[Web] cannot write {}: {e}", path.display());
+                        }
+                    }
+                    #[cfg(test)]
+                    WriterJob::Flush(done) => {
+                        let _ = done.send(());
+                    }
+                }
+            }
+        });
+        if let Err(e) = spawned {
+            log::warn!("[Web] no writer thread ({e}); signed-in browsers will not survive a restart");
+        }
+        Self { tx }
+    }
+
+    fn write(&self, path: PathBuf, bytes: Vec<u8>) {
+        let _ = self.tx.send(WriterJob::Write(path, bytes));
+    }
+
+    #[cfg(test)]
+    fn flush(&self) {
+        let (done, wait) = std::sync::mpsc::channel();
+        if self.tx.send(WriterJob::Flush(done)).is_ok() {
+            let _ = wait.recv();
+        }
+    }
+}
+
 /// What sign-in starts are counted by: an IPv4 address, or an IPv6
 /// address's /64. One host holds a whole /64 and can pick any address in it,
 /// so counting single IPv6 addresses would let it start without limit.
-fn rate_key(peer: IpAddr) -> IpAddr {
+pub(crate) fn rate_key(peer: IpAddr) -> IpAddr {
     match peer {
         IpAddr::V4(v4) => IpAddr::V4(v4),
         IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
@@ -719,11 +771,22 @@ struct Response {
     content_type: &'static str,
     body: Vec<u8>,
     set_cookie: Option<String>,
+    /// A config write this answer waits on, done off the bridge's thread
+    /// ([`serve`]): the answer stands only if it succeeds.
+    config_write: Option<ConfigWrite>,
+}
+
+/// Config-file changes the page validated, still to be written.
+struct ConfigWrite {
+    path: PathBuf,
+    changes: Vec<(String, Option<Value>)>,
+    /// Who asked, for the log line (an npub prefix).
+    by: String,
 }
 
 impl Response {
     fn new(status: u16, content_type: &'static str, body: impl Into<Vec<u8>>) -> Self {
-        Self { status, content_type, body: body.into(), set_cookie: None }
+        Self { status, content_type, body: body.into(), set_cookie: None, config_write: None }
     }
 
     fn json(status: u16, body: String) -> Self {
@@ -828,11 +891,45 @@ pub async fn read_head<S: AsyncRead + Unpin>(stream: &mut S) -> Option<Vec<u8>> 
 
 /// Serve one page request whose head is in `buf`, from a browser at `peer`.
 pub async fn serve<S: AsyncRead + AsyncWrite + Unpin>(buf: &[u8], mut stream: S, peer: IpAddr, web: &Web) {
-    let response = match read_request(buf, &mut stream).await {
+    // The page shares the bridge's one thread with the relays, the engine
+    // and the phones' links: past this many requests at once, a page request
+    // is turned away rather than let it queue work in front of theirs.
+    if web.serving.get() >= MAX_PAGE_REQUESTS {
+        write_response(&mut stream, Response::error(503)).await;
+        return;
+    }
+    web.serving.set(web.serving.get() + 1);
+    let mut response = match read_request(buf, &mut stream).await {
         Ok(request) => route(&request, peer, web),
         Err(status) => Response::error(status),
     };
+    if let Some(write) = response.config_write.take() {
+        response = write_config(write).await;
+    }
+    web.serving.set(web.serving.get() - 1);
     write_response(&mut stream, response).await;
+}
+
+/// Write validated config changes on the blocking pool: a write ends in an
+/// fsync, which on a slow disk would stall every phone's traffic for as long
+/// if it ran on the bridge's thread.
+async fn write_config(write: ConfigWrite) -> Response {
+    let ConfigWrite { path, changes, by } = write;
+    let keys: Vec<String> = changes.iter().map(|(key, _)| key.clone()).collect();
+    match tokio::task::spawn_blocking(move || crate::config::write_web_settings(&path, &changes)).await {
+        Ok(Ok(())) => {
+            log::info!("[Web] config changed by {by}: keys {}", keys.join(", "));
+            Response::json(200, serde_json::json!({ "ok": true, "restartNeeded": true }).to_string())
+        }
+        Ok(Err(err)) => {
+            log::warn!("[Web] config write failed: {err}");
+            Response::error(500)
+        }
+        Err(err) => {
+            log::warn!("[Web] config write did not run: {err}");
+            Response::error(500)
+        }
+    }
 }
 
 fn route(request: &Request, peer: IpAddr, web: &Web) -> Response {
@@ -1148,6 +1245,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (web, mut inputs) = web_in(dir.path());
         let token = sign_in(&web, &mut inputs);
+        web.writer.flush();
 
         // A new page over the same home, as after a restart.
         let (again, _rx) = web_in(dir.path());
@@ -1323,8 +1421,11 @@ mod tests {
         })
         .to_string()
         .into_bytes();
-        let response = route(&post, PEER, &web);
+        let mut response = route(&post, PEER, &web);
         assert_eq!(response.status, 200);
+        // The write runs on the blocking pool in `serve`; here, in place.
+        let write = response.config_write.take().expect("a write to do");
+        crate::config::write_web_settings(&write.path, &write.changes).unwrap();
         let json: Value = serde_json::from_slice(&response.body).unwrap();
         assert_eq!(json["ok"], true);
         assert_eq!(json["restartNeeded"], true);
@@ -1342,7 +1443,10 @@ mod tests {
         let mut clear = request("POST", "/api/config", HOST);
         clear.cookie = Some(sign_in(&web, &mut inputs));
         clear.body = serde_json::json!({ "secrets": { "relayRegisterToken": null } }).to_string().into_bytes();
-        assert_eq!(route(&clear, PEER, &web).status, 200);
+        let mut cleared = route(&clear, PEER, &web);
+        assert_eq!(cleared.status, 200);
+        let write = cleared.config_write.take().expect("a write to do");
+        crate::config::write_web_settings(&write.path, &write.changes).unwrap();
         let written: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert!(written.get("relayRegisterToken").is_none(), "cleared");
     }

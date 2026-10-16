@@ -53,6 +53,11 @@ const HELLO_TIMEOUT: Duration = Duration::from_secs(60);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(400);
 /// Connections served at once, authenticated or not.
 const MAX_CONNECTIONS: usize = 64;
+/// Connections one host holds at once (an IPv6 host by its /64). A phone
+/// holds one and a browser a few; the cap keeps a single host — a flood of
+/// page requests or of handshakes left hanging — from taking the slots the
+/// phones need.
+const MAX_CONNECTIONS_PER_HOST: usize = 8;
 /// Events kept for resuming, at most (besides [`OUTBOX_SECS`]).
 const OUTBOX_CAP: usize = 5000;
 /// Largest frame accepted from a phone. Commands are small; an image goes
@@ -103,6 +108,8 @@ pub struct Hub {
     /// Published events, oldest first, with the identity each is for.
     outbox: RefCell<VecDeque<(String, SignedEvent)>>,
     open: Cell<usize>,
+    /// Connections open now by host (`web::rate_key`).
+    open_by_host: RefCell<HashMap<std::net::IpAddr, usize>>,
 }
 
 struct Conn {
@@ -177,6 +184,7 @@ impl Hub {
             next_id: Cell::new(0),
             outbox: RefCell::default(),
             open: Cell::new(0),
+            open_by_host: RefCell::default(),
         })
     }
 
@@ -420,6 +428,16 @@ where
             log::warn!("[Direct] Refusing {peer}: {MAX_CONNECTIONS} connections open");
             continue;
         }
+        let host = crate::web::rate_key(peer.ip());
+        {
+            let mut by_host = hub.open_by_host.borrow_mut();
+            let held = by_host.entry(host).or_insert(0);
+            if *held >= MAX_CONNECTIONS_PER_HOST {
+                log::info!("[Direct] Refusing {peer}: {MAX_CONNECTIONS_PER_HOST} connections open from that host");
+                continue;
+            }
+            *held += 1;
+        }
         hub.open.set(hub.open.get() + 1);
         let hub = Rc::clone(&hub);
         let web = web.clone();
@@ -432,6 +450,13 @@ where
                 }
             }
             hub.open.set(hub.open.get() - 1);
+            let mut by_host = hub.open_by_host.borrow_mut();
+            if let Some(held) = by_host.get_mut(&host) {
+                *held -= 1;
+                if *held == 0 {
+                    by_host.remove(&host);
+                }
+            }
         });
     }
 }
