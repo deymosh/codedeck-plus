@@ -54,7 +54,7 @@ use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, Pt
 use protocol::common::TerminalEndReason;
 use tokio::sync::mpsc;
 
-use cast::Cast;
+pub use cast::Cast;
 use ring::Ring;
 
 /// How often a terminal's output is handed to the engine. The engine
@@ -154,16 +154,25 @@ impl Terminals {
         Self { audit_dir, inputs, ptys: HashMap::new() }
     }
 
+    /// Where `term`'s recording goes (`<home>/audit/term-<term>.cast`).
+    pub fn recording_path(&self, term: &str) -> PathBuf {
+        self.audit_dir.join(format!("term-{term}.cast"))
+    }
+
     /// Start a shell for `term` in `cwd`, `cols`×`rows`, and take it under
     /// this bridge's wing. `command` is the owner's configured
     /// `terminal.command` (a fixed program such as `tmux new -A -s phone`);
     /// `None` runs the shell. `Ok` is what runs, as the phone is told it;
     /// `Err` is why it could not be started, for the audit and the phone.
     ///
-    /// The recording is opened before any process exists, and a failure
-    /// after the shell has started kills it: a shell nothing can reconstruct
-    /// afterwards, or one left running with no terminal attached to it, is
-    /// worse than an open that fails.
+    /// `cast` is `term`'s already-opened recording, from [`Cast::open`] on
+    /// [`recording_path`](Self::recording_path). Opening it is blocking file
+    /// work (create the audit directory, open the file, write and flush the
+    /// header), so the caller does it — off the bridge's one thread — and
+    /// hands the result in: no process exists until its recording does, and a
+    /// failure after the shell has started kills it. A shell nothing can
+    /// reconstruct afterwards, or one left running with no terminal attached
+    /// to it, is worse than an open that fails.
     pub fn spawn(
         &mut self,
         term: &str,
@@ -171,11 +180,10 @@ impl Terminals {
         cols: u16,
         rows: u16,
         command: Option<&[String]>,
+        cast: Cast,
     ) -> Result<String, String> {
         let (program, args, shell) = shell_command(command);
 
-        let cast = Cast::open(&self.audit_dir.join(format!("term-{term}.cast")), cols, rows)
-            .map_err(|e| format!("could not open the recording: {e}"))?;
         let ring = Rc::new(RefCell::new(Ring::new()));
 
         let mut cmd = CommandBuilder::new(&program);
@@ -637,6 +645,23 @@ mod tests {
         (Terminals::new(dir.path().join("audit"), inputs), rx, dir)
     }
 
+    /// [`Terminals::spawn`] with the recording opened first, the way the
+    /// runtime does it (there from a blocking task). A test is not on the
+    /// bridge's thread, so it can open the file here.
+    #[cfg(unix)]
+    fn spawn(
+        terms: &mut Terminals,
+        term: &str,
+        cwd: &str,
+        cols: u16,
+        rows: u16,
+        command: Option<&[String]>,
+    ) -> Result<String, String> {
+        let cast =
+            Cast::open(&terms.recording_path(term), cols, rows).map_err(|e| format!("could not open the recording: {e}"))?;
+        terms.spawn(term, cwd, cols, rows, command, cast)
+    }
+
     /// The next `Input::TerminalOutput` from a terminal, or a panic if none
     /// arrives in time.
     #[cfg(unix)]
@@ -693,7 +718,7 @@ mod tests {
             .run_until(async {
                 let (mut terms, mut rx, dir) = rig();
                 let cwd = dir.path().to_str().expect("a utf-8 temp path").to_string();
-                let shell = terms.spawn("t1", &cwd, 80, 24, None).expect("a shell");
+                let shell = spawn(&mut terms, "t1", &cwd, 80, 24, None).expect("a shell");
                 assert!(shell.ends_with("sh"), "the shell is {shell}");
 
                 terms.write("t1", b"echo one\n");
@@ -714,6 +739,33 @@ mod tests {
             .await;
     }
 
+    /// The invariant the runtime relies on: by the time `spawn` returns (and
+    /// so by the time any shell could write anything), the recording exists
+    /// with its header already flushed.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_spawned_terminal_has_its_recording_with_a_header_before_any_output() {
+        let _guard = env_lock();
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let (mut terms, _rx, dir) = rig();
+                let cwd = dir.path().to_str().expect("a utf-8 temp path").to_string();
+                spawn(&mut terms, "t7", &cwd, 80, 24, None).expect("a shell");
+
+                let cast = std::fs::read_to_string(dir.path().join("audit").join("term-t7.cast"))
+                    .expect("the recording exists as soon as the shell does");
+                let header: serde_json::Value =
+                    serde_json::from_str(cast.lines().next().expect("a header line")).expect("a JSON header");
+                assert_eq!(header["version"], 2);
+                assert_eq!(header["width"], 80);
+                assert_eq!(header["height"], 24);
+
+                terms.close("t7");
+            })
+            .await;
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn the_shell_gets_a_built_environment_and_nothing_of_the_bridges() {
@@ -727,7 +779,7 @@ mod tests {
                 // provider key the user exported for the agents. It must not
                 // reach a shell that runs as the bridge's user.
                 std::env::set_var("CODEDECK_TEST_SECRET", "must-not-leak");
-                terms.spawn("t2", &cwd, 80, 24, Some(&["env".to_string()])).expect("env runs");
+                spawn(&mut terms, "t2", &cwd, 80, 24, Some(&["env".to_string()])).expect("env runs");
                 let (_, out) = collect_until(&mut rx, "PATH=").await;
                 std::env::remove_var("CODEDECK_TEST_SECRET");
 
@@ -757,7 +809,7 @@ mod tests {
             .run_until(async {
                 let (mut terms, mut rx, dir) = rig();
                 let cwd = dir.path().to_str().expect("a utf-8 temp path").to_string();
-                terms.spawn("t3", &cwd, 80, 24, None).expect("a shell");
+                spawn(&mut terms, "t3", &cwd, 80, 24, None).expect("a shell");
 
                 // The shell turns its own echo off, the way a password prompt
                 // does, and says so once it has. The marker is split in the
@@ -789,7 +841,7 @@ mod tests {
             .run_until(async {
                 let (mut terms, mut rx, dir) = rig();
                 let cwd = dir.path().to_str().expect("a utf-8 temp path").to_string();
-                terms.spawn("t4", &cwd, 80, 24, None).expect("a shell");
+                spawn(&mut terms, "t4", &cwd, 80, 24, None).expect("a shell");
                 terms.write("t4", b"echo bye; exit 7\n");
 
                 let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
@@ -828,9 +880,7 @@ mod tests {
             .run_until(async {
                 let (mut terms, _rx, dir) = rig();
                 let cwd = dir.path().to_str().expect("a utf-8 temp path").to_string();
-                terms
-                    .spawn("t5", &cwd, 80, 24, Some(&["sleep".to_string(), "30".to_string()]))
-                    .expect("sleep runs");
+                spawn(&mut terms, "t5", &cwd, 80, 24, Some(&["sleep".to_string(), "30".to_string()])).expect("sleep runs");
                 // Far more than any pty's input buffer: written to the pty
                 // directly, this would block once the buffer filled.
                 let big = vec![b'x'; 1024 * 1024];
@@ -855,7 +905,7 @@ mod tests {
             .run_until(async {
                 let (mut terms, mut rx, dir) = rig();
                 let cwd = dir.path().to_str().expect("a utf-8 temp path").to_string();
-                terms.spawn("t6", &cwd, 80, 24, None).expect("a shell");
+                spawn(&mut terms, "t6", &cwd, 80, 24, None).expect("a shell");
 
                 let started = tokio::time::Instant::now();
                 terms.write("t6", b"yes | head -c 1000000\n");

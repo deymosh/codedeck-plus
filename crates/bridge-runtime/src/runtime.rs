@@ -29,7 +29,7 @@ use crate::config::Config;
 use crate::host::{self, HostCommand, HostHandle};
 use crate::relay::Relays;
 use crate::state::StateFile;
-use crate::terminal::Terminals;
+use crate::terminal::{Cast, Terminals};
 use crate::terminal_allow::{self, Cache as AllowlistCache};
 use crate::transcripts::FileTranscripts;
 use crate::workspace::FsWorkspace;
@@ -323,7 +323,7 @@ impl Runtime {
     async fn dispatch(&mut self, input: Input) -> bool {
         let effects = self.engine.handle(input);
         for effect in effects {
-            if self.execute(effect) {
+            if self.execute(effect).await {
                 self.relays.flush().await;
                 self.host.stop().await;
                 self.relays.shutdown();
@@ -339,8 +339,11 @@ impl Runtime {
         false
     }
 
-    /// Carry out one effect; true for [`Effect::Stopped`].
-    fn execute(&mut self, effect: Effect) -> bool {
+    /// Carry out one effect; true for [`Effect::Stopped`]. Async because one
+    /// effect does blocking file work that must not run here: opening a
+    /// terminal's recording, which is handed to a blocking task before its
+    /// shell is started.
+    async fn execute(&mut self, effect: Effect) -> bool {
         match effect {
             Effect::Publish { to, message } => self.relays.publish(to, message),
             Effect::Host(frame) => self.host.send(&frame),
@@ -414,10 +417,23 @@ impl Runtime {
             // state a configuration leaves them in — the engine emits none of
             // these effects, so a bridge without terminals starts no shell.
             Effect::TerminalSpawn { term, cwd, cols, rows } => {
-                // `None`: the owner has configured no `terminal.command`, so
-                // the shell runs. A failure is answered as a refusal, not
-                // left as a terminal that never appears.
-                let result = self.terminals.spawn(&term, &cwd, cols, rows, self.config.terminal.command.as_deref());
+                // Opening the recording is blocking file work — create the
+                // audit directory, open the file, write and flush the header —
+                // and the bridge's one thread must not do it, so it goes to a
+                // blocking task. It is awaited before the pty is opened: no
+                // shell ever runs without its recording, and a recording that
+                // cannot be opened is answered as a refusal, not left as a
+                // terminal that never appears. `None` is the owner's
+                // configured `terminal.command`: with none, the shell runs.
+                let path = self.terminals.recording_path(&term);
+                let opened = tokio::task::spawn_blocking(move || Cast::open(&path, cols, rows)).await;
+                let result = match opened {
+                    Ok(Ok(cast)) => {
+                        self.terminals.spawn(&term, &cwd, cols, rows, self.config.terminal.command.as_deref(), cast)
+                    }
+                    Ok(Err(e)) => Err(format!("could not open the recording: {e}")),
+                    Err(e) => Err(format!("could not open the recording: {e}")),
+                };
                 let _ = match result {
                     Ok(shell) => self.inputs.send(Input::TerminalSpawned { term, shell }),
                     Err(note) => self.inputs.send(Input::TerminalSpawnFailed { term, note }),
