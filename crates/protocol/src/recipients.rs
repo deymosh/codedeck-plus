@@ -44,9 +44,9 @@ pub fn fragment_d(recipient_tag: &str, index: usize) -> String {
 /// chains back to. The bridge derives it once per client and names it in a
 /// terminal's `writer`, in every `terminal-event`, and in its audit and
 /// allowlist, so a device keeps one identity while its key rotates; what a
-/// signed grant calls itself (`label`) never takes part. Re-pairing, or
-/// reinstalling with a fresh identity, makes a new device — the old chain of
-/// keys is gone. Case-blind: both ends lowercase the key, as the recipient
+/// signed grant calls itself (`label`) never takes part. Re-pairing or
+/// reinstalling makes a new device: the app grants a fresh first key, and
+/// the old chain of keys is gone. Case-blind: both ends lowercase the key, as the recipient
 /// tag does.
 pub fn device_id(first_session_key_hex: &str) -> String {
     digest(&["codedeck/device", &first_session_key_hex.to_ascii_lowercase()])

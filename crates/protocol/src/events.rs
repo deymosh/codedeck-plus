@@ -559,8 +559,9 @@ pub struct TerminalOutputMsg {
     pub data: String,
 }
 
-/// The input the bridge is still waiting for: it last applied `seq`, and
-/// something after it never arrived, so the writer resends from `seq + 1`.
+/// The input the bridge is still waiting for: `seq` is the first one that
+/// never arrived (one more than the last it applied), and the writer resends
+/// its input from there.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminalInputFromMsg {

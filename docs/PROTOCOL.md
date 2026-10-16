@@ -304,7 +304,7 @@ opens a real shell on the bridge's machine:
   valid UTF-8). It rides **LIVE_KIND (24515)**, ephemeral like the output —
   a keystroke is never stored on a relay. A gap the bridge waited for and did
   not get comes back as `terminal-input-from {term, seq}`: resend from
-  `seq + 1`.
+  `seq`, the first one that never arrived.
 - `terminal-output {term, offset, data}` is what the shell wrote, `data`
   base64 and `offset` the byte offset of its first byte in everything this
   terminal has output. Also LIVE_KIND, and like `partial` it goes ONLY to the
