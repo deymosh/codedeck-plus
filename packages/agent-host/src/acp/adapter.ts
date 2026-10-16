@@ -121,7 +121,9 @@ function toolResultEntries(
   if (status !== 'completed' && status !== 'failed') {
     const facts = calls.get(update.toolCallId);
     const input = record(update.rawInput);
-    if (facts !== undefined && Object.keys(input).length > 0) facts.input = input;
+    // Merged, not replaced: an update that names only some arguments keeps
+    // the ones an earlier update gave.
+    if (facts !== undefined && Object.keys(input).length > 0) facts.input = { ...facts.input, ...input };
     return [];
   }
   const facts = calls.get(update.toolCallId);

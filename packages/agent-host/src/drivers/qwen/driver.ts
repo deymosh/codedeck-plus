@@ -420,6 +420,7 @@ export class QwenSession extends AcpSession<undefined, AcpProcessEvents, QwenSes
    * option id is the whole verdict — the tool reads it from the reply.
    */
   private async answerPlan(request: RequestPermissionRequest): Promise<RequestPermissionResponse> {
+    if (this.ended) return { outcome: { outcome: 'cancelled' } };
     const call = request.toolCall;
     const plan = planTextOf(call);
     if (plan !== undefined) this.deliver({ entryType: 'plan', text: plan, timestamp: now() });
@@ -618,8 +619,8 @@ export class QwenDriver implements Driver {
   /**
    * The provider profiles, written into Qwen Code's settings as its OpenAI
    * model providers. Nothing is refused: a profile's models are added to the
-   * list under the profile's name, and two profiles offering one model id
-   * simply offer it twice.
+   * list under the profile's name, and a model id two profiles both offer is
+   * the first one's (settings.ts).
    */
   async setProviders(providers: ProviderBinding[]): Promise<RefusedProvider[]> {
     this.providers = providers;
