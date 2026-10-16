@@ -34,6 +34,12 @@ below; never merge upstream mechanically.
   `TerminalSessionCallbacks.onInput` instead of writing to a file descriptor.
   The pid, exit-status, `finishIfRunning`, cwd and process-cleanup machinery is
   gone.
+- **`TerminalSession` buffers output that arrives before the emulator exists.**
+  A session is attached before the view is laid out, so the shell's replay of
+  its screen so far arrives while there is nothing to append it to. `feed(...)`
+  holds those bytes in order (bounded to 512 KiB, dropping the oldest past it)
+  and appends them when the first `updateSize(...)` creates the emulator,
+  before any later feed.
 - **`TerminalSessionCallbacks` added** (`onInput`, `onResize`) — the small
   interface the bridge-facing host implements; upstream had no equivalent
   because its input and resize went straight to the pty.
@@ -47,7 +53,7 @@ below; never merge upstream mechanically.
   style (the catalog's AGP, compileSdk and minSdk, Java 17), and the app
   depends on both modules.
 - **`terminal-emulator/src/test/.../TerminalSessionTest.java` added** — a JVM
-  test of the three directions above.
+  test of the three directions above plus the pre-size replay buffer.
 
 The upstream `proguard-rules.pro` files are not copied: they were empty
 templates and neither module minifies.

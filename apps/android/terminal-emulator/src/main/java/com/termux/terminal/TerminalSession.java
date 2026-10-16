@@ -3,6 +3,7 @@ package com.termux.terminal;
 import android.os.Handler;
 import android.os.Looper;
 
+import java.io.ByteArrayOutputStream;
 import java.util.Arrays;
 import java.util.UUID;
 
@@ -46,6 +47,19 @@ public final class TerminalSession extends TerminalOutput {
     private Handler mMainThreadHandler;
 
     /**
+     * Output that arrives before the emulator exists (the view sizes the
+     * session only once it is laid out, but the shell's replay of its screen so
+     * far arrives as soon as the session is attached). Held in order and
+     * appended when the emulator is created; bounded so a shell that floods the
+     * session before the view is ready cannot grow it without limit — the
+     * oldest bytes past {@link #MAX_PENDING_OUTPUT_BYTES} are dropped, since
+     * the newest output is what the screen should end up showing.
+     */
+    private final ByteArrayOutputStream mPendingOutput = new ByteArrayOutputStream();
+
+    private static final int MAX_PENDING_OUTPUT_BYTES = 512 * 1024;
+
+    /**
      * @param transcriptRows how many lines of scrollback the emulator keeps.
      * @param client         the {@link TerminalSessionClient} implementation the emulator
      *                       reports titles, bells and clipboard events to.
@@ -72,13 +86,18 @@ public final class TerminalSession extends TerminalOutput {
     /**
      * Feed bytes received from the remote shell into the emulator. Safe to call
      * from any thread: the bytes are appended on the main thread, then the
-     * client is told to redraw.
+     * client is told to redraw. Bytes that arrive before the emulator exists
+     * are buffered and replayed in order when it is created.
      */
     public void feed(byte[] data) {
         if (data == null || data.length == 0) return;
         final byte[] bytes = Arrays.copyOf(data, data.length);
         runOnMainThread(() -> {
-            if (mEmulator == null) return;
+            if (mEmulator == null) {
+                mPendingOutput.write(bytes, 0, bytes.length);
+                trimPendingOutput();
+                return;
+            }
             mEmulator.append(bytes, bytes.length);
             notifyScreenUpdate();
         });
@@ -109,6 +128,7 @@ public final class TerminalSession extends TerminalOutput {
      */
     public void initializeEmulator(int columns, int rows, int cellWidthPixels, int cellHeightPixels) {
         mEmulator = new TerminalEmulator(this, columns, rows, cellWidthPixels, cellHeightPixels, mTranscriptRows, mClient);
+        flushPendingOutput();
     }
 
     /** Whether the emulator is currently showing its alternate screen buffer. */
@@ -198,6 +218,30 @@ public final class TerminalSession extends TerminalOutput {
     @Override
     public void onColorsChanged() {
         if (mClient != null) mClient.onColorsChanged(this);
+    }
+
+    /**
+     * Drop the oldest buffered output past {@link #MAX_PENDING_OUTPUT_BYTES},
+     * so a flood before the view is ready cannot grow the buffer without limit.
+     */
+    private void trimPendingOutput() {
+        int excess = mPendingOutput.size() - MAX_PENDING_OUTPUT_BYTES;
+        if (excess <= 0) return;
+        byte[] all = mPendingOutput.toByteArray();
+        mPendingOutput.reset();
+        mPendingOutput.write(all, excess, all.length - excess);
+    }
+
+    /**
+     * Append output buffered before the emulator existed, in the order it
+     * arrived. Called once the emulator is created, before any later feed.
+     */
+    private void flushPendingOutput() {
+        if (mPendingOutput.size() == 0) return;
+        byte[] pending = mPendingOutput.toByteArray();
+        mPendingOutput.reset();
+        mEmulator.append(pending, pending.length);
+        notifyScreenUpdate();
     }
 
     /**

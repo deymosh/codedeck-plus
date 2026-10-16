@@ -3,6 +3,7 @@ package com.termux.terminal;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
@@ -56,6 +57,20 @@ public class TerminalSessionTest {
         assertEquals("hi", emulator.getScreen().getSelectedText(0, 0, COLUMNS, 0));
         assertEquals(1, emulator.getCursorRow());
         assertEquals(4, emulator.getCursorCol());
+    }
+
+    @Test
+    public void feedBeforeTheFirstSizeIsReplayedOnceTheEmulatorExists() {
+        TerminalSession session = new TerminalSession(ROWS * 2, null, new RecordingCallbacks());
+
+        // The shell's replay of its screen arrives right after attach, before
+        // the view has been laid out and called updateSize.
+        session.feed("hi".getBytes(StandardCharsets.UTF_8));
+        assertNull(session.getEmulator());
+
+        session.updateSize(COLUMNS, ROWS, 13, 15);
+
+        assertEquals("hi", session.getEmulator().getScreen().getSelectedText(0, 0, COLUMNS, 0));
     }
 
     @Test
