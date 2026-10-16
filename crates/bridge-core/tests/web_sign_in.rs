@@ -57,3 +57,12 @@ fn a_lapsed_or_unknown_code_signs_nothing_in() {
     rig.take();
     assert_eq!(sign_in(&mut rig, "K7QM-4XPA"), (None, Some(("K7QM-4XPA".into(), false))), "lapsed");
 }
+
+#[test]
+fn a_withdrawn_code_signs_nothing_in() {
+    let mut rig = Rig::new();
+    show(&mut rig, "K7QM-4XPA");
+    rig.input(Input::WebSignInWithdrawn { code: "K7QM-4XPA".into() });
+    rig.take();
+    assert_eq!(sign_in(&mut rig, "K7QM-4XPA"), (None, Some(("K7QM-4XPA".into(), false))), "its browser left");
+}

@@ -237,6 +237,10 @@ pub enum Input {
     /// The web page is showing sign-in `code` to a browser until
     /// `expires_ms`; a paired phone sending it signs that browser in.
     WebSignInPending { code: String, expires_ms: u64 },
+    /// The page no longer shows `code`: its browser signed out, or was
+    /// dropped to make room, before a phone sent it. A phone sending it now
+    /// would be told a browser was let in that is no longer there.
+    WebSignInWithdrawn { code: String },
 }
 
 #[derive(Debug)]

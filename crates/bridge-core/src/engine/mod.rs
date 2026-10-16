@@ -27,6 +27,7 @@ mod permission_rules;
 mod phone;
 mod session_keys;
 pub use session_keys::MAX_CLIENTS;
+pub use web::MAX_WEB_SIGN_IN_CODES;
 mod settings;
 mod terminal;
 pub use terminal::{TerminalAllowlist, TerminalAuditRecord, TerminalAuditWhat, TerminalConfig, PendingDevice};
@@ -281,6 +282,7 @@ impl Engine {
             Input::Unpaired { identity } => self.unpair(&identity),
             Input::Shutdown => self.shutdown(),
             Input::WebSignInPending { code, expires_ms } => self.on_web_sign_in_pending(code, expires_ms),
+            Input::WebSignInWithdrawn { code } => self.on_web_sign_in_withdrawn(&code),
         }
         self.requester = None;
         self.flush();

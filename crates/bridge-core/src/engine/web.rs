@@ -15,8 +15,10 @@ use super::Engine;
 use crate::io::Effect;
 
 /// Codes the page is showing at once; the soonest to lapse goes first past
-/// it (the page caps its own pending sign-ins below this).
-const MAX_CODES: usize = 64;
+/// it. The page caps its own pending sign-ins at this too, and withdraws a
+/// code it stops showing ([`crate::Input::WebSignInWithdrawn`]), so the two sets
+/// stay the same.
+pub const MAX_WEB_SIGN_IN_CODES: usize = 64;
 
 /// The codes the web page is showing, with when each lapses (ms).
 #[derive(Debug, Default)]
@@ -41,11 +43,16 @@ impl Engine {
         let now = self.now();
         let codes = &mut self.web_sign_ins.codes;
         codes.retain(|_, expires| *expires > now);
-        while codes.len() >= MAX_CODES {
+        while codes.len() >= MAX_WEB_SIGN_IN_CODES {
             let Some(soonest) = codes.iter().min_by_key(|(_, e)| **e).map(|(c, _)| c.clone()) else { break };
             codes.remove(&soonest);
         }
         codes.insert(normalize(&code), expires_ms);
+    }
+
+    /// The page stopped showing `code`: no phone may use it any more.
+    pub(super) fn on_web_sign_in_withdrawn(&mut self, code: &str) {
+        self.web_sign_ins.codes.remove(&normalize(code));
     }
 
     /// A paired phone sent `code`: sign in the browser showing it, once. The
