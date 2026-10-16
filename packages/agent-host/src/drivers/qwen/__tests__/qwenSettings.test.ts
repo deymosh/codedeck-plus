@@ -23,6 +23,9 @@ const profile = (over: Partial<ProviderBinding> = {}): ProviderBinding => ({
   ...over,
 });
 
+/** The variable profile `p1`'s token travels in. */
+const GATEWAY_KEY = qwenKeyEnvName('p1', 'https://gateway.example/v1');
+
 describe('qwenProviderEntries', () => {
   it('makes one entry per model, its base URL versioned and its envKey the profile’s own', () => {
     const providers = [
@@ -30,10 +33,18 @@ describe('qwenProviderEntries', () => {
       profile({ id: 'p2', label: 'Second', baseUrl: 'https://second.example/v1', models: [{ id: 'c' }] }),
     ];
     expect(qwenProviderEntries(providers)).toEqual([
-      { id: 'a', name: 'a', envKey: qwenKeyEnvName(0), baseUrl: 'https://gateway.example/v1' },
-      { id: 'b', name: 'Bee', envKey: qwenKeyEnvName(0), baseUrl: 'https://gateway.example/v1' },
+      { id: 'a', name: 'a', envKey: GATEWAY_KEY, baseUrl: 'https://gateway.example/v1' },
+      { id: 'b', name: 'Bee', envKey: GATEWAY_KEY, baseUrl: 'https://gateway.example/v1' },
       // A base URL that already ends in /v1 is not given a second one.
-      { id: 'c', name: 'c', envKey: qwenKeyEnvName(1), baseUrl: 'https://second.example/v1' },
+      { id: 'c', name: 'c', envKey: qwenKeyEnvName('p2', 'https://second.example/v1'), baseUrl: 'https://second.example/v1' },
+    ]);
+  });
+
+  it('writes a model id two profiles offer once, from the first', () => {
+    const providers = [profile(), profile({ id: 'p2', baseUrl: 'https://second.example', models: [{ id: 'glm-5.3' }, { id: 'z' }] })];
+    expect(qwenProviderEntries(providers).map((entry) => [entry.id, entry.baseUrl])).toEqual([
+      ['glm-5.3', 'https://gateway.example/v1'],
+      ['z', 'https://second.example/v1'],
     ]);
   });
 
@@ -49,7 +60,7 @@ describe('mergeQwenSettings', () => {
     expect(merged.theme).toBe('dark');
     expect((merged.modelProviders as Record<string, unknown>).anthropic).toEqual([{ id: 'x' }]);
     expect((merged.modelProviders as Record<string, unknown>).openai).toEqual([
-      { id: 'glm-5.3', name: 'GLM 5.3', envKey: qwenKeyEnvName(0), baseUrl: 'https://gateway.example/v1' },
+      { id: 'glm-5.3', name: 'GLM 5.3', envKey: GATEWAY_KEY, baseUrl: 'https://gateway.example/v1' },
     ]);
     expect(merged.security).toEqual({ auth: { selectedType: 'openai' } });
     expect(merged.model).toEqual({ name: 'glm-5.3' });
@@ -59,12 +70,12 @@ describe('mergeQwenSettings', () => {
 
   it('keeps an operator’s own openai providers and replaces only its own entries', () => {
     const existing = {
-      modelProviders: { openai: [{ id: 'mine', envKey: 'MY_KEY' }, { id: 'old', envKey: qwenKeyEnvName(0) }] },
+      modelProviders: { openai: [{ id: 'mine', envKey: 'MY_KEY' }, { id: 'old', envKey: GATEWAY_KEY }] },
     };
     const merged = mergeQwenSettings(existing, [profile()]);
     expect((merged.modelProviders as { openai: unknown[] }).openai).toEqual([
       { id: 'mine', envKey: 'MY_KEY' },
-      { id: 'glm-5.3', name: 'GLM 5.3', envKey: qwenKeyEnvName(0), baseUrl: 'https://gateway.example/v1' },
+      { id: 'glm-5.3', name: 'GLM 5.3', envKey: GATEWAY_KEY, baseUrl: 'https://gateway.example/v1' },
     ]);
   });
 
@@ -86,9 +97,27 @@ describe('qwenDefaultModel', () => {
 describe('qwenProviderEnv', () => {
   it('carries each profile’s token under the name its settings entry refers to', () => {
     expect(qwenProviderEnv([profile(), profile({ id: 'p2', authToken: 'sk-two' })])).toEqual({
-      [qwenKeyEnvName(0)]: 'sk-secret',
-      [qwenKeyEnvName(1)]: 'sk-two',
+      [GATEWAY_KEY]: 'sk-secret',
+      [qwenKeyEnvName('p2', 'https://gateway.example/v1')]: 'sk-two',
     });
+  });
+});
+
+describe('qwenKeyEnvName', () => {
+  it('follows the profile and its endpoint, not its position, and carries no token', () => {
+    const name = qwenKeyEnvName('p1', 'https://gateway.example/v1');
+    expect(name).toMatch(/^CODEDECK_QWEN_KEY_[0-9A-F]{16}$/);
+    expect(qwenKeyEnvName('p1', 'https://gateway.example/v1')).toBe(name);
+    // A profile pointed at another endpoint is another variable, so an
+    // environment built before the change never feeds its token to the new one.
+    expect(qwenKeyEnvName('p1', 'https://other.example/v1')).not.toBe(name);
+    expect(qwenKeyEnvName('p2', 'https://gateway.example/v1')).not.toBe(name);
+  });
+
+  it('pairs an environment built for old profiles with no entry of a newer endpoint', () => {
+    const before = qwenProviderEnv([profile()]);
+    const after = qwenProviderEntries([profile({ baseUrl: 'https://moved.example' })]);
+    expect(after.every((entry) => before[entry.envKey] === undefined)).toBe(true);
   });
 });
 

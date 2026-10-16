@@ -6,7 +6,7 @@
  * entry in its settings, and the entry names the environment variable its key
  * is read from. That is exactly the shape a CodeDeck provider profile has, so
  * every profile becomes one `modelProviders.openai` entry per model, whose
- * `envKey` names a CodeDeck-owned variable (`CODEDECK_QWEN_KEY_<n>`) that only
+ * `envKey` names a CodeDeck-owned variable (`CODEDECK_QWEN_KEY_<hash>`) that only
  * the session's own process environment carries. The token therefore never
  * touches the file — `settings.json` is readable by anything on the machine,
  * and a key written there would be a key leaked.
@@ -30,9 +30,29 @@ import type { ProviderBinding } from '../../sdk/types';
  *  and put in the session process's environment by the driver. */
 export const QWEN_KEY_ENV_PREFIX = 'CODEDECK_QWEN_KEY_';
 
-/** The variable profile `index`'s token reaches Qwen Code in. */
-export function qwenKeyEnvName(index: number): string {
-  return `${QWEN_KEY_ENV_PREFIX}${index}`;
+/**
+ * The variable a profile's token reaches Qwen Code in, named after the
+ * profile and the endpoint its entries post to — never after its position.
+ * A session's environment is built before its process starts and the
+ * settings can be rewritten in between, so a process may read entries newer
+ * than the tokens it carries. With names tied to (profile, endpoint), such a
+ * mismatch can only leave an entry without its variable (or with an older
+ * token for the same endpoint): a token is never sent to another endpoint.
+ */
+export function qwenKeyEnvName(profileId: string, apiRoot: string): string {
+  const hash = createHash('sha256').update(`codedeck/qwen-key\0${profileId}\0${apiRoot}\0`).digest('hex');
+  return `${QWEN_KEY_ENV_PREFIX}${hash.slice(0, 16).toUpperCase()}`;
+}
+
+/** The versioned API root a profile's entries post to, or undefined for a
+ *  base URL that is not a URL (the bridge's to refuse; nothing this driver
+ *  can do with it). */
+function apiRootOf(profile: ProviderBinding): string | undefined {
+  try {
+    return providerApiRoot(profile.baseUrl);
+  } catch {
+    return undefined;
+  }
 }
 
 /** One `modelProviders.openai` entry, as Qwen Code reads it. */
@@ -57,27 +77,29 @@ function isOurs(entry: unknown): boolean {
 }
 
 /**
- * The entries `providers` become, in order. One per (profile, model), its
- * `envKey` the profile's own variable, its `baseUrl` the profile's versioned
- * API root (`/v1` appended unless it already ends there) — the URL Qwen
- * Code's OpenAI client posts chat completions to.
+ * The entries `providers` become, in order. One per model id, its `envKey`
+ * the profile's own variable, its `baseUrl` the profile's versioned API root
+ * (`/v1` appended unless it already ends there) — the URL Qwen Code's OpenAI
+ * client posts chat completions to.
+ *
+ * A model id two profiles both offer is written once, from the first: the
+ * phone lists each id once (the driver's `listModels`), and Qwen Code serves
+ * a duplicated id under an opaque route id the phone's choice could not be
+ * matched to.
  */
 export function qwenProviderEntries(providers: ProviderBinding[]): QwenProviderEntry[] {
   const entries: QwenProviderEntry[] = [];
-  providers.forEach((profile, index) => {
-    const envKey = qwenKeyEnvName(index);
-    let baseUrl: string;
-    try {
-      baseUrl = providerApiRoot(profile.baseUrl);
-    } catch {
-      // A base URL that is not a URL is the bridge's to refuse; nothing this
-      // driver can do with it.
-      return;
-    }
+  const seen = new Set<string>();
+  for (const profile of providers) {
+    const baseUrl = apiRootOf(profile);
+    if (baseUrl === undefined) continue;
+    const envKey = qwenKeyEnvName(profile.id, baseUrl);
     for (const model of profile.models) {
+      if (seen.has(model.id)) continue;
+      seen.add(model.id);
       entries.push({ id: model.id, name: model.label ?? model.id, envKey, baseUrl });
     }
-  });
+  }
   return entries;
 }
 
@@ -134,9 +156,10 @@ export function mergeQwenSettings(
  *  never log it. */
 export function qwenProviderEnv(providers: ProviderBinding[]): Record<string, string> {
   const env: Record<string, string> = {};
-  providers.forEach((profile, index) => {
-    if (profile.authToken) env[qwenKeyEnvName(index)] = profile.authToken;
-  });
+  for (const profile of providers) {
+    const apiRoot = apiRootOf(profile);
+    if (profile.authToken && apiRoot !== undefined) env[qwenKeyEnvName(profile.id, apiRoot)] = profile.authToken;
+  }
   return env;
 }
 

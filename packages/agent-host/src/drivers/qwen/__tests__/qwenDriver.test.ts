@@ -7,6 +7,7 @@ import { recordingContext, type RecordingContext } from '../../../sdk/__tests__/
 import type { DriverSession } from '../../../sdk/driver';
 import type { ProviderBinding, StartSession } from '../../../sdk/types';
 import { QwenDriver } from '../driver';
+import { qwenKeyEnvName } from '../settings';
 import { QwenRuntime } from '../runtime';
 
 /** The option state a Qwen Code session starts with: its modes, its model and
@@ -165,7 +166,7 @@ describe('QwenDriver models', () => {
     expect(settings.model).toEqual({ name: 'glm-5.3' });
     expect(settings.general).toEqual({ enableAutoUpdate: false });
     expect((settings.modelProviders as { openai: unknown[] }).openai).toEqual([
-      { id: 'glm-5.3', name: 'GLM 5.3', envKey: 'CODEDECK_QWEN_KEY_0', baseUrl: 'https://gateway.example/v1' },
+      { id: 'glm-5.3', name: 'GLM 5.3', envKey: qwenKeyEnvName('p1', 'https://gateway.example/v1'), baseUrl: 'https://gateway.example/v1' },
     ]);
     // The token is nowhere in the file: it travels in the process environment.
     expect(readFileSync(path.join(home, 'settings.json'), 'utf8')).not.toContain('sk-secret');
@@ -248,7 +249,7 @@ describe('QwenSession startup', () => {
     await started(ready);
     expect(ready.spawns[0]?.args).toEqual(['/fake/qwen/cli-entry.js', '--acp']);
     expect(ready.spawns[0]?.env.QWEN_HOME).toBe(ready.home);
-    expect(ready.spawns[0]?.env.CODEDECK_QWEN_KEY_0).toBe('sk-secret');
+    expect(ready.spawns[0]?.env[qwenKeyEnvName('p1', 'https://gateway.example/v1')]).toBe('sk-secret');
     expect(ready.spawns[0]?.env.QWEN_TELEMETRY_ENABLED).toBe('false');
     expect(ready.spawns[0]?.env.KEEP).toBe('yes');
   });
@@ -272,7 +273,7 @@ describe('QwenSession startup', () => {
     expect(env.OPENAI_BASE_URL).toBeUndefined();
     expect(env.OPENAI_MODEL).toBeUndefined();
     expect(env.QWEN_MODEL).toBeUndefined();
-    expect(env.CODEDECK_QWEN_KEY_0).toBe('sk-secret');
+    expect(env[qwenKeyEnvName('p1', 'https://gateway.example/v1')]).toBe('sk-secret');
   });
 
   it('does not keep a mode the agent refused, so the session is not treated as one it never entered', async () => {
