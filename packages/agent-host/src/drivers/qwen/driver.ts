@@ -53,6 +53,7 @@ import { qwenProviderEnv, qwenSettingsKey, writeQwenSettings } from './settings'
 import { qwenTool } from './tools';
 import { QWEN_LABEL } from './install';
 import { QwenRuntime } from './runtime';
+import { QWEN_STYLE } from './style';
 
 export const QWEN_AGENT_ID = 'qwen-code';
 
@@ -548,6 +549,7 @@ export class QwenDriver implements Driver {
         tasks: false,
       },
       credentials: [],
+      style: QWEN_STYLE,
       ...(this.unavailable ? { unavailableReason: this.unavailable } : {}),
     };
   }
