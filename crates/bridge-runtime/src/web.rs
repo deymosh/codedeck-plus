@@ -53,12 +53,17 @@ const BODY_TIMEOUT: Duration = Duration::from_secs(10);
 pub const PENDING_TTL_MS: u64 = 5 * 60 * 1000;
 /// How long a signed-in browser stays signed in.
 const SESSION_TTL_MS: u64 = 30 * 24 * 3600 * 1000;
-/// Pending sign-ins kept at once; the oldest goes first past it.
-const MAX_PENDING: usize = 32;
+/// Pending sign-ins kept at once; the oldest goes first past it. The
+/// engine keeps as many codes, and is told of every one dropped here, so a
+/// phone is never told it let in a browser this page no longer knows.
+const MAX_PENDING: usize = bridge_core::MAX_WEB_SIGN_IN_CODES;
 /// Signed-in browsers kept at once; the oldest goes first past it.
 const MAX_SESSIONS: usize = 64;
 /// Sign-in starts allowed per address per minute.
 const STARTS_PER_MINUTE: u32 = 10;
+/// Addresses whose sign-in starts are counted at once; the oldest windows go
+/// first past it, so the count costs bounded memory whatever the peers.
+const MAX_START_WINDOWS: usize = 4096;
 /// The session cookie. `__Host-` makes the browser keep it only when it was
 /// set over HTTPS, for the whole site, by this exact host.
 const COOKIE: &str = "__Host-codedeck";
@@ -87,7 +92,9 @@ enum Access {
 struct Browser {
     access: Access,
     peer: IpAddr,
-    created_ms: u64,
+    /// When it got where it stands, as a count: what the caps drop the
+    /// lowest of (a clock can give two browsers the same millisecond).
+    order: u64,
 }
 
 /// The page's state: the latest heartbeat and the browsers it knows.
@@ -100,7 +107,10 @@ pub struct Web {
     /// By the SHA-256 of the cookie's value, so the table holds no token a
     /// memory dump could replay.
     browsers: RefCell<HashMap<String, Browser>>,
+    /// Sign-in starts in the current minute, by [`rate_key`].
     starts: RefCell<HashMap<IpAddr, (u64, u32)>>,
+    /// The next [`Browser::order`].
+    order: std::cell::Cell<u64>,
     inputs: mpsc::UnboundedSender<Input>,
     /// Sign-in switched off for development (`CODEDECK_WEB_NO_SIGN_IN=1`):
     /// a browser on a loopback or private address is let in without a
@@ -124,6 +134,7 @@ impl Web {
             heartbeat: RefCell::default(),
             browsers: RefCell::default(),
             starts: RefCell::default(),
+            order: std::cell::Cell::new(1),
             inputs,
             no_sign_in,
         })
@@ -142,8 +153,13 @@ impl Web {
             if matches!(&browser.access, Access::Pending { code: c, .. } if c == code) {
                 log::info!("[Web] A browser at {} signed in", browser.peer);
                 browser.access = Access::SignedIn { by: by.to_string(), since_ms: now, expires_ms: now + SESSION_TTL_MS };
+                // The session's age is from its sign-in, so the cap below
+                // drops the longest signed in, never the one just let in.
+                browser.order = self.next_order();
             }
         }
+        let mut browsers = self.browsers.borrow_mut();
+        evict_oldest(&mut browsers, MAX_SESSIONS, |b| matches!(b.access, Access::SignedIn { .. }));
     }
 
     fn browser(&self, token: Option<&str>) -> Option<(String, Browser)> {
@@ -167,7 +183,12 @@ impl Web {
         {
             let mut starts = self.starts.borrow_mut();
             starts.retain(|_, (window, _)| now - *window < 60_000);
-            let entry = starts.entry(peer).or_insert((now, 0));
+            let key = rate_key(peer);
+            while !starts.contains_key(&key) && starts.len() >= MAX_START_WINDOWS {
+                let Some(oldest) = starts.iter().min_by_key(|(_, (window, _))| *window).map(|(k, _)| *k) else { break };
+                starts.remove(&oldest);
+            }
+            let entry = starts.entry(key).or_insert((now, 0));
             if entry.1 >= STARTS_PER_MINUTE {
                 return None;
             }
@@ -180,15 +201,33 @@ impl Web {
         browsers.retain(|_, b| match b.access {
             Access::Pending { expires_ms, .. } | Access::SignedIn { expires_ms, .. } => expires_ms > now,
         });
-        evict_oldest(&mut browsers, MAX_PENDING, |b| matches!(b.access, Access::Pending { .. }));
-        browsers.insert(token_key(&token), Browser { access: Access::Pending { code: code.clone(), expires_ms }, peer, created_ms: now });
-        evict_oldest(&mut browsers, MAX_SESSIONS + MAX_PENDING, |_| true);
+        browsers.insert(token_key(&token), Browser { access: Access::Pending { code: code.clone(), expires_ms }, peer, order: self.next_order() });
         let _ = self.inputs.send(Input::WebSignInPending { code: code.clone(), expires_ms });
+        for dropped in evict_oldest(&mut browsers, MAX_PENDING, |b| matches!(b.access, Access::Pending { .. })) {
+            self.withdraw(&dropped);
+        }
         Some((token, code))
     }
 
     fn sign_out(&self, key: &str) {
-        self.browsers.borrow_mut().remove(key);
+        let removed = self.browsers.borrow_mut().remove(key);
+        if let Some(browser) = removed {
+            self.withdraw(&browser);
+        }
+    }
+
+    fn next_order(&self) -> u64 {
+        let order = self.order.get();
+        self.order.set(order + 1);
+        order
+    }
+
+    /// The page stopped showing a pending browser's code: the engine must not
+    /// let a phone use it.
+    fn withdraw(&self, browser: &Browser) {
+        if let Access::Pending { code, .. } = &browser.access {
+            let _ = self.inputs.send(Input::WebSignInWithdrawn { code: code.clone() });
+        }
     }
 
     fn status_json(&self, by: &str, since_ms: u64) -> String {
@@ -205,15 +244,32 @@ impl Web {
 }
 
 /// Drop the oldest browsers matching `which` until at most `cap` of them are
-/// left.
-fn evict_oldest(browsers: &mut HashMap<String, Browser>, cap: usize, which: impl Fn(&Browser) -> bool) {
+/// left, and return them.
+fn evict_oldest(browsers: &mut HashMap<String, Browser>, cap: usize, which: impl Fn(&Browser) -> bool) -> Vec<Browser> {
+    let mut dropped = Vec::new();
     loop {
         let matching: Vec<(&String, &Browser)> = browsers.iter().filter(|(_, b)| which(b)).collect();
-        if matching.len() < cap.max(1) {
-            return;
+        if matching.len() <= cap {
+            return dropped;
         }
-        let Some(oldest) = matching.iter().min_by_key(|(_, b)| b.created_ms).map(|(k, _)| (*k).clone()) else { return };
-        browsers.remove(&oldest);
+        let Some(oldest) = matching.iter().min_by_key(|(_, b)| b.order).map(|(k, _)| (*k).clone()) else { return dropped };
+        dropped.extend(browsers.remove(&oldest));
+    }
+}
+
+/// What sign-in starts are counted by: an IPv4 address, or an IPv6
+/// address's /64. One host holds a whole /64 and can pick any address in it,
+/// so counting single IPv6 addresses would let it start without limit.
+fn rate_key(peer: IpAddr) -> IpAddr {
+    match peer {
+        IpAddr::V4(v4) => IpAddr::V4(v4),
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => IpAddr::V4(v4),
+            None => {
+                let s = v6.segments();
+                IpAddr::V6(std::net::Ipv6Addr::new(s[0], s[1], s[2], s[3], 0, 0, 0, 0))
+            }
+        },
     }
 }
 
@@ -441,7 +497,7 @@ fn route(request: &Request, peer: IpAddr, web: &Web) -> Response {
         return Response::error(403);
     }
     let browser = if web.no_sign_in && is_local(peer) {
-        Some((String::new(), Browser { access: Access::SignedIn { by: "sign-in switched off".into(), since_ms: 0, expires_ms: u64::MAX }, peer, created_ms: 0 }))
+        Some((String::new(), Browser { access: Access::SignedIn { by: "sign-in switched off".into(), since_ms: 0, expires_ms: u64::MAX }, peer, order: 0 }))
     } else {
         web.browser(request.cookie.as_deref())
     };
@@ -578,6 +634,61 @@ mod tests {
         out.cookie = Some(token);
         route(&out, PEER, &web);
         assert_eq!(route(&status, PEER, &web).status, 401, "signed out");
+    }
+
+    #[test]
+    fn an_ipv6_host_is_rate_limited_by_its_slash_64() {
+        let (web, _) = web();
+        for i in 0..STARTS_PER_MINUTE {
+            let peer = IpAddr::V6(std::net::Ipv6Addr::new(0x2001, 0xdb8, 1, 2, 0, 0, 0, i as u16 + 1));
+            assert!(web.start_sign_in(peer).is_some());
+        }
+        let same_64 = IpAddr::V6(std::net::Ipv6Addr::new(0x2001, 0xdb8, 1, 2, 9, 9, 9, 9));
+        assert!(web.start_sign_in(same_64).is_none(), "another address in the same /64 counts as the same host");
+        let other_64 = IpAddr::V6(std::net::Ipv6Addr::new(0x2001, 0xdb8, 1, 3, 0, 0, 0, 1));
+        assert!(web.start_sign_in(other_64).is_some());
+    }
+
+    #[test]
+    fn a_pending_browser_dropped_or_signed_out_withdraws_its_code() {
+        let (web, mut inputs) = web();
+        let mut first = None;
+        for i in 0..=MAX_PENDING {
+            // A peer of its own each, so the rate limit does not interfere.
+            let peer = IpAddr::V4(std::net::Ipv4Addr::new(10, 0, (i / 250) as u8, (i % 250) as u8 + 1));
+            let (token, code) = web.start_sign_in(peer).expect("a start");
+            first.get_or_insert((token, code));
+        }
+        let (first_token, first_code) = first.unwrap();
+        let withdrawn: Vec<String> = std::iter::from_fn(|| inputs.try_recv().ok())
+            .filter_map(|input| match input {
+                Input::WebSignInWithdrawn { code } => Some(code),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(withdrawn, vec![first_code], "the oldest pending browser made room, and its code went with it");
+        assert!(web.browser(Some(&first_token)).is_none());
+
+        let (token, code) = web.start_sign_in(IpAddr::V4(std::net::Ipv4Addr::new(10, 9, 9, 9))).unwrap();
+        while inputs.try_recv().is_ok() {}
+        web.sign_out(&token_key(&token));
+        assert!(matches!(inputs.try_recv(), Ok(Input::WebSignInWithdrawn { code: c }) if c == code));
+    }
+
+    #[test]
+    fn signed_in_browsers_are_capped_by_the_longest_signed_in() {
+        let (web, _) = web();
+        let mut tokens = Vec::new();
+        for i in 0..=MAX_SESSIONS {
+            let peer = IpAddr::V4(std::net::Ipv4Addr::new(10, 1, (i / 250) as u8, (i % 250) as u8 + 1));
+            let (token, code) = web.start_sign_in(peer).unwrap();
+            web.signed_in(&code, "npub1owner");
+            tokens.push(token);
+        }
+        let signed_in = web.browsers.borrow().values().filter(|b| matches!(b.access, Access::SignedIn { .. })).count();
+        assert_eq!(signed_in, MAX_SESSIONS);
+        assert!(web.browser(Some(&tokens[0])).is_none(), "the first one signed in went first");
+        assert!(web.browser(tokens.last().map(String::as_str)).is_some(), "never the one just let in");
     }
 
     #[test]
