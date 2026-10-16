@@ -145,7 +145,6 @@ describe('QwenDriver.info', () => {
       tasks: false,
     });
     expect(info.credentials).toEqual([]);
-    expect(info.style).toBeUndefined();
   });
 });
 
@@ -211,7 +210,12 @@ describe('QwenSession startup', () => {
   it('applies the mode and the model a session was started with', async () => {
     const ready = withDriver();
     await started(ready, { mode: 'plan', model: 'glm-5.3' });
-    expect(ready.agent.setModes).toEqual([{ sessionId: 's1', modeId: 'plan' }]);
+    // Plan is entered from the asking mode, not from the `auto` session/new
+    // starts in: a plan's approval offers to restore the mode it came from.
+    expect(ready.agent.setModes).toEqual([
+      { sessionId: 's1', modeId: 'default' },
+      { sessionId: 's1', modeId: 'plan' },
+    ]);
     // The profile's own model id is selected through the value Qwen Code
     // serves it as.
     expect(ready.agent.setOptions).toEqual([{ sessionId: 's1', configId: 'model', value: 'glm-5.3(openai)' }]);

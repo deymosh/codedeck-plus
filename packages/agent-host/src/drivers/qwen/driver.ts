@@ -62,10 +62,12 @@ export const QWEN_AGENT_ID = 'qwen-code';
 const DEFAULT_MODE = 'default';
 /** The mode that runs every tool without asking. */
 const AUTO_APPROVE_MODE = 'yolo';
+/** The mode that only analyzes, ending with a plan for the user to approve. */
+const PLAN_MODE = 'plan';
 const QWEN_MODES = [
   { id: DEFAULT_MODE, label: 'Ask', description: 'Ask before each tool call' },
   { id: 'auto-edit', label: 'Auto edit', description: 'Automatically approve file edits' },
-  { id: 'plan', label: 'Plan', description: 'Analyze only, do not modify files or execute commands' },
+  { id: PLAN_MODE, label: 'Plan', description: 'Analyze only, do not modify files or execute commands' },
   { id: 'auto', label: 'Auto', description: 'An LLM classifier approves what it judges safe' },
   { id: AUTO_APPROVE_MODE, label: 'YOLO', description: 'Run every tool without asking' },
 ];
@@ -198,8 +200,14 @@ export class QwenSession extends AcpSession<undefined, AcpProcessEvents, QwenSes
    */
   protected override async applySelection(): Promise<void> {
     const mode = this.params.mode ?? DEFAULT_MODE;
-    if (this.modeState()?.currentModeId !== mode) {
+    const current = this.modeState()?.currentModeId;
+    if (current !== mode) {
       try {
+        // A plan's approval offers to restore the mode plan was entered from,
+        // so a session that starts in plan enters it from the asking mode —
+        // never from the `auto` Qwen Code boots in, which nobody chose and in
+        // which a classifier approves tool calls.
+        if (mode === PLAN_MODE && current !== DEFAULT_MODE) await this.setMode(DEFAULT_MODE);
         await this.setMode(mode);
       } catch (error) {
         this.deliver({
