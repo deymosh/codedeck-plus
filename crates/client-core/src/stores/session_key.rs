@@ -82,6 +82,14 @@ impl SessionKey {
 pub struct SessionKeyRing {
     pub current: SessionKey,
     pub previous: Option<SessionKey>,
+    /// The public half of the first session key this install ever made — the
+    /// one every later grant's `replaces` chain leads back to. A bridge names
+    /// this client as a device by it
+    /// ([`protocol::recipients::device_id`]), and a terminal names the device
+    /// that opened, attached to or took one over the same way, so the phone
+    /// must keep the first key's public half for as long as the install lives
+    /// however often the key itself rotates. Public: no secret is added here.
+    first_pubkey_hex: String,
 }
 
 /// The ring as the host stores it. Holds secrets; its `Debug` shows none.
@@ -93,6 +101,10 @@ struct StoredRing {
     current: StoredKey,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     previous: Option<StoredKey>,
+    /// Absent in a ring stored before the phone kept this; the older of the
+    /// keys it holds is the best reading of the first one then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    first_pubkey_hex: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -130,14 +142,26 @@ impl SessionKeyRing {
     pub fn load(stored: Option<&str>, now_ms: u64) -> (Self, bool) {
         let parsed = stored.and_then(|s| serde_json::from_str::<StoredRing>(s).ok()).and_then(|r| {
             let current = r.current.key()?;
-            Some(Self { current, previous: r.previous.and_then(|p| p.key()) })
+            let previous = r.previous.and_then(|p| p.key());
+            // A ring stored before the first key was kept: the older key it
+            // still holds is the closest reading of it.
+            let first_pubkey_hex = r.first_pubkey_hex.unwrap_or_else(|| {
+                previous
+                    .as_ref()
+                    .map_or_else(|| current.pubkey_hex().to_string(), |p| p.pubkey_hex().to_string())
+            });
+            Some(Self { current, previous, first_pubkey_hex })
         });
         match parsed {
             Some(mut ring) => {
                 let rotated = ring.rotate_if_due(now_ms);
                 (ring, rotated)
             }
-            None => (Self { current: SessionKey::fresh(now_ms), previous: None }, true),
+            None => {
+                let current = SessionKey::fresh(now_ms);
+                let first_pubkey_hex = current.pubkey_hex().to_string();
+                (Self { current, previous: None, first_pubkey_hex }, true)
+            }
         }
     }
 
@@ -148,7 +172,30 @@ impl SessionKeyRing {
     }
 
     fn stored(&self) -> StoredRing {
-        StoredRing { current: StoredKey::of(&self.current), previous: self.previous.as_ref().map(StoredKey::of) }
+        StoredRing {
+            current: StoredKey::of(&self.current),
+            previous: self.previous.as_ref().map(StoredKey::of),
+            first_pubkey_hex: Some(self.first_pubkey_hex.clone()),
+        }
+    }
+
+    /// The public half of the first key this install ever made.
+    pub fn first_pubkey_hex(&self) -> &str {
+        &self.first_pubkey_hex
+    }
+
+    /// A ring holding one key and no history — the shape a fresh install
+    /// has, and what a caller that only cares about the current key wants.
+    pub fn single(current: SessionKey) -> Self {
+        let first_pubkey_hex = current.pubkey_hex().to_string();
+        Self { current, previous: None, first_pubkey_hex }
+    }
+
+    /// The id this install is a device under, as a bridge names it in a
+    /// terminal's `writer`, in every `terminal-event` and in its audit and
+    /// allowlist ([`protocol::recipients::device_id`]).
+    pub fn device_id(&self) -> String {
+        protocol::recipients::device_id(&self.first_pubkey_hex)
     }
 
     /// Replace the current key with a fresh one once less than
@@ -339,8 +386,7 @@ mod tests {
     }
 
     #[test]
-    fn the_debug_form_holds_no_secret() {
-        let (ring, _) = SessionKeyRing::load(None, NOW);
+    fn the_debug_form_holds_no_secret() {        let (ring, _) = SessionKeyRing::load(None, NOW);
         assert!(!format!("{ring:?}").contains(&ring.current.keypair.secret_hex()));
     }
 
@@ -364,8 +410,41 @@ mod tests {
         assert!(stale.previous.is_none());
     }
 
-    fn store(caps: &[&str]) -> MachinesState {
-        let mut s = MachinesState::new(Default::default(), MergeOptions::default());
+    #[test]
+    fn the_device_id_survives_every_rotation() {
+        let (mut ring, _) = SessionKeyRing::load(None, NOW);
+        let first = ring.first_pubkey_hex().to_string();
+        assert_eq!(ring.device_id(), protocol::recipients::device_id(&first));
+        let lifetime_ms = GRANT_LIFETIME_SECS * 1000;
+        assert!(ring.rotate_if_due(NOW + lifetime_ms - 29 * DAY_MS));
+        // The second rotation drops the first key from the ring; the device
+        // this install is stays the same, since a bridge derives it once.
+        assert!(ring.rotate_if_due(NOW + 2 * lifetime_ms - 29 * DAY_MS));
+        assert_eq!(ring.first_pubkey_hex(), first);
+        let (again, _) = SessionKeyRing::load(Some(&ring.encode()), NOW);
+        assert_eq!(again.first_pubkey_hex(), first);
+        assert_eq!(again.device_id(), ring.device_id());
+    }
+
+    #[test]
+    fn a_ring_stored_before_the_first_key_was_kept_reads_its_older_key() {
+        // The shape an older build wrote: no `firstPubkeyHex`.
+        let (ring, _) = SessionKeyRing::load(None, NOW);
+        let json = ring.encode();
+        let without: String = serde_json::to_string(
+            &serde_json::from_str::<serde_json::Value>(&json)
+                .map(|mut v| {
+                    v.as_object_mut().unwrap().remove("firstPubkeyHex");
+                    v
+                })
+                .unwrap(),
+        )
+        .unwrap();
+        let (again, _) = SessionKeyRing::load(Some(&without), NOW);
+        assert_eq!(again.first_pubkey_hex(), ring.current.pubkey_hex());
+    }
+
+    fn store(caps: &[&str]) -> MachinesState {        let mut s = MachinesState::new(Default::default(), MergeOptions::default());
         for m in ["m", "n"] {
             s.register_machine(m, "laptop", None, None, &[]);
             s.machines.get_mut(m).unwrap().capabilities = caps.iter().map(|c| c.to_string()).collect();

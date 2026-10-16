@@ -413,10 +413,10 @@ async fn a_phone_opens_a_terminal_and_types_through_the_bridge() {
             let session = generate_keypair();
             let device = device_id(&session.pubkey_hex);
             let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
-            let ring = SessionKeyRing {
-                current: SessionKey { keypair: session.clone(), expires_at: now_ms / 1000 + GRANT_LIFETIME_SECS },
-                previous: None,
-            };
+            let ring = SessionKeyRing::single(SessionKey {
+                keypair: session.clone(),
+                expires_at: now_ms / 1000 + GRANT_LIFETIME_SECS,
+            });
             let kv = Rc::new(MemoryKv::seeded([(client_runtime::stores::SESSION_KEYS_KEY, ring.encode())]));
 
             let mut bridge = start_bridge_with(&relay, home.path(), workspace.path(), Some(&device));
