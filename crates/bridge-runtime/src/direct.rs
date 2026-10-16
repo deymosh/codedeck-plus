@@ -294,7 +294,6 @@ pub async fn start(
         let bound = listener.local_addr().map_err(|e| e.to_string())?;
         bound_wss = Some(bound);
         log::info!("[Direct] Listening on wss://{bound} (certificate sha256 {})", cert.sha256_hex());
-        log::info!("[Web] The bridge's web page is at https://{}/ (same certificate)", advertised(bound));
         let hub = Rc::clone(&hub);
         let web = Rc::clone(&web);
         tasks.push(tokio::task::spawn_local(async move {
@@ -316,6 +315,11 @@ pub async fn start(
     let endpoints = advertised_endpoints(config, bound_wss, in_container());
     for endpoint in &endpoints {
         log::info!("[Direct] Advertising {endpoint}");
+    }
+    // The page is on the same `wss://` listener, so it is wherever phones
+    // are told to dial it (`localhost` too, on the machine itself).
+    for page in endpoints.iter().filter_map(|e| e.strip_prefix("wss://")) {
+        log::info!("[Web] The bridge's web page: https://{}/", page.trim_end_matches('/'));
     }
     if endpoints.is_empty() {
         log::info!(
