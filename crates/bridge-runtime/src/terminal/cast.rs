@@ -65,8 +65,6 @@ impl Cast {
 
     /// What was typed, when the terminal was echoing: the shell's own echo
     /// will also appear in the output, which is how asciicast normally reads.
-    /// (On Windows there is no echo state to read, so nothing calls this.)
-    #[cfg_attr(windows, allow(dead_code))]
     pub fn input(&mut self, bytes: &[u8]) {
         let text = String::from_utf8_lossy(bytes).into_owned();
         self.event("i", &text);
@@ -74,7 +72,6 @@ impl Cast {
 
     /// What was typed while the terminal had echo off — a password. Only its
     /// size is kept: the bytes are exactly what the terminal was hiding.
-    #[cfg_attr(windows, allow(dead_code))]
     pub fn input_hidden(&mut self, bytes: usize) {
         self.event("i", &format!("[input hidden: {bytes} bytes]"));
     }
@@ -82,7 +79,6 @@ impl Cast {
     /// What was typed where the platform gives no echo state to read (a
     /// ConPTY): the bytes are not recorded, and neither is whether they were
     /// hidden, because nothing can say.
-    #[cfg_attr(unix, allow(dead_code))]
     pub fn input_count(&mut self, bytes: usize) {
         self.event("i", &format!("[input: {bytes} bytes]"));
     }

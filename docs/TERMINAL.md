@@ -128,6 +128,17 @@ When relays are allowed, a terminal falls back to them like any message.
   output events a second, the rest merged into the next — relays rate-limit
   their writers, and a terminal must not get the bridge's or the phone's key
   throttled for the agents too. The direct link has no cap.
+- **A terminal never slows the phones' links.** The bridge runs the relays,
+  the direct links, the web page and the engine on one thread, so no
+  terminal may block it or flood it. A terminal's input and its recording
+  each have a thread of their own, and the bridge only hands work over:
+  input goes into a bounded queue and is dropped, with a warning, when the
+  program has stopped reading it. Output is paced rather than passed
+  through — the reader thread is throttled by a small queue, and the bridge
+  emits at most one frame per 16 ms — so a shell writing faster than the
+  phones can be sent it runs at that pace, its pty filling and its write
+  blocking, like a terminal on a slow line. What a terminal costs the
+  bridge's thread is therefore bounded, whatever runs in it.
 - **Privacy of size and timing.** NIP-44 already pads every payload to a
   size bucket, so a relay sees bucketed sizes, not byte counts. Batching on
   the keys above, rather than sending each keystroke, also hides the typing
