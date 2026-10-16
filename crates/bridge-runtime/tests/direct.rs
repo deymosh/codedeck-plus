@@ -10,7 +10,7 @@ use bridge_runtime::direct;
 use futures_util::{SinkExt, StreamExt};
 use protocol::crypto::{generate_keypair, Keypair};
 use protocol::direct::{decode_direct_frame, encode_direct_frame, DirectFrame};
-use protocol::kinds::COMMAND_KIND;
+use protocol::kinds::{COMMAND_KIND, LIVE_KIND};
 use protocol::nip42::build_auth_event;
 use protocol::nostr_event::SignedEvent;
 use rustls::pki_types::ServerName;
@@ -104,16 +104,16 @@ async fn a_paired_phone_gets_its_events_and_sends_commands_over_the_pinned_link(
             // copy, not another client's of the same identity.
             let theirs = copy(&bridge, 4516, &phone.pubkey_hex, "theirs", "earlier");
             let earlier = event(&bridge, 4516, &phone.pubkey_hex, "earlier");
-            link.hub.deliver(&phone.pubkey_hex, &theirs);
-            link.hub.deliver(&phone.pubkey_hex, &earlier);
+            link.hub.deliver(&phone.pubkey_hex, &theirs, false);
+            link.hub.deliver(&phone.pubkey_hex, &earlier, false);
             let (mut ws, answer) = hello(&endpoint, &pin, &phone, now_secs() - 60).await;
             assert_eq!(answer, DirectFrame::Ready);
             assert_eq!(next_frame(&mut ws).await, DirectFrame::Event(earlier));
 
             // Published while connected: pushed at once, again only its own.
-            link.hub.deliver(&phone.pubkey_hex, &copy(&bridge, 24515, &phone.pubkey_hex, "theirs", "live"));
+            link.hub.deliver(&phone.pubkey_hex, &copy(&bridge, 24515, &phone.pubkey_hex, "theirs", "live"), false);
             let live = event(&bridge, 24515, &phone.pubkey_hex, "live");
-            link.hub.deliver(&phone.pubkey_hex, &live);
+            link.hub.deliver(&phone.pubkey_hex, &live, false);
             assert_eq!(next_frame(&mut ws).await, DirectFrame::Event(live));
 
             // A command goes to the engine as a relay's would, and is OKed.
@@ -143,6 +143,49 @@ async fn wait_until(cond: impl Fn() -> bool) {
         assert!(std::time::Instant::now() < deadline, "timed out");
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+}
+
+/// The live kind carries a phone's keystrokes into the engine the same way a
+/// command does, and terminal output reaches the phone on a lane that never
+/// overtakes a normal frame.
+#[tokio::test]
+async fn a_paired_phone_sends_live_input_and_terminal_output_never_jumps_a_normal_frame() {
+    LocalSet::new()
+        .run_until(async {
+            let home = tempfile::tempdir().unwrap();
+            let (bridge, phone) = (generate_keypair(), generate_keypair());
+            let (inputs, mut engine) = mpsc::unbounded_channel();
+            let config = DirectConfig { listen: Some("127.0.0.1:0".parse().unwrap()), ..Default::default() };
+            let mut link = direct::start(&config, home.path(), bridge.pubkey_hex.clone(), inputs).await.unwrap().unwrap();
+            let endpoint = link.info.endpoints[0].clone();
+            let pin = link.info.cert_sha256.clone().unwrap();
+            link.hub.set_paired(std::slice::from_ref(&phone.pubkey_hex));
+            let (mut ws, answer) = hello(&endpoint, &pin, &phone, now_secs() - 60).await;
+            assert_eq!(answer, DirectFrame::Ready);
+
+            // Terminal input on the live kind: accepted, and the engine is
+            // told which kind it was.
+            let input = event(&phone, LIVE_KIND, &bridge.pubkey_hex, "keystrokes");
+            send(&mut ws, DirectFrame::Event(input.clone())).await;
+            assert_eq!(next_frame(&mut ws).await, DirectFrame::Ok { id: input.id.clone(), accepted: true, message: String::new() });
+            match engine.recv().await {
+                Some(Input::RelayEvent { event, via: Via::Direct }) => assert_eq!((event.id, event.kind), (input.id, LIVE_KIND)),
+                _ => panic!("expected the live event"),
+            }
+
+            // A normal frame and a terminal one queued together: the normal
+            // one goes first, the terminal one after — a terminal never
+            // overtakes the phone's other traffic.
+            let normal = event(&bridge, 4516, &phone.pubkey_hex, "normal");
+            let output = copy(&bridge, LIVE_KIND, &phone.pubkey_hex, MINE, "output");
+            link.hub.deliver(&phone.pubkey_hex, &normal, false);
+            link.hub.deliver(&phone.pubkey_hex, &output, true);
+            assert_eq!(next_frame(&mut ws).await, DirectFrame::Event(normal));
+            assert_eq!(next_frame(&mut ws).await, DirectFrame::Event(output));
+
+            link.shutdown();
+        })
+        .await;
 }
 
 /// The phone's link against the real server: up on the pinned endpoint,
@@ -192,7 +235,7 @@ async fn the_phone_link_talks_to_the_bridge() {
             assert_eq!(states.borrow().as_slice(), [Some(server.info.endpoints[0].clone())]);
 
             let live = event(&bridge, 24515, &phone.pubkey_hex, "live");
-            server.hub.deliver(&phone.pubkey_hex, &live);
+            server.hub.deliver(&phone.pubkey_hex, &live, false);
             wait_until(|| !events.borrow().is_empty()).await;
             assert_eq!(events.borrow()[0].id, live.id);
 

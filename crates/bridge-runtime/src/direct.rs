@@ -28,7 +28,7 @@ use futures_util::{SinkExt, StreamExt};
 use protocol::direct::{
     check_direct_auth, decode_direct_frame, encode_direct_frame, event_is_valid, DirectFrame, DirectInfo, OUTBOX_SECS,
 };
-use protocol::kinds::COMMAND_KIND;
+use protocol::kinds::{COMMAND_KIND, LIVE_KIND};
 use protocol::nostr_event::SignedEvent;
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -54,6 +54,12 @@ const OUTBOX_CAP: usize = 5000;
 /// Largest frame accepted from a phone. Commands are small; an image goes
 /// through Blossom or relay-sized chunks.
 const MAX_FRAME_BYTES: usize = 256 * 1024;
+/// How many terminal-output frames one connection may have waiting. Bounded,
+/// because a terminal is the bridge's lowest-priority traffic: when the lane
+/// is full the oldest frame is dropped, and the phone sees a gap in the
+/// terminal's byte offsets and asks for a replay from the ring. A lost frame
+/// costs a round trip, never the phone's other traffic.
+const TERMINAL_LANE_CAP: usize = 64;
 
 fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
@@ -98,6 +104,36 @@ struct Conn {
     /// The recipient tags its `HELLO` named: only those copies go to it.
     recipients: HashSet<String>,
     frames: mpsc::UnboundedSender<String>,
+    /// Terminal output for this connection, on a lane of its own: it goes out
+    /// only when `frames` has nothing waiting, so a terminal can never delay
+    /// the phone's other traffic.
+    term: Rc<TermLane>,
+}
+
+/// A connection's low-priority lane: terminal-output frames, bounded, oldest
+/// dropped first when full. Shared between the publisher (which pushes) and
+/// the connection's serve loop (which sends and is woken by it).
+#[derive(Default)]
+struct TermLane {
+    queue: RefCell<VecDeque<String>>,
+    wake: tokio::sync::Notify,
+}
+
+impl TermLane {
+    fn push(&self, frame: String) {
+        {
+            let mut queue = self.queue.borrow_mut();
+            if queue.len() >= TERMINAL_LANE_CAP {
+                queue.pop_front();
+            }
+            queue.push_back(frame);
+        }
+        self.wake.notify_one();
+    }
+
+    fn pop(&self) -> Option<String> {
+        self.queue.borrow_mut().pop_front()
+    }
 }
 
 impl Conn {
@@ -139,8 +175,10 @@ impl Hub {
     }
 
     /// `event`, published for `identity`: to its connections that read its
-    /// copy now, and to the outbox for one that resumes later.
-    pub fn deliver(&self, identity: &str, event: &SignedEvent) {
+    /// copy now, and to the outbox for one that resumes later. `terminal` says
+    /// the copy is terminal output, which rides the connection's low-priority
+    /// lane instead of its normal one.
+    pub fn deliver(&self, identity: &str, event: &SignedEvent, terminal: bool) {
         let now = now_secs();
         {
             let mut outbox = self.outbox.borrow_mut();
@@ -151,7 +189,11 @@ impl Hub {
         }
         let frame = encode_direct_frame(&DirectFrame::Event(event.clone()));
         for conn in self.conns.borrow().values().filter(|c| c.reads(identity, event)) {
-            let _ = conn.frames.send(frame.clone());
+            if terminal {
+                conn.term.push(frame.clone());
+            } else {
+                let _ = conn.frames.send(frame.clone());
+            }
         }
     }
 
@@ -167,13 +209,14 @@ impl Hub {
             .collect()
     }
 
-    fn register(&self, identity: &str, recipients: Vec<String>) -> (u64, mpsc::UnboundedReceiver<String>) {
+    fn register(&self, identity: &str, recipients: Vec<String>) -> (u64, mpsc::UnboundedReceiver<String>, Rc<TermLane>) {
         let id = self.next_id.get();
         self.next_id.set(id + 1);
         let (frames, rx) = mpsc::unbounded_channel();
-        let conn = Conn { identity: identity.to_string(), recipients: recipients.into_iter().collect(), frames };
+        let term = Rc::new(TermLane::default());
+        let conn = Conn { identity: identity.to_string(), recipients: recipients.into_iter().collect(), frames, term: Rc::clone(&term) };
         self.conns.borrow_mut().insert(id, conn);
-        (id, rx)
+        (id, rx, term)
     }
 
     fn unregister(&self, id: u64) {
@@ -185,9 +228,10 @@ impl Hub {
     }
 
     /// Hand a phone's event to the engine if it is a command from `identity`
-    /// to this bridge; the answer for its `OK`.
+    /// to this bridge, or terminal input on the live kind (the engine takes
+    /// only `terminal-input` on that kind); the answer for its `OK`.
     fn accept(&self, identity: &str, event: SignedEvent) -> Result<(), &'static str> {
-        if event.kind != COMMAND_KIND {
+        if event.kind != COMMAND_KIND && event.kind != LIVE_KIND {
             return Err("invalid: not a command");
         }
         if event.pubkey != identity {
@@ -384,20 +428,46 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(stream: S, hub: &Hub) {
         }
     };
 
-    let (id, mut outbound) = hub.register(&identity, recipients);
+    let (id, mut outbound, term) = hub.register(&identity, recipients);
     log::info!("[Direct] {}... connected", short(&identity));
     let mut ok = sink.send(send(&DirectFrame::Ready)).await.is_ok();
     for event in hub.since(id, since) {
         ok = ok && sink.send(send(&DirectFrame::Event(event))).await.is_ok();
     }
     while ok {
+        // The normal lane first, always: a terminal frame goes out only when
+        // nothing else is waiting. `try_recv` catches a frame already queued;
+        // the biased select below keeps the same order while blocking.
+        match outbound.try_recv() {
+            Ok(text) => {
+                ok = sink.send(Message::Text(text)).await.is_ok();
+                continue;
+            }
+            Err(mpsc::error::TryRecvError::Disconnected) => {
+                // Unpaired, or the bridge is stopping.
+                let _ = sink.send(send(&DirectFrame::Closed("closed".into()))).await;
+                break;
+            }
+            Err(mpsc::error::TryRecvError::Empty) => {}
+        }
         tokio::select! {
+            biased;
             frame = outbound.recv() => match frame {
                 Some(text) => ok = sink.send(Message::Text(text)).await.is_ok(),
                 None => {
                     // Unpaired, or the bridge is stopping.
                     let _ = sink.send(send(&DirectFrame::Closed("closed".into()))).await;
                     ok = false;
+                }
+            },
+            _ = term.wake.notified() => {
+                // Drain the lane: the normal lane was empty a moment ago, and
+                // draining keeps the notify permit from being missed.
+                while let Some(text) = term.pop() {
+                    if sink.send(Message::Text(text)).await.is_err() {
+                        ok = false;
+                        break;
+                    }
                 }
             },
             incoming = tokio::time::timeout(IDLE_TIMEOUT, source.next()) => match incoming {
@@ -524,9 +594,13 @@ mod tests {
     }
 
     fn command(from: &protocol::crypto::Keypair, to: &str) -> SignedEvent {
+        signed(from, to, COMMAND_KIND)
+    }
+
+    fn signed(from: &protocol::crypto::Keypair, to: &str, kind: u16) -> SignedEvent {
         let keys = nostr::Keys::new(from.secret_key.clone());
         let tag = nostr::Tag::public_key(nostr::PublicKey::from_hex(to).unwrap());
-        let event = nostr::EventBuilder::new(nostr::Kind::Custom(COMMAND_KIND), "x").tag(tag).sign_with_keys(&keys).unwrap();
+        let event = nostr::EventBuilder::new(nostr::Kind::Custom(kind), "x").tag(tag).sign_with_keys(&keys).unwrap();
         SignedEvent::from_nostr(&event)
     }
 
@@ -546,17 +620,17 @@ mod tests {
         let old = copy_for("p1", now - OUTBOX_SECS - 5);
         let (mine, other_client, untagged) = (copy_for("p1", now), copy_for("p2", now), command(&generate_keypair(), &generate_keypair().pubkey_hex));
         for event in [&old, &mine, &other_client, &untagged] {
-            hub.deliver("p", event);
+            hub.deliver("p", event, false);
         }
         // Another identity naming p's tag reads nothing of p's.
-        hub.deliver("q", &copy_for("q1", now));
-        let (p1, _) = hub.register("p", vec!["p1".into()]);
-        let (q, _) = hub.register("q", vec!["p1".into()]);
+        hub.deliver("q", &copy_for("q1", now), false);
+        let (p1, _, _) = hub.register("p", vec!["p1".into()]);
+        let (q, _, _) = hub.register("q", vec!["p1".into()]);
         assert_eq!(hub.since(p1, 0), std::slice::from_ref(&mine), "the stale one was dropped; only p1's copy");
         assert!(hub.since(p1, mine.created_at + 1).is_empty());
         assert!(hub.since(q, 0).is_empty());
         hub.set_paired(&["p".into()]);
-        let (q1, _) = hub.register("q", vec!["q1".into()]);
+        let (q1, _, _) = hub.register("q", vec!["q1".into()]);
         assert!(hub.since(q1, 0).is_empty(), "an unpaired identity's events go");
     }
 
@@ -575,6 +649,40 @@ mod tests {
         let auth = build_auth_event(&phone, "wss://x", "c", now_secs() * 1000).unwrap();
         assert!(hub.accept(&phone.pubkey_hex, auth).is_err(), "not a command");
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn terminal_input_on_the_live_kind_is_accepted_from_the_same_identity() {
+        let (inputs, mut rx) = mpsc::unbounded_channel();
+        let (bridge, phone) = (generate_keypair(), generate_keypair());
+        let hub = Hub::new(bridge.pubkey_hex.clone(), inputs);
+        // The keystrokes ride the live kind; the engine routes them by kind,
+        // so it is set here too.
+        assert!(hub.accept(&phone.pubkey_hex, signed(&phone, &bridge.pubkey_hex, LIVE_KIND)).is_ok());
+        assert!(matches!(rx.try_recv(), Ok(Input::RelayEvent { event, via: Via::Direct }) if event.kind == LIVE_KIND));
+        // Still only from the authenticated identity, and to this bridge.
+        assert!(hub.accept(&phone.pubkey_hex, signed(&generate_keypair(), &bridge.pubkey_hex, LIVE_KIND)).is_err());
+        assert!(hub.accept(&phone.pubkey_hex, signed(&phone, &generate_keypair().pubkey_hex, LIVE_KIND)).is_err());
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_connections_terminal_lane_drops_the_oldest_when_full() {
+        let lane = TermLane::default();
+        for i in 0..TERMINAL_LANE_CAP {
+            lane.push(format!("f{i}"));
+        }
+        assert_eq!(lane.pop().as_deref(), Some("f0"));
+        // Refill to the cap and then one more: the oldest of what is left
+        // goes, and the newest is kept, so the phone sees a gap and replays.
+        lane.push("a".into());
+        lane.push("b".into());
+        assert_eq!(lane.pop().as_deref(), Some("f2"));
+        let mut last = None;
+        while let Some(f) = lane.pop() {
+            last = Some(f);
+        }
+        assert_eq!(last.as_deref(), Some("b"));
     }
 
     #[test]

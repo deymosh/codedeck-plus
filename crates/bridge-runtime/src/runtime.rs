@@ -105,6 +105,10 @@ struct Runtime {
     uploads: Rc<RefCell<Uploads>>,
     pairing_urls: Option<mpsc::UnboundedSender<String>>,
     direct: Option<crate::direct::Direct>,
+    /// Whether the relay subscription also carries the live kind, so a paired
+    /// phone's terminal input reaches the bridge over a relay. True only when
+    /// the owner allows a terminal over relays.
+    terminals_on_relays: bool,
     /// The ptys behind the terminals the engine decided to open, with their
     /// rings of output and their recordings. Empty unless the owner turned
     /// terminals on: the engine emits no terminal effect otherwise.
@@ -145,6 +149,11 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
         idle_secs: config.terminal.idle_minutes * 60,
         allowlist,
     };
+    // Whether the bridge must hear a phone's keystrokes over a relay as well
+    // as its own link. Off unless the owner allows a terminal over relays, so
+    // a bridge without that never subscribes to the live kind and a relay
+    // never sees one.
+    let terminals_on_relays = config.terminal.enabled && config.terminal.relays_allowed;
     let first_root = config.workspace_roots[0].clone();
     if let Some(keep) = config.transcript_keep_last {
         engine_config.transcript_keep_last = keep;
@@ -205,6 +214,7 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
         uploads: Rc::new(RefCell::new(Uploads::new(&first_root))),
         pairing_urls: options.pairing_urls,
         direct,
+        terminals_on_relays,
         terminals,
         audit,
         allowlist: Rc::new(RefCell::new(allowlist_cache)),
@@ -352,7 +362,7 @@ impl Runtime {
                 if let Some(direct) = &self.direct {
                     direct.hub.set_paired(&filter.authors);
                 }
-                self.relays.subscribe_commands(filter.authors, filter.since);
+                self.relays.subscribe_commands(filter.authors, filter.since, self.terminals_on_relays);
             }
             Effect::OpenPairingSubscription { since } => self.relays.open_pairing(since),
             Effect::ClosePairingSubscription => self.relays.close_pairing(),

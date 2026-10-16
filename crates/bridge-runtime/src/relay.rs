@@ -31,7 +31,9 @@ use protocol::kinds::{
 };
 use protocol::recipients::{self, fragment_d};
 use protocol::nostr_event::SignedEvent;
-use protocol::events::{OutputMsg, PartialMsg};
+use protocol::events::{OutputMsg, PartialMsg, TerminalOutputMsg};
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
 use futures_util::future::LocalBoxFuture;
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use std::collections::VecDeque;
@@ -43,7 +45,16 @@ pub fn kind_for(message: &BridgeToPhone) -> (u16, Option<u64>) {
         BridgeToPhone::Sessions(_) => (SESSION_LIST_KIND, Some(SESSION_LIST_EXPIRY_SECONDS)),
         // A partial is the one that must never be stored: it is only text on
         // its way to the entry that completes it.
-        BridgeToPhone::Output(_) | BridgeToPhone::Usage(_) | BridgeToPhone::Partial(_) => (LIVE_KIND, None),
+        // Terminal output rides the live kind too: it is the other half of
+        // the terminal's byte stream, and a relay must never store it — the
+        // bytes a shell printed can hold a secret, and a stored frame would
+        // outlive the terminal itself. Loss is fine: every frame carries the
+        // terminal's byte offset, and a phone that sees a gap replays from
+        // the ring.
+        BridgeToPhone::Output(_)
+        | BridgeToPhone::Usage(_)
+        | BridgeToPhone::Partial(_)
+        | BridgeToPhone::TerminalOutput(_) => (LIVE_KIND, None),
         _ => (RESPONSE_KIND, Some(RESPONSE_EXPIRY_SECONDS)),
     }
 }
@@ -264,6 +275,9 @@ fn lane_of(message: &BridgeToPhone) -> Option<String> {
         // In its session's lane, so it never lands after the entry that
         // completes its part, and never holds up anything else.
         BridgeToPhone::Partial(p) => Some(format!("output {}", p.session_id)),
+        // A terminal's output in a lane of its own: one terminal's burst
+        // never delays another's, and neither delays a session's.
+        BridgeToPhone::TerminalOutput(t) => Some(format!("terminal {}", t.term)),
         BridgeToPhone::Sessions(_) => Some("heartbeat".to_string()),
         _ => None,
     }
@@ -358,15 +372,184 @@ impl Flight {
     }
 }
 
+/// Terminal output over the relays is paced, not passed through. A shell
+/// writes as fast as it likes, and the runtime hands the bridge one frame at
+/// most every 16 ms; a relay must see far less, or a terminal spends the
+/// bridge's rate limit and gets its commands throttled with it. Frames for
+/// one terminal are merged while they wait — they are contiguous byte ranges,
+/// so merging is appending the bytes and keeping the first offset — and one
+/// merged frame goes out per window, at most ten a second whatever the shell
+/// does. This is the bridge's lowest-priority traffic.
+const TERMINAL_FLUSH: std::time::Duration = std::time::Duration::from_millis(100);
+/// The most merged bytes held for one terminal before the oldest are dropped.
+/// The phone then sees a gap in the terminal's byte offsets and asks for a
+/// replay from the ring — the recovery the design already has — so the bridge
+/// holds a bounded amount for a terminal that outruns the relays.
+const TERMINAL_PENDING_MAX_BYTES: usize = 256 * 1024;
+
+/// Terminal output waiting for its flush window, one entry per (terminal,
+/// clients) pair.
+#[derive(Default)]
+struct TerminalPace {
+    pending: Vec<PendingTerminal>,
+}
+
+struct PendingTerminal {
+    to: Vec<Addressee>,
+    term: String,
+    /// The first byte of the merged range.
+    offset: u64,
+    /// The merged bytes, contiguous from `offset`.
+    data: Vec<u8>,
+    /// When this terminal's window is up.
+    due: tokio::time::Instant,
+}
+
+impl PendingTerminal {
+    /// Whether `msg` continues this range: the same terminal, the same
+    /// clients, and the byte straight after what is held.
+    fn continues(&self, to: &[Addressee], msg: &TerminalOutputMsg) -> bool {
+        self.term == msg.term && self.to.as_slice() == to && self.offset + self.data.len() as u64 == msg.offset
+    }
+}
+
+impl TerminalPace {
+    /// Fold one frame in: append it to the terminal's pending range, or start
+    /// one. Only a frame that continues a range is appended; one that does not
+    /// starts an entry of its own — the design makes frames contiguous, so
+    /// this is the safe fallback, not the common case.
+    fn merge(&mut self, to: Vec<Addressee>, msg: &TerminalOutputMsg, now: tokio::time::Instant) {
+        let bytes = STANDARD.decode(&msg.data).unwrap_or_default();
+        if let Some(p) = self.pending.iter_mut().find(|p| p.continues(&to, msg)) {
+            p.data.extend_from_slice(&bytes);
+            // Past the cap, drop the oldest: a gap the phone replays from the
+            // ring.
+            if p.data.len() > TERMINAL_PENDING_MAX_BYTES {
+                let drop = p.data.len() - TERMINAL_PENDING_MAX_BYTES;
+                p.data.drain(..drop);
+                p.offset += drop as u64;
+            }
+            return;
+        }
+        self.pending.push(PendingTerminal { to, term: msg.term.clone(), offset: msg.offset, data: bytes, due: now + TERMINAL_FLUSH });
+    }
+
+    /// Take the terminal-output jobs queued right behind the front into the
+    /// range they continue, so they cost one event rather than one each.
+    fn absorb(&mut self, backlog: &mut VecDeque<Job>, now: tokio::time::Instant) {
+        while let Some(Job::Publish { to, message }) = backlog.front() {
+            let BridgeToPhone::TerminalOutput(msg) = message.as_ref() else { break };
+            if !self.pending.iter().any(|p| p.continues(to, msg)) {
+                break;
+            }
+            let Some(Job::Publish { to, message }) = backlog.pop_front() else { break };
+            let BridgeToPhone::TerminalOutput(msg) = *message else { break };
+            self.merge(to, &msg, now);
+        }
+    }
+
+    fn has_pending(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
+    /// The pending entries whose window is up, removed.
+    fn take_due(&mut self, now: tokio::time::Instant) -> Vec<PendingTerminal> {
+        let mut ready = Vec::new();
+        let mut wait = Vec::new();
+        for p in self.pending.drain(..) {
+            if p.due <= now {
+                ready.push(p);
+            } else {
+                wait.push(p);
+            }
+        }
+        self.pending = wait;
+        ready
+    }
+
+    /// Every pending entry, for a flush.
+    fn take_all(&mut self) -> Vec<PendingTerminal> {
+        std::mem::take(&mut self.pending)
+    }
+
+    /// Resolves when the earliest pending window is up (never, with none).
+    async fn wait_due(&self) {
+        if let Some(due) = self.pending.iter().map(|p| p.due).min() {
+            tokio::time::sleep_until(due).await;
+        }
+    }
+}
+
+/// Send what a terminal has merged whose window is up (`all` for a flush).
+/// Each goes on its terminal's own lane, so a terminal never waits on a
+/// session's publish.
+async fn flush_terminals(
+    terminal: &mut TerminalPace,
+    factory: &mut EventFactory,
+    flight: &mut Flight,
+    publisher: &WsTransport,
+    direct: Option<&Rc<crate::direct::Hub>>,
+    all: bool,
+) {
+    let ready = if all { terminal.take_all() } else { terminal.take_due(tokio::time::Instant::now()) };
+    for p in ready {
+        let message = BridgeToPhone::TerminalOutput(TerminalOutputMsg { term: p.term, offset: p.offset, data: STANDARD.encode(&p.data) });
+        let lane = lane_of(&message);
+        match &lane {
+            Some(lane) => flight.room_in(lane).await,
+            None => flight.land_all().await,
+        }
+        send_message(factory, flight, publisher, direct, lane, p.to, &message).await;
+    }
+}
+
+/// Build the events for one message to `to`, hand each copy to the direct link
+/// and start its relay publish. The caller has already waited for the lane to
+/// be free.
+async fn send_message(
+    factory: &mut EventFactory,
+    flight: &mut Flight,
+    publisher: &WsTransport,
+    direct: Option<&Rc<crate::direct::Hub>>,
+    lane: Option<String>,
+    to: Vec<Addressee>,
+    message: &BridgeToPhone,
+) {
+    let beat = matches!(message, BridgeToPhone::Sessions(_));
+    // Terminal output rides the direct link's low-priority lane; every other
+    // copy rides its normal one.
+    let is_terminal = matches!(message, BridgeToPhone::TerminalOutput(_));
+    for addressee in to {
+        let events = match factory.events(message, &addressee, now_secs()) {
+            Ok(events) => events,
+            Err(err) => {
+                let phone = &addressee.phone;
+                log::error!("[Relays] Could not build an event for {}...: {err}", &phone[..8.min(phone.len())]);
+                continue;
+            }
+        };
+        if let Some(direct) = direct {
+            for event in &events {
+                direct.deliver(&addressee.phone, event, is_terminal);
+            }
+        }
+        let beat = beat.then(|| flight.next_beat(&addressee.phone));
+        let sending = send(publisher.clone(), flight.quiet.clone(), lane.clone(), addressee.phone, beat, events);
+        match &lane {
+            Some(lane) => flight.start(lane, sending),
+            // Out of any lane: nothing overlaps it.
+            None => flight.settle(sending.await),
+        }
+    }
+}
+
 enum Job {
     Publish { to: Vec<Addressee>, message: Box<BridgeToPhone> },
     /// Resolves once every job queued before it is done.
     Flush(oneshot::Sender<()>),
     /// A relay's socket came up or went down.
     RelaysChanged,
-}
-
-/// The relay connections, the bridge's subscriptions on them, and the
+}/// The relay connections, the bridge's subscriptions on them, and the
 /// publish queue. Single-threaded (the transport is).
 pub struct Relays {
     transport: WsTransport,
@@ -403,7 +586,14 @@ impl Relays {
             // Jobs taken off the queue but not yet done: the outputs queued
             // behind a publish go out together with it.
             let mut backlog: VecDeque<Job> = VecDeque::new();
+            // Terminal output waiting for its flush window (see TerminalPace).
+            let mut terminal = TerminalPace::default();
             loop {
+                // A terminal whose window is up goes out before anything else
+                // this turn. Doing it here, not only when the queue is idle,
+                // is what keeps a busy backlog from starving a terminal: the
+                // send is on the terminal's own lane, so it waits on nothing.
+                flush_terminals(&mut terminal, &mut factory, &mut flight, &publisher, direct.as_ref(), false).await;
                 let job = match backlog.pop_front() {
                     Some(job) => job,
                     None => tokio::select! {
@@ -415,14 +605,34 @@ impl Relays {
                             flight.settle(sent);
                             continue;
                         }
+                        // A terminal's window is up: wake the loop, which
+                        // sends it above.
+                        _ = terminal.wait_due(), if terminal.has_pending() => continue,
                     },
                 };
                 match job {
                     Job::Flush(done) => {
+                        // What a terminal merged is part of what a flush
+                        // promises has gone out.
+                        flush_terminals(&mut terminal, &mut factory, &mut flight, &publisher, direct.as_ref(), true).await;
                         flight.land_all().await;
                         let _ = done.send(());
                     }
                     Job::Publish { to, mut message } => {
+                        if matches!(message.as_ref(), BridgeToPhone::TerminalOutput(_)) {
+                            // Paced, not passed through: merge it into the
+                            // terminal's pending range and let its window
+                            // carry it out.
+                            while let Ok(next) = queue.try_recv() {
+                                backlog.push_back(next);
+                            }
+                            let now = tokio::time::Instant::now();
+                            if let BridgeToPhone::TerminalOutput(msg) = message.as_ref() {
+                                terminal.merge(to, msg, now);
+                            }
+                            terminal.absorb(&mut backlog, now);
+                            continue;
+                        }
                         let lane = lane_of(&message);
                         match &lane {
                             Some(lane) => flight.room_in(lane).await,
@@ -445,28 +655,7 @@ impl Relays {
                         if beat && superseded(&to, &backlog) {
                             continue;
                         }
-                        for addressee in to {
-                            let events = match factory.events(&message, &addressee, now_secs()) {
-                                Ok(events) => events,
-                                Err(err) => {
-                                    let phone = &addressee.phone;
-                                    log::error!("[Relays] Could not build an event for {}...: {err}", &phone[..8.min(phone.len())]);
-                                    continue;
-                                }
-                            };
-                            if let Some(direct) = &direct {
-                                for event in &events {
-                                    direct.deliver(&addressee.phone, event);
-                                }
-                            }
-                            let beat = beat.then(|| flight.next_beat(&addressee.phone));
-                            let sending = send(publisher.clone(), flight.quiet.clone(), lane.clone(), addressee.phone, beat, events);
-                            match &lane {
-                                Some(lane) => flight.start(lane, sending),
-                                // Out of any lane: nothing overlaps it.
-                                None => flight.settle(sending.await),
-                            }
-                        }
+                        send_message(&mut factory, &mut flight, &publisher, direct.as_ref(), lane, to, &message).await;
                     }
                     Job::RelaysChanged => {
                         flight.land_all().await;
@@ -534,16 +723,24 @@ impl Relays {
         )
     }
 
-    /// Replace the command subscription (no paired phone = none).
-    pub fn subscribe_commands(&mut self, authors: Vec<String>, since: u64) {
+    /// Replace the command subscription (no paired phone = none). `live` also
+    /// subscribes to the live kind, so a paired phone's terminal input reaches
+    /// the bridge over a relay as its commands do. Only when the owner allows
+    /// a terminal over relays: off, the bridge keeps the plain command
+    /// subscription and a relay never sees a keystroke.
+    pub fn subscribe_commands(&mut self, authors: Vec<String>, since: u64, live: bool) {
         if let Some(old) = self.commands.take() {
             old.close();
         }
         if authors.is_empty() {
             return;
         }
+        let mut kinds = vec![COMMAND_KIND];
+        if live {
+            kinds.push(LIVE_KIND);
+        }
         let filter = Filter {
-            kinds: vec![COMMAND_KIND],
+            kinds,
             authors,
             p_tags: vec![self.bridge_pubkey.clone()],
             d_tags: vec![],
@@ -681,6 +878,22 @@ mod tests {
         let ev = f.events(&ack, &to(&phone.pubkey_hex), 1000).unwrap().remove(0);
         assert_eq!(ev.kind, RESPONSE_KIND);
         assert_eq!(tag(&ev, "expiration").unwrap().parse::<u64>().unwrap(), ev.created_at + 3600);
+
+        // Terminal output rides the live kind and is never stored: the bytes
+        // a shell printed may hold a secret, and a stored frame would outlive
+        // the terminal.
+        let out = BridgeToPhone::TerminalOutput(TerminalOutputMsg { term: "t".into(), offset: 0, data: "aGk=".into() });
+        let ev = f.events(&out, &to(&phone.pubkey_hex), 1000).unwrap().remove(0);
+        assert_eq!((ev.kind, tag(&ev, "expiration")), (LIVE_KIND, None));
+        // The small, state-like terminal messages are stored responses: a
+        // phone that was briefly away still learns a terminal opened or ended.
+        let opened = BridgeToPhone::TerminalOpened(protocol::events::TerminalOpenedMsg {
+            open_id: "o".into(),
+            term: "t".into(),
+            shell: "/bin/sh".into(),
+        });
+        let ev = f.events(&opened, &to(&phone.pubkey_hex), 1000).unwrap().remove(0);
+        assert_eq!(ev.kind, RESPONSE_KIND);
     }
 
     fn to(phone: &str) -> Addressee {
@@ -835,6 +1048,92 @@ mod tests {
         assert!(lane_of(&heartbeat()).is_some());
         let end = BridgeToPhone::SyncEnd(protocol::events::SyncEndMsg { session_id: "s".into(), sync_id: "y".into(), delivered_ranges: vec![] });
         assert_eq!(lane_of(&end), None);
+        // Each terminal's output overlaps another's, and never a session's.
+        let a = lane_of(&BridgeToPhone::TerminalOutput(output_msg("t", 0, b"a")));
+        let b = lane_of(&BridgeToPhone::TerminalOutput(output_msg("u", 0, b"a")));
+        assert!(a.is_some() && b.is_some() && a != b);
+        assert_ne!(a, lane_of(&BridgeToPhone::Output(output("s", 1, &["a"]))));
+    }
+
+    fn output_msg(term: &str, offset: u64, data: &[u8]) -> TerminalOutputMsg {
+        TerminalOutputMsg { term: term.into(), offset, data: STANDARD.encode(data) }
+    }
+
+    fn term_job(to: &[Addressee], msg: TerminalOutputMsg) -> Job {
+        Job::Publish { to: to.to_vec(), message: Box::new(BridgeToPhone::TerminalOutput(msg)) }
+    }
+
+    #[test]
+    fn terminal_output_merges_into_one_range_and_goes_once_a_window() {
+        let phone = [to("p")];
+        let t0 = tokio::time::Instant::now();
+        let mut pace = TerminalPace::default();
+        pace.merge(phone.to_vec(), &output_msg("t", 0, b"ab"), t0);
+        pace.merge(phone.to_vec(), &output_msg("t", 2, b"cd"), t0);
+        // Contiguous frames merge, and the window starts with the first.
+        assert_eq!(pace.pending.len(), 1);
+        assert_eq!((pace.pending[0].offset, pace.pending[0].data.as_slice()), (0, &b"abcd"[..]));
+        assert!(pace.take_due(t0).is_empty(), "not due yet");
+        let ready = pace.take_due(t0 + TERMINAL_FLUSH);
+        assert_eq!((ready.len(), ready[0].offset, ready[0].data.as_slice()), (1, 0, &b"abcd"[..]));
+        assert!(!pace.has_pending());
+    }
+
+    #[test]
+    fn a_terminal_frame_that_does_not_continue_the_range_starts_its_own() {
+        let phone = [to("p")];
+        let t0 = tokio::time::Instant::now();
+        let mut pace = TerminalPace::default();
+        pace.merge(phone.to_vec(), &output_msg("t", 0, b"ab"), t0);
+        // A gap (a dropped frame) must not be papered over by appending.
+        pace.merge(phone.to_vec(), &output_msg("t", 5, b"cd"), t0);
+        assert_eq!(pace.pending.len(), 2);
+        assert_eq!(pace.pending[1].offset, 5);
+    }
+
+    #[test]
+    fn terminal_output_past_the_cap_drops_the_oldest_bytes() {
+        let phone = [to("p")];
+        let t0 = tokio::time::Instant::now();
+        let mut pace = TerminalPace::default();
+        let half = TERMINAL_PENDING_MAX_BYTES / 2;
+        pace.merge(phone.to_vec(), &output_msg("t", 0, &vec![b'a'; half]), t0);
+        pace.merge(phone.to_vec(), &output_msg("t", half as u64, &vec![b'b'; half]), t0);
+        pace.merge(phone.to_vec(), &output_msg("t", (half * 2) as u64, &vec![b'c'; half]), t0);
+        assert_eq!(pace.pending[0].data.len(), TERMINAL_PENDING_MAX_BYTES);
+        // The oldest bytes are gone, so the offset the phone is told to draw
+        // from has moved: it sees a gap and replays from the ring.
+        assert_eq!(pace.pending[0].offset, half as u64);
+        assert_eq!(pace.pending[0].data[0], b'b');
+    }
+
+    #[test]
+    fn terminal_jobs_queued_behind_a_frame_join_it() {
+        let phone = [to("p")];
+        let t0 = tokio::time::Instant::now();
+        let mut pace = TerminalPace::default();
+        pace.merge(phone.to_vec(), &output_msg("t", 0, b"a"), t0);
+        let mut backlog = VecDeque::from([
+            term_job(&phone, output_msg("t", 1, b"b")),
+            // Another terminal, then a gap: both stay.
+            term_job(&phone, output_msg("u", 0, b"x")),
+            term_job(&phone, output_msg("t", 9, b"c")),
+        ]);
+        pace.absorb(&mut backlog, t0);
+        assert_eq!((pace.pending.len(), pace.pending[0].data.as_slice(), backlog.len()), (1, &b"ab"[..], 2));
+    }
+
+    #[tokio::test]
+    async fn a_terminal_window_that_is_not_due_does_not_block() {
+        // `wait_due` resolves only once the window is up; with nothing
+        // pending it is never awaited (the select guards on `has_pending`).
+        let t0 = tokio::time::Instant::now();
+        let mut pace = TerminalPace::default();
+        pace.merge(vec![to("p")], &output_msg("t", 0, b"a"), t0);
+        let waited = tokio::time::timeout(TERMINAL_FLUSH / 2, pace.wait_due()).await;
+        assert!(waited.is_err(), "the window is not up yet");
+        tokio::time::sleep(TERMINAL_FLUSH).await;
+        tokio::time::timeout(std::time::Duration::from_millis(50), pace.wait_due()).await.expect("the window is up");
     }
 
     fn sent(lane: &str, phone: &str, beat: Option<u64>, delivered: bool) -> Sent {
