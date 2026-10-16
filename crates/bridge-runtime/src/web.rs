@@ -14,7 +14,8 @@
 //! a signed command, which the engine matches (`engine::web`). Until then the
 //! browser sees only the sign-in page. The session lives in a cookie the
 //! server alone can read, and only HTTPS carries it (`__Host-`, `Secure`,
-//! `HttpOnly`, `SameSite=Strict`); it lapses after [`SESSION_TTL_MS`].
+//! `HttpOnly`, `SameSite=Strict`); it lapses after 30 days, and a restart
+//! ends it, since signed-in browsers are kept in memory only.
 //!
 //! Hardening, since a LAN or VPN is not a trusted place:
 //! - the `Host` must be an IP address, `localhost`, or a host the direct
