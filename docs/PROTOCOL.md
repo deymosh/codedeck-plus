@@ -767,6 +767,27 @@ spec.
   each authored by the identity that said `HELLO`; the engine accepts only
   `terminal-input` on the live kind, so nothing else can ride it in.
 
+### Web page sign-in
+
+The bridge serves a web page on its direct link's `wss://` port (the
+bridge's side is in [`BRIDGE.md`](BRIDGE.md#web-page)). A browser signs in
+with a paired phone, never a password: the page shows a code of 8
+characters (`ABCD-EFGH`, from an alphabet without look-alikes) and a QR of
+`codedeck://web-sign-in?machine=<npub>&code=<code>`.
+
+- `web-sign-in {code}` (phone → bridge, a signed command like any other).
+  The bridge reads the code in any case, with or without its dash, and
+  matches it against the codes its page is showing: each works once, for
+  5 minutes.
+- `web-sign-in-result {code, signedIn}` to the asking client. `code` is the
+  code exactly as the phone sent it, so the phone can tell which attempt
+  this answers; `signedIn` false means mistyped, expired or already used.
+- A phone sends a scanned code only to the machine its QR names: a code
+  shown by one bridge must never sign in another's page.
+
+Cost: two small command-class events per sign-in, nothing while no one
+signs in.
+
 ### Version and capabilities
 
 Every message, both ways, carries `v`: its sender's protocol version (12),
