@@ -328,7 +328,12 @@ opens a real shell on the bridge's machine:
   not act learns at once — takeovers and closes are audited this way.
 - The heartbeat's `terminals[]` (`TerminalInfo {term, shell, opened, device,
   name?, writer, cols, rows}`) lists what is open, so a phone shows one it
-  did not open.
+  did not open. It lists only the receiving identity's OWN terminals: a
+  terminal belongs to the identity that opened it, so another identity's
+  heartbeat does not name it at all — not its id, its shell, nor the device
+  running it. An identity with a terminal open receives a heartbeat event of
+  its own, carrying the same `rev` as the shared list; an identity with none
+  receives the shared list unchanged.
 - **The device id** names a client across its key rotations: the first 16
   bytes, in hex, of `sha256("codedeck/device\0" + first session key + "\0")`,
   the FIRST key the client granted this bridge — the one its `replaces`

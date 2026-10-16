@@ -129,6 +129,11 @@ impl World {
         self.rig.phone_event_via_key(&phone, key, msg, Via::Direct);
     }
 
+    /// The same, from another paired identity's client.
+    fn command_as(&mut self, phone: &Keypair, key: &Keypair, msg: Value) {
+        self.rig.phone_event_via_key(phone, key, msg, Via::Direct);
+    }
+
     /// The same, over a relay.
     fn command_via_relay(&mut self, msg: Value) {
         let phone = self.rig.phone.clone();
@@ -334,6 +339,21 @@ fn heartbeat_capabilities(msgs: &[Published]) -> Vec<String> {
         .collect()
 }
 
+/// What each heartbeat listed, as `(identity it went to, its terminals)`: one
+/// entry per addressed identity, since several clients of one identity share
+/// a copy.
+fn heartbeat_terminals_by_identity(msgs: &[Published]) -> Vec<(String, Vec<TerminalInfo>)> {
+    let mut out = Vec::new();
+    for (to, m) in msgs {
+        let BridgeToPhone::Sessions(s) = m else { continue };
+        let terms = s.terminals.clone().unwrap_or_default();
+        for addressee in to {
+            out.push((addressee.phone.clone(), terms.clone()));
+        }
+    }
+    out
+}
+
 // --- the gates ---
 
 #[test]
@@ -381,6 +401,83 @@ fn the_heartbeat_advertises_terminals_and_lists_what_runs() {
     let msgs = world.messages();
     assert!(heartbeat_terminals(&msgs).is_empty());
     assert!(only(&msgs).iter().any(|m| matches!(m, BridgeToPhone::Sessions(s) if s.terminals.is_none())));
+}
+
+#[test]
+fn a_heartbeat_names_only_the_identity_that_opened_the_terminal() {
+    let mut world = World::new();
+    let other_phone = generate_keypair();
+    let other_client = generate_keypair();
+    world.pair_identity(&other_phone, &other_client, "Other's phone");
+
+    // With no terminal open anywhere, a heartbeat is still one publish to
+    // every identity: the second identity costs nothing while it has none.
+    world.rig.input(Input::WorkspaceChanged);
+    let msgs = world.messages();
+    assert_eq!(msgs.len(), 1, "one publish, as before");
+    assert_eq!(msgs[0].0.len(), 2, "addressed to both identities");
+    assert!(matches!(&msgs[0].1, BridgeToPhone::Sessions(s) if s.terminals.is_none()));
+
+    // A opens one. A's heartbeat names it; the other identity's names
+    // neither it nor the device running it.
+    let term = world.open();
+    world.rig.input(Input::WorkspaceChanged);
+    let msgs = world.messages();
+    let listed = heartbeat_terminals_by_identity(&msgs);
+    let mine = listed.iter().find(|(phone, _)| phone == &world.rig.phone.pubkey_hex).expect("A is sent a heartbeat");
+    assert_eq!(mine.1.len(), 1);
+    assert_eq!(mine.1[0].term, term);
+    assert_eq!(mine.1[0].shell, "/bin/bash");
+    assert_eq!(mine.1[0].device, world.device);
+    let theirs = listed.iter().find(|(phone, _)| phone == &other_phone.pubkey_hex).expect("B is sent a heartbeat");
+    assert!(theirs.1.is_empty(), "B is told nothing of A's terminal");
+    assert!(
+        only(&msgs).iter().any(|m| matches!(m, BridgeToPhone::Sessions(s) if s.terminals.is_none())),
+        "B's copy omits the field rather than carrying an empty list"
+    );
+    // Two heartbeats now — A's own copy, and the one shared by the identities
+    // owning none — and both carry the same revision: it is one list.
+    assert_eq!(msgs.len(), 2);
+    let revs: Vec<u64> = msgs
+        .iter()
+        .filter_map(|(_, m)| match m {
+            BridgeToPhone::Sessions(s) => s.rev,
+            _ => None,
+        })
+        .collect();
+    assert_eq!(revs.len(), 2);
+    assert_eq!(revs[0], revs[1]);
+}
+
+#[test]
+fn an_identity_asking_for_a_list_is_answered_with_its_own_terminals_only() {
+    let mut world = World::new();
+    let term = world.open();
+
+    let other_phone = generate_keypair();
+    let other_client = generate_keypair();
+    world.pair_identity(&other_phone, &other_client, "Other's phone");
+    world.rig.take();
+
+    // The identity with no terminal asks for a list of its own: it is answered
+    // alone, and the answer names no terminal.
+    world.command_as(&other_phone, &other_client, json!({"v":12,"type":"refresh-sessions"}));
+    let (_, msgs) = world.take();
+    assert_eq!(msgs.len(), 1);
+    assert_eq!(msgs[0].0.len(), 1, "the asking client alone");
+    assert_eq!(msgs[0].0[0].phone, other_phone.pubkey_hex);
+    let BridgeToPhone::Sessions(answer) = &msgs[0].1 else { panic!("a heartbeat") };
+    assert!(answer.terminals.is_none(), "B is told nothing of A's terminal");
+
+    // The identity that opened it asks: its copy names its own terminal.
+    world.command(json!({"v":12,"type":"refresh-sessions"}));
+    let (_, msgs) = world.take();
+    assert_eq!(msgs.len(), 1);
+    assert_eq!(msgs[0].0[0].phone, world.rig.phone.pubkey_hex);
+    let BridgeToPhone::Sessions(answer) = &msgs[0].1 else { panic!("a heartbeat") };
+    let own = answer.terminals.clone().expect("A's own terminal is listed");
+    assert_eq!(own.len(), 1);
+    assert_eq!(own[0].term, term);
 }
 
 #[test]

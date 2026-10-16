@@ -484,12 +484,20 @@ impl Engine {
         self.terminals.enabled()
     }
 
-    /// The terminals open now, as the heartbeat lists them, so a phone that
-    /// comes back (or a second phone) sees what is running and can attach.
-    pub(crate) fn terminal_infos(&self) -> Vec<TerminalInfo> {
+    /// The terminals open now that belong to `identity`, as the heartbeat
+    /// lists them to that identity, so a phone that comes back (or a second
+    /// phone of the same identity) sees what is running and can attach.
+    ///
+    /// A terminal belongs to the identity that opened it, and only that
+    /// identity's clients may act on it: a heartbeat never names another
+    /// identity's terminal — not its id, its shell, nor the device running
+    /// it — which is what keeps one paired phone from learning what another
+    /// is doing on the machine.
+    pub(crate) fn terminal_infos(&self, identity: &str) -> Vec<TerminalInfo> {
         self.terminals
             .open
             .iter()
+            .filter(|(_, t)| t.identity == identity)
             .map(|(id, t)| TerminalInfo {
                 term: id.clone(),
                 shell: t.shell.clone(),

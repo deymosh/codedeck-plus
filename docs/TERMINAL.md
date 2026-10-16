@@ -166,7 +166,12 @@ All carry `v` like every message. `term` is a terminal id the bridge assigns.
 The open terminals ride the session list the bridge already publishes
 (`term`, `shell`, `opened`, `device`, `name`, `writer`, `cols`, `rows`), so a
 phone that comes back (or a second phone) sees them and can attach with
-`terminal-replay {from: 0}`.
+`terminal-replay {from: 0}`. That list holds **only the receiving identity's
+own terminals**: a terminal belongs to the identity that opened it, so no
+other paired identity's heartbeat names it — not its id, its shell, nor the
+device running it. An identity with a terminal open gets a heartbeat event of
+its own; one with none gets the single shared list, so the cost of a terminal
+is paid only by the identity that has it.
 
 **Every other device is told.** `terminal-event` goes to each present client
 of the identity, not just the one acting, and the phone shows it as a notice

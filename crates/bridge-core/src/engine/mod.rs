@@ -36,7 +36,7 @@ use std::collections::BTreeMap;
 use protocol::capabilities::{BridgeHostKind, ALL_BRIDGE_CAPABILITIES, TERMINAL};
 use protocol::common::{OutputEntry, RemoteSessionInfo, SessionState};
 use protocol::crypto::Keypair;
-use protocol::events::{BridgeToPhone, OutputMsg, SessionListMsg};
+use protocol::events::{BridgeToPhone, OutputMsg, SessionListMsg, TerminalInfo};
 
 use crate::catalog::Catalog;
 use crate::ingest::{since_for_connect, CommandsFilter, Ingest};
@@ -611,6 +611,17 @@ impl Engine {
     /// The session-list heartbeat: sessions, agents, credentials,
     /// capabilities, folders and tombstones. To every present client, or
     /// only to `to`.
+    ///
+    /// A terminal belongs to the identity that opened it, and only that
+    /// identity's clients may act on it, so its `terminals` list holds the
+    /// receiving identity's own terminals and no other identity ever hears of
+    /// them — not their ids, their shells, nor which device runs them. The
+    /// list is built once without terminals and goes out unchanged to every
+    /// identity that owns none (one publish, as before); each identity that
+    /// owns at least one gets a copy of its own. The cost is therefore one
+    /// extra heartbeat event per identity with a terminal open, and none for
+    /// the others. Every copy of one heartbeat carries the same `rev`: it is
+    /// the same session list.
     fn publish_list(&mut self, offline: bool, to: Option<Vec<Addressee>>) {
         self.list_dirty = false;
         if self.paired.is_empty() {
@@ -635,8 +646,10 @@ impl Engine {
         if self.terminals_enabled() {
             capabilities.push(TERMINAL.to_string());
         }
-        let terminals = self.terminal_infos();
-        let message = BridgeToPhone::Sessions(SessionListMsg {
+        // Built once, without terminals: an identity that owns none gets this
+        // one unchanged, and each identity that owns some gets a copy of its
+        // own. Every copy keeps this `rev` — they are one list.
+        let base = SessionListMsg {
             machine: self.config.machine.clone(),
             host: self.config.host_kind,
             sessions,
@@ -648,12 +661,44 @@ impl Engine {
             removed_sessions: (!removed.is_empty()).then_some(removed),
             machine_offline: offline.then_some(true),
             direct: self.config.direct.clone(),
-            terminals: (!terminals.is_empty()).then_some(terminals),
+            terminals: None,
             rev: Some(rev),
-        });
+        };
         match to {
-            Some(to) => self.out.publish_addressed(to, message),
-            None => self.publish_all(message),
+            // One copy per identity asked, carrying that identity's own
+            // terminals; several clients of one identity share it.
+            Some(to) => {
+                let mut by_phone: BTreeMap<String, Vec<Addressee>> = BTreeMap::new();
+                for addressee in to {
+                    by_phone.entry(addressee.phone.clone()).or_default().push(addressee);
+                }
+                for (identity, group) in by_phone {
+                    let own = self.terminal_infos(&identity);
+                    let mut list = base.clone();
+                    list.terminals = (!own.is_empty()).then_some(own);
+                    self.out.publish_addressed(group, BridgeToPhone::Sessions(list));
+                }
+            }
+            None => {
+                let mut shared = Vec::new();
+                let mut owners: Vec<(String, Vec<TerminalInfo>)> = Vec::new();
+                for phone in self.phones() {
+                    let own = self.terminal_infos(&phone);
+                    if own.is_empty() {
+                        shared.push(phone);
+                    } else {
+                        owners.push((phone, own));
+                    }
+                }
+                for (identity, own) in owners {
+                    let mut list = base.clone();
+                    list.terminals = Some(own);
+                    self.out.publish(vec![identity], BridgeToPhone::Sessions(list));
+                }
+                // Identities owning no terminal share one publish: the cost
+                // of a terminal is not paid by a phone that has none.
+                self.out.publish(shared, BridgeToPhone::Sessions(base));
+            }
         }
     }
 

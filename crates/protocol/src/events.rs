@@ -43,8 +43,11 @@ pub struct SessionListMsg {
     /// [`crate::direct`]). Absent when it serves no direct link.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub direct: Option<crate::direct::DirectInfo>,
-    /// The terminals open on this bridge now: what a phone shows without
-    /// having opened one itself. Absent or empty when there are none.
+    /// The terminals open on this bridge that belong to the identity this
+    /// list is addressed to. A terminal is only ever told to the identity
+    /// that opened it, so no other identity's heartbeat names one — not its
+    /// id, its shell, nor the device running it. Absent or empty when the
+    /// receiving identity has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminals: Option<Vec<TerminalInfo>>,
     /// The list's revision: strictly greater in each list the bridge
@@ -508,7 +511,8 @@ pub struct ProviderProfileAckMsg {
 
 // --- terminals ---
 
-/// One terminal open on the bridge, as the heartbeat's `terminals` lists it.
+/// One terminal open on the bridge, as the heartbeat's `terminals` lists it
+/// to the identity that opened it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminalInfo {
