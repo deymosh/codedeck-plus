@@ -304,6 +304,11 @@ pub struct Config {
     pub workspace_roots: Vec<PathBuf>,
     pub relay_register: Option<RegisterEndpoint>,
     pub blossom_register: Option<RegisterEndpoint>,
+    /// The admin endpoints as configured, with or without their token: the
+    /// page shows an endpoint and offers its token even before the token is
+    /// set (a register endpoint works only with both).
+    pub relay_register_endpoint: Option<String>,
+    pub blossom_register_endpoint: Option<String>,
     /// SOCKS5 proxy for all Nostr traffic (relays, Blossom, pubkey
     /// registration), as `host:port`.
     pub tor_proxy: Option<String>,
@@ -484,14 +489,10 @@ pub fn load(flags: &Flags) -> Result<Config, String> {
         (Some(url), Some(token)) => Some(RegisterEndpoint { url, token }),
         _ => None,
     };
-    let relay_register = register(
-        env("CODEDECK_RELAY_REGISTER_ENDPOINT").or(file.relay_register_endpoint),
-        env("CODEDECK_RELAY_REGISTER_TOKEN").or(file.relay_register_token),
-    );
-    let blossom_register = register(
-        env("CODEDECK_BLOSSOM_REGISTER_ENDPOINT").or(file.blossom_register_endpoint),
-        env("CODEDECK_BLOSSOM_REGISTER_TOKEN").or(file.blossom_register_token),
-    );
+    let relay_register_endpoint = env("CODEDECK_RELAY_REGISTER_ENDPOINT").or(file.relay_register_endpoint);
+    let blossom_register_endpoint = env("CODEDECK_BLOSSOM_REGISTER_ENDPOINT").or(file.blossom_register_endpoint);
+    let relay_register = register(relay_register_endpoint.clone(), env("CODEDECK_RELAY_REGISTER_TOKEN").or(file.relay_register_token));
+    let blossom_register = register(blossom_register_endpoint.clone(), env("CODEDECK_BLOSSOM_REGISTER_TOKEN").or(file.blossom_register_token));
     let tor_proxy = flags
         .tor_proxy
         .clone()
@@ -548,6 +549,8 @@ pub fn load(flags: &Flags) -> Result<Config, String> {
         workspace_roots,
         relay_register,
         blossom_register,
+        relay_register_endpoint,
+        blossom_register_endpoint,
         tor_proxy,
         transcript_keep_last,
         node_path: env("CODEDECK_NODE_PATH")
@@ -576,20 +579,22 @@ fn overridden_keys(flags: &Flags) -> BTreeSet<String> {
         }
     };
     mark(flags.machine_name.is_some() || env("CODEDECK_MACHINE_NAME").is_some(), "machineName");
-    mark(!flags.relays.is_empty() || env("CODEDECK_RELAYS").is_some(), "relays");
-    mark(!flags.workspaces.is_empty() || env("CODEDECK_WORKSPACE_ROOTS").is_some(), "workspaceRoots");
+    // An environment value `load` would not take (empty, unparsable) leaves
+    // the file in effect, so it is no override.
+    mark(!flags.relays.is_empty() || split_list(env("CODEDECK_RELAYS")).is_some(), "relays");
+    mark(!flags.workspaces.is_empty() || split_list(env("CODEDECK_WORKSPACE_ROOTS")).is_some(), "workspaceRoots");
     mark(env("CODEDECK_RELAY_REGISTER_ENDPOINT").is_some(), "relayRegisterEndpoint");
     mark(env("CODEDECK_RELAY_REGISTER_TOKEN").is_some(), "relayRegisterToken");
     mark(env("CODEDECK_BLOSSOM_REGISTER_ENDPOINT").is_some(), "blossomRegisterEndpoint");
     mark(env("CODEDECK_BLOSSOM_REGISTER_TOKEN").is_some(), "blossomRegisterToken");
-    mark(env("CODEDECK_TRANSCRIPT_KEEP_LAST").is_some(), "transcriptKeepLast");
+    mark(env("CODEDECK_TRANSCRIPT_KEEP_LAST").and_then(|v| v.parse::<u64>().ok()).is_some(), "transcriptKeepLast");
     mark(flags.tor_proxy.is_some() || env("CODEDECK_TOR_PROXY_URL").is_some(), "torProxyUrl");
     mark(env("CODEDECK_NODE_PATH").is_some(), "nodePath");
     mark(flags.agent_host.is_some() || env("CODEDECK_AGENT_HOST").is_some(), "agentHostPath");
     mark(flags.test_mode || env_bool("CODEDECK_TEST_MODE").is_some(), "testMode");
     mark(flags.direct_listen.is_some() || env("CODEDECK_DIRECT_LISTEN").is_some(), "direct.listen");
     mark(flags.direct_onion_listen.is_some() || env("CODEDECK_DIRECT_ONION_LISTEN").is_some(), "direct.onionListen");
-    mark(!flags.direct_endpoints.is_empty() || env("CODEDECK_DIRECT_ENDPOINTS").is_some(), "direct.endpoints");
+    mark(!flags.direct_endpoints.is_empty() || split_list(env("CODEDECK_DIRECT_ENDPOINTS")).is_some(), "direct.endpoints");
     keys
 }
 
@@ -603,10 +608,19 @@ pub const WEB_EDITABLE: [&str; 4] = ["machineName", "relays", "direct.endpoints"
 /// one back, so a token can be replaced but never leaked.
 pub const WEB_EDITABLE_SECRETS: [&str; 2] = ["relayRegisterToken", "blossomRegisterToken"];
 
+/// The listeners the bridge runs with, which a direct endpoint needs: `load`
+/// refuses to start with a `wss://` endpoint and no direct listener, or a
+/// `ws://` one and no onion listener, so the page must not write either.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WebListeners {
+    pub direct: bool,
+    pub onion: bool,
+}
+
 /// Check one value the page wants to write for a safe-set key. The rules
 /// mirror what `load` accepts, so a written file is one the bridge would
-/// read back.
-pub fn validate_web_value(key: &str, value: &Value) -> Result<(), String> {
+/// read back — a page edit must never leave a bridge that will not start.
+pub fn validate_web_value(key: &str, value: &Value, listeners: WebListeners) -> Result<(), String> {
     match key {
         "machineName" => {
             let name = value.as_str().ok_or("machineName: expected a string")?;
@@ -638,6 +652,12 @@ pub fn validate_web_value(key: &str, value: &Value) -> Result<(), String> {
                 let url = url.as_str().ok_or("direct.endpoints: every entry must be a string")?;
                 if !is_direct_endpoint(url) {
                     return Err(format!("direct.endpoints: {url:?} must be wss://, or ws:// only to a .onion"));
+                }
+                if url.starts_with("wss://") && !listeners.direct {
+                    return Err(format!("direct.endpoints: {url:?} needs the direct listener, which this bridge does not run"));
+                }
+                if url.starts_with("ws://") && !listeners.onion {
+                    return Err(format!("direct.endpoints: {url:?} needs the onion listener, which this bridge does not run"));
                 }
             }
             Ok(())
@@ -682,6 +702,9 @@ pub fn write_web_settings(path: &Path, changes: &[(String, Option<Value>)]) -> R
             plain => set_or_remove(obj, plain, value.clone()),
         }
     }
+    // The last guard against a file the bridge could not start from: what is
+    // written must still read as its config.
+    serde_json::from_value::<FileConfig>(root.clone()).map_err(|e| format!("the changed config would not load: {e}"))?;
     let json = serde_json::to_vec_pretty(&root).map_err(|e| e.to_string())?;
     crate::state::write_private(path, &json).map_err(|e| format!("cannot write {}: {e}", path.display()))
 }
@@ -722,8 +745,8 @@ pub fn web_config_fields(config: &Config) -> Vec<Value> {
         field("testMode", Value::from(config.test_mode), false),
         field("direct.listen", config.direct.listen.map(|a| Value::from(a.to_string())).unwrap_or(Value::Null), false),
         field("direct.onionListen", config.direct.onion_listen.map(|a| Value::from(a.to_string())).unwrap_or(Value::Null), false),
-        field("relayRegisterEndpoint", config.relay_register.as_ref().map(|r| Value::from(r.url.clone())).unwrap_or(Value::Null), false),
-        field("blossomRegisterEndpoint", config.blossom_register.as_ref().map(|r| Value::from(r.url.clone())).unwrap_or(Value::Null), false),
+        field("relayRegisterEndpoint", config.relay_register_endpoint.clone().map(Value::from).unwrap_or(Value::Null), false),
+        field("blossomRegisterEndpoint", config.blossom_register_endpoint.clone().map(Value::from).unwrap_or(Value::Null), false),
         secret("relayRegisterToken", config.relay_register.is_some(), true),
         secret("blossomRegisterToken", config.blossom_register.is_some(), true),
     ]
@@ -952,27 +975,37 @@ mod tests {
         assert!(err.contains("invalid config"));
     }
 
+    const ALL: WebListeners = WebListeners { direct: true, onion: true };
+
+    #[test]
+    fn a_direct_endpoint_needs_the_listener_load_requires() {
+        let none = WebListeners::default();
+        assert!(validate_web_value("direct.endpoints", &serde_json::json!(["wss://192.168.1.9:7447"]), none).is_err());
+        assert!(validate_web_value("direct.endpoints", &serde_json::json!(["ws://abc.onion:7448"]), WebListeners { direct: true, onion: false }).is_err());
+        assert!(validate_web_value("direct.endpoints", &serde_json::json!(["wss://192.168.1.9:7447"]), WebListeners { direct: true, onion: false }).is_ok());
+    }
+
     #[test]
     fn the_safe_set_validates_names_relays_and_endpoints() {
         // A machine name: 1 to 64 characters, no control characters.
-        assert!(validate_web_value("machineName", &Value::from("laptop")).is_ok());
-        assert!(validate_web_value("machineName", &Value::from("")).is_err());
-        assert!(validate_web_value("machineName", &Value::from("a".repeat(65))).is_err());
-        assert!(validate_web_value("machineName", &Value::from("two\nlines")).is_err());
+        assert!(validate_web_value("machineName", &Value::from("laptop"), ALL).is_ok());
+        assert!(validate_web_value("machineName", &Value::from(""), ALL).is_err());
+        assert!(validate_web_value("machineName", &Value::from("a".repeat(65)), ALL).is_err());
+        assert!(validate_web_value("machineName", &Value::from("two\nlines"), ALL).is_err());
         // Relays: wss:// anywhere, ws:// only to a .onion, at least one.
-        assert!(validate_web_value("relays", &serde_json::json!(["wss://relay.example", "ws://abc.onion:80"])).is_ok());
-        assert!(validate_web_value("relays", &serde_json::json!(["ws://192.168.1.9:7447"])).is_err());
-        assert!(validate_web_value("relays", &serde_json::json!([])).is_err());
+        assert!(validate_web_value("relays", &serde_json::json!(["wss://relay.example", "ws://abc.onion:80"]), ALL).is_ok());
+        assert!(validate_web_value("relays", &serde_json::json!(["ws://192.168.1.9:7447"]), ALL).is_err());
+        assert!(validate_web_value("relays", &serde_json::json!([]), ALL).is_err());
         // Direct endpoints: the same rule, but an empty list is allowed.
-        assert!(validate_web_value("direct.endpoints", &serde_json::json!([])).is_ok());
-        assert!(validate_web_value("direct.endpoints", &serde_json::json!(["wss://192.168.1.9:7447"])).is_ok());
-        assert!(validate_web_value("direct.endpoints", &serde_json::json!(["https://x"])).is_err());
+        assert!(validate_web_value("direct.endpoints", &serde_json::json!([]), ALL).is_ok());
+        assert!(validate_web_value("direct.endpoints", &serde_json::json!(["wss://192.168.1.9:7447"]), ALL).is_ok());
+        assert!(validate_web_value("direct.endpoints", &serde_json::json!(["https://x"]), ALL).is_err());
         // Retention: a whole number, or null to clear.
-        assert!(validate_web_value("transcriptKeepLast", &Value::from(0)).is_ok());
-        assert!(validate_web_value("transcriptKeepLast", &Value::Null).is_ok());
-        assert!(validate_web_value("transcriptKeepLast", &Value::from(-1)).is_err());
+        assert!(validate_web_value("transcriptKeepLast", &Value::from(0), ALL).is_ok());
+        assert!(validate_web_value("transcriptKeepLast", &Value::Null, ALL).is_ok());
+        assert!(validate_web_value("transcriptKeepLast", &Value::from(-1), ALL).is_err());
         // Anything else is not the page's to change.
-        assert!(validate_web_value("nodePath", &Value::from("/usr/bin/node")).is_err());
+        assert!(validate_web_value("nodePath", &Value::from("/usr/bin/node"), ALL).is_err());
         assert!(validate_web_secret("relayRegisterToken", &Value::from("tok")).is_ok());
         assert!(validate_web_secret("relayRegisterToken", &Value::Null).is_ok());
         assert!(validate_web_secret("relayRegisterToken", &Value::from("")).is_err());
@@ -1020,6 +1053,9 @@ mod tests {
             workspace_roots: vec![PathBuf::from("/srv/w")],
             relay_register: Some(RegisterEndpoint { url: "https://relay.example/admin".into(), token: "s3cret".into() }),
             blossom_register: None,
+            relay_register_endpoint: Some("https://relay.example/admin".into()),
+            // An endpoint whose token is not set yet: shown, its token offered.
+            blossom_register_endpoint: Some("https://blossom.example/admin".into()),
             tor_proxy: Some("127.0.0.1:9050".into()),
             transcript_keep_last: Some(5),
             node_path: "node".into(),
@@ -1046,6 +1082,7 @@ mod tests {
         assert_eq!(token["set"], true);
         assert!(token.get("value").is_none());
         assert_eq!(of("blossomRegisterToken")["set"], false);
+        assert_eq!(of("blossomRegisterEndpoint")["value"], "https://blossom.example/admin", "an endpoint shows before its token is set");
         assert!(!serde_json::to_string(&fields).unwrap().contains("s3cret"), "no secret value is in the view");
     }
 }

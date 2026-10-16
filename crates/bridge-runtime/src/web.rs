@@ -426,6 +426,13 @@ impl Web {
         self.writer.write(self.sessions_path.clone(), json);
     }
 
+    /// The listeners in effect, from the config the page shows.
+    fn listeners(&self) -> crate::config::WebListeners {
+        let fields = self.config_fields.borrow();
+        let running = |key: &str| fields.iter().any(|f| f["key"] == key && !f["value"].is_null());
+        crate::config::WebListeners { direct: running("direct.listen"), onion: running("direct.onionListen") }
+    }
+
     /// The page stopped showing a pending browser's code: the engine must not
     /// let a phone use it.
     fn withdraw(&self, browser: &Browser) {
@@ -508,7 +515,7 @@ impl Web {
             if !crate::config::WEB_EDITABLE.contains(&key.as_str()) {
                 return bad_request(key, "not a setting the page may change");
             }
-            if let Err(message) = crate::config::validate_web_value(key, value) {
+            if let Err(message) = crate::config::validate_web_value(key, value, self.listeners()) {
                 return bad_request(key, &message);
             }
             changes.push((key.clone(), Some(value.clone())));
@@ -1406,11 +1413,27 @@ mod tests {
     }
 
     #[test]
+    fn an_endpoint_the_bridge_has_no_listener_for_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(&path, "{}").unwrap();
+        let (web, mut inputs) = web_with_config(dir.path(), Vec::new());
+        let mut post = request("POST", "/api/config", HOST);
+        post.cookie = Some(sign_in(&web, &mut inputs));
+        post.body = serde_json::json!({ "set": { "direct.endpoints": ["ws://abc.onion:7448"] } }).to_string().into_bytes();
+        let response = route(&post, PEER, &web);
+        assert_eq!(response.status, 400, "the bridge would refuse to start from it");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{}");
+    }
+
+    #[test]
     fn a_config_post_writes_the_file_keeping_every_other_key() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.json");
         std::fs::write(&path, r#"{"machineName":"desktop","direct":{"listen":"0.0.0.0:7447"},"keepMe":{"x":1}}"#).unwrap();
-        let (web, mut inputs) = web_with_config(dir.path(), Vec::new());
+        // The bridge runs the direct listener, so a wss:// endpoint is one it can serve.
+        let listening = serde_json::json!({ "key": "direct.listen", "value": "0.0.0.0:7447", "editable": false, "secret": false, "overridden": false });
+        let (web, mut inputs) = web_with_config(dir.path(), vec![listening]);
         let token = sign_in(&web, &mut inputs);
 
         let mut post = request("POST", "/api/config", HOST);

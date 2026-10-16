@@ -250,7 +250,7 @@ function usage(hb) {
     return el("div", { class: "meter" },
       el("div", { class: "meter-head" },
         el("span", { class: "meter-title", title: s.title || s.slug }, s.title || s.slug),
-        el("span", { class: "dim small" }, `${agentName[s.agent] || s.agent} · ${Math.round(pct)}%${window}`)),
+        el("span", { class: "dim small" }, `${agentName[s.agent] || s.agent} · ${Math.round(pct)}%${size}`)),
       el("div", { class: "meter-track" }, fill),
     );
   }));
