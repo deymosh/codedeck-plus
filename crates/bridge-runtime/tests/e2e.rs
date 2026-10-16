@@ -32,6 +32,16 @@ use client_runtime::protocol::events::BridgeToPhone;
 use client_runtime::{Core, CoreConfig, CoreObserver, CorePorts, Intent, LocalSigner, MemoryTranscriptStore, SystemClock, TimeEntropy, TranscriptStore};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::{JoinHandle, LocalSet};
+#[cfg(unix)]
+use base64::engine::general_purpose::STANDARD;
+#[cfg(unix)]
+use base64::Engine as _;
+#[cfg(unix)]
+use client_runtime::protocol::crypto::Keypair;
+#[cfg(unix)]
+use client_runtime::MemoryKv;
+#[cfg(unix)]
+use nostr_transport::{WsConfig, WsTransport};
 
 const TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -47,6 +57,59 @@ impl CoreObserver for Observer {
     fn bridge_message(&self, _: String, _: BridgeToPhone) {}
 }
 
+/// Keeps the terminal messages the bridge sends this phone. The phone core has
+/// no terminal store yet, so it drops them; the observer is where the wire can
+/// still be checked.
+#[cfg(unix)]
+#[derive(Default)]
+struct TerminalObserver {
+    opened: std::cell::RefCell<Option<client_runtime::protocol::events::TerminalOpenedMsg>>,
+    exited: std::cell::RefCell<Option<client_runtime::protocol::events::TerminalExitedMsg>>,
+    /// Every terminal-output frame, decoded from its base64, in order.
+    output: std::cell::RefCell<Vec<u8>>,
+    /// The type of every message seen, for a failure's diagnosis.
+    seen: std::cell::RefCell<Vec<String>>,
+}
+
+#[cfg(unix)]
+impl TerminalObserver {
+    fn seen(&self) -> String {
+        String::from_utf8_lossy(&self.output.borrow()).into_owned()
+    }
+    fn refused(&self) -> Option<String> {
+        self.exited.borrow().as_ref().map(|m| format!("{m:?}"))
+    }
+    fn trace(&self) -> String {
+        self.seen.borrow().join(", ")
+    }
+}
+
+#[cfg(unix)]
+impl CoreObserver for TerminalObserver {
+    fn connection_changed(&self, _: ConnectionStatus, _: bool, _: &[String]) {}
+    fn bridge_message(&self, _: String, msg: BridgeToPhone) {
+        let name = match &msg {
+            BridgeToPhone::TerminalOpened(_) => "terminal-opened",
+            BridgeToPhone::TerminalOutput(_) => "terminal-output",
+            BridgeToPhone::TerminalInputFrom(_) => "terminal-input-from",
+            BridgeToPhone::TerminalExited(_) => "terminal-exited",
+            BridgeToPhone::TerminalEvent(_) => "terminal-event",
+            _ => "other",
+        };
+        self.seen.borrow_mut().push(name.to_string());
+        match msg {
+            BridgeToPhone::TerminalOpened(m) => *self.opened.borrow_mut() = Some(m),
+            BridgeToPhone::TerminalExited(m) => *self.exited.borrow_mut() = Some(m),
+            BridgeToPhone::TerminalOutput(m) => {
+                if let Ok(bytes) = STANDARD.decode(&m.data) {
+                    self.output.borrow_mut().extend_from_slice(&bytes);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 struct Bridge {
     stop: oneshot::Sender<()>,
     task: JoinHandle<Result<Outcome, String>>,
@@ -54,6 +117,13 @@ struct Bridge {
 }
 
 fn start_bridge(relay: &str, home: &Path, workspace: &Path) -> Bridge {
+    start_bridge_with(relay, home, workspace, None)
+}
+
+/// `terminal_device`: turn terminals on (relays allowed) and approve this
+/// device id, for the terminal test. The allowlist file is read when the
+/// bridge starts, so it is written before `run`.
+fn start_bridge_with(relay: &str, home: &Path, workspace: &Path, terminal_device: Option<&str>) -> Bridge {
     let flags = Flags {
         home: Some(home.into()),
         machine_name: Some("e2e".into()),
@@ -64,6 +134,12 @@ fn start_bridge(relay: &str, home: &Path, workspace: &Path) -> Bridge {
     };
     let mut config = config::load(&flags).expect("config");
     config.host_env.insert("CODEDECK_AGENT_HOST_DRIVERS".into(), "fake".into());
+    if let Some(device) = terminal_device {
+        config.terminal.enabled = true;
+        config.terminal.relays_allowed = true;
+        let allow = serde_json::json!({ "devices": [device], "pending": [] });
+        std::fs::write(home.join("terminal-allow.json"), allow.to_string()).unwrap();
+    }
     let state = StateFile::open(home).unwrap();
     let keys = state.identity().unwrap();
     let (stop, stop_rx) = oneshot::channel();
@@ -281,6 +357,142 @@ async fn a_phone_drives_the_real_bridge_through_a_relay() {
             }
             let seqs: Vec<u64> = phone.iter().map(|(s, _)| *s).collect();
             assert_eq!(seqs, (1..=seqs.len() as u64).collect::<Vec<_>>(), "no gaps, no duplicates");
+
+            bridge.stop().await;
+        })
+        .await;
+}
+
+/// Publish one phone→bridge message as a raw event: signed by the identity,
+/// NIP-44 encrypted from the session key to the bridge (the direction the
+/// phone's own API uses), tagged to the bridge, of `kind`.
+#[cfg(unix)]
+async fn publish(
+    transport: &WsTransport,
+    identity: &Keypair,
+    session: &Keypair,
+    bridge: &str,
+    kind: u16,
+    msg: client_runtime::protocol::commands::PhoneToBridge,
+) {
+    let plain = client_runtime::protocol::encode_phone_to_bridge(&msg).expect("encodes");
+    let content = client_runtime::protocol::crypto::encrypt_to(&session.secret_key, bridge, &plain).expect("encrypts");
+    let keys = nostr::Keys::new(identity.secret_key.clone());
+    let tag = nostr::Tag::public_key(nostr::PublicKey::from_hex(bridge).unwrap());
+    let event = nostr::EventBuilder::new(nostr::Kind::Custom(kind), content).tag(tag).sign_with_keys(&keys).unwrap();
+    let signed = client_runtime::protocol::nostr_event::SignedEvent::from_nostr(&event);
+    let result = transport.publish_confirmed(&signed, Duration::from_secs(5), 2).await;
+    assert!(result.verdict.is_delivered(), "publish of kind {kind}: {:?} {:?}", result.verdict, result.detail);
+}
+
+/// The terminal's whole path over a relay: a phone opens a terminal on the
+/// bridge, types `echo hi`, and sees the output come back. The keystrokes ride
+/// the live kind (which the bridge subscribes to only because the owner allows
+/// a terminal over relays), and the output is the bridge's coalesced,
+/// relay-paced `terminal-output`. Unix only: the bridge runs a real pty.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "needs node and a built packages/agent-host bundle"]
+async fn a_phone_opens_a_terminal_and_types_through_the_bridge() {
+    use client_runtime::client_core::stores::session_key::{SessionKey, SessionKeyRing, GRANT_LIFETIME_SECS};
+    use client_runtime::protocol::commands::{PhoneToBridge, PresenceMsg, TerminalInputMsg, TerminalOpenMsg};
+    use client_runtime::protocol::kinds::{COMMAND_KIND, LIVE_KIND};
+    use client_runtime::protocol::recipients::device_id;
+
+    assert!(bundle().exists(), "agent host bundle missing at {} — build packages/agent-host first", bundle().display());
+    let _ = env_logger::builder().is_test(true).filter_level(log::LevelFilter::Info).try_init();
+    LocalSet::new()
+        .run_until(async {
+            let relay = support::relay::start().await;
+            let home = tempfile::tempdir().unwrap();
+            let workspace = tempfile::tempdir().unwrap();
+
+            // A phone whose session key the test already knows: the bridge
+            // names the device by it, so the allowlist can name it too.
+            let phone = generate_keypair();
+            let session = generate_keypair();
+            let device = device_id(&session.pubkey_hex);
+            let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+            let ring = SessionKeyRing {
+                current: SessionKey { keypair: session.clone(), expires_at: now_ms / 1000 + GRANT_LIFETIME_SECS },
+                previous: None,
+            };
+            let kv = Rc::new(MemoryKv::seeded([(client_runtime::stores::SESSION_KEYS_KEY, ring.encode())]));
+
+            let mut bridge = start_bridge_with(&relay, home.path(), workspace.path(), Some(&device));
+
+            let store = Rc::new(MemoryTranscriptStore::new());
+            let observer = Rc::new(TerminalObserver::default());
+            let core = Core::spawn(
+                CoreConfig::new(Rc::new(LocalSigner(phone.clone())), None, false),
+                CorePorts { kv: kv.clone(), transcript_store: store.clone(), ..CorePorts::default() },
+                observer.clone(),
+                Rc::new(SystemClock),
+                Rc::new(TimeEntropy),
+            )
+            .await;
+            core.start();
+            let pairing_url = tokio::time::timeout(TIMEOUT, bridge.urls.recv()).await.expect("a pairing window opens").unwrap();
+            core.dispatch(Intent::BeginPairing { url: pairing_url, label: "e2e-terminal".into() }).await;
+            until("pairing", || async {
+                let view = core.pairing_view().await?;
+                assert_ne!(view.phase, "failed", "pairing failed: {:?}", view.error);
+                (view.phase == "paired").then_some(())
+            })
+            .await;
+            let machine = until("the machine", || async { core.machines_view().await.machines.keys().next().cloned() }).await;
+
+            // The phone core has no terminal API yet, so the terminal messages
+            // go out as raw events, encrypted with the session key the pairing
+            // just granted.
+            let transport = WsTransport::new(WsConfig { relays: vec![relay.clone()], auth: Rc::new(phone.clone()), proxy: None });
+            transport.ensure_connected();
+            until("the raw relay link", || async { (!transport.connected_relays().is_empty()).then_some(()) }).await;
+
+            publish(
+                &transport,
+                &phone,
+                &session,
+                &machine,
+                COMMAND_KIND,
+                PhoneToBridge::TerminalOpen(TerminalOpenMsg { open_id: "o1".into(), cols: 80, rows: 24, session: None }),
+            )
+            .await;
+            let term = until("terminal-opened", || async {
+                if let Some(m) = observer.opened.borrow().as_ref() {
+                    return Some(m.term.clone());
+                }
+                if let Some(why) = observer.refused() {
+                    panic!("the bridge refused the open: {why} (saw: {})", observer.trace());
+                }
+                None
+            })
+            .await;
+
+            // Say this client shows the terminal: output goes only to the
+            // clients that do.
+            publish(
+                &transport,
+                &phone,
+                &session,
+                &machine,
+                COMMAND_KIND,
+                PhoneToBridge::Presence(PresenceMsg { away: false, watching: None, watching_terminal: Some(term.clone()) }),
+            )
+            .await;
+
+            // Type into it, on the live kind.
+            publish(
+                &transport,
+                &phone,
+                &session,
+                &machine,
+                LIVE_KIND,
+                PhoneToBridge::TerminalInput(TerminalInputMsg { term: term.clone(), seq: 1, data: STANDARD.encode(b"echo hi\n") }),
+            )
+            .await;
+            until("the echo", || async { observer.seen().contains("hi").then_some(()) }).await;
+            assert!(observer.seen().contains("hi"), "the shell's output reached the phone: {:?}", observer.seen());
 
             bridge.stop().await;
         })
