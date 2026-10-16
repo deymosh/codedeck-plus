@@ -123,7 +123,7 @@ enum TerminalCommand {
 
 #[derive(Subcommand)]
 enum AuditCommand {
-    /// Check the terminal audit's hash chain, printing the line count or the first break
+    /// Check the terminal audit's hash chain, printing the line count and head hash, or the first break
     Verify,
 }
 
@@ -232,19 +232,24 @@ fn terminal(config: &Config, action: TerminalCommand) -> Result<ExitCode, String
 }
 
 /// `audit verify`: walk the terminal audit and recompute its hash chain. A
-/// break (an edited or deleted line) is reported with its line number and the
-/// command exits non-zero.
+/// break (an edited or deleted line in the middle) is reported with its line
+/// number and the command exits non-zero. On success it prints the line count
+/// and the head hash — the last line's SHA-256 — because the chain alone
+/// cannot see an edit or a deletion of the last line, nor a truncation: there
+/// is nothing after them to disagree, so the head is what an owner compares
+/// with the syslog copy or a value noted earlier.
 fn audit_cmd(config: &Config, action: AuditCommand) -> Result<ExitCode, String> {
     match action {
         AuditCommand::Verify => {
             let path = config.home.join(audit::AUDIT_DIR).join(audit::LOG_FILE);
             match audit::verify(&path) {
-                Ok(0) => {
+                Ok(v) if v.lines == 0 => {
                     println!("The terminal audit is empty ({}).", path.display());
                     Ok(ExitCode::SUCCESS)
                 }
-                Ok(lines) => {
-                    println!("OK: {lines} line(s), the chain is intact ({}).", path.display());
+                Ok(v) => {
+                    println!("OK: {} line(s), the chain is intact ({}).", v.lines, path.display());
+                    println!("Head: {} (the last line's SHA-256)", v.head.unwrap_or_default());
                     Ok(ExitCode::SUCCESS)
                 }
                 Err(err) => {

@@ -210,11 +210,13 @@ state file), never sent anywhere:
   attached, takeover, resized, closed, exited (reason, code, duration), and
   refused (why: disabled, not-allowed, limit, transport, bad seq). Each line
   carries `prev`, the SHA-256 of the line before it, so an edit or a deleted
-  line breaks the chain (`codedeck-bridge audit verify` checks it). The honest
-  limit: anyone running as the bridge's user can rewrite the whole file; the
-  chain catches tampering that is not that thorough, and `audit.syslog: true`
-  also copies each line to the system log (journald / syslog), which survives
-  even that.
+  line breaks the chain (`codedeck-bridge audit verify` checks it and prints
+  the head — the last line's SHA-256). The chain catches an edit or a deletion
+  in the middle; the last line and a truncation need the syslog copy or a noted
+  head hash. The honest limit: anyone running as the bridge's user can rewrite
+  the whole file; the chain catches tampering that is not that thorough, and
+  `audit.syslog: true` also copies each line to the system log (journald /
+  syslog), which survives even that.
 - **`term-<id>.cast`** — a full recording of each terminal in asciicast v2
   (replayable with `asciinema play`): every output frame, and every input
   chunk with the device that typed it. **Input typed while the terminal has

@@ -9,7 +9,9 @@
 //! the next line, which `codedeck-bridge audit verify` finds. The honest
 //! limit, the same one [`docs/TERMINAL.md`](../../../docs/TERMINAL.md) states:
 //! anyone running as the bridge's user can rewrite the whole file, chain and
-//! all; the chain catches tampering that is not that thorough, and
+//! all; the chain catches an edit or a deletion in the middle, while the
+//! *last* line and a truncation have no line after them to disagree, so they
+//! need the syslog copy or a head hash the owner noted (`verify` prints it).
 //! `audit.syslog: true` also copies each line to the system log, which
 //! survives even that.
 //!
@@ -202,14 +204,30 @@ fn last_line_hash(log: &Path) -> Result<String, String> {
     Ok(prev)
 }
 
-/// Walk the log and recompute the chain. `Ok(n)` is the number of lines;
-/// `Err` names the first line whose `prev` does not match the line before it
-/// (1-based) — the line after an edited or deleted one, which is where the
-/// break shows.
-pub fn verify(log: &Path) -> Result<u64, String> {
+/// What [`verify`] found when the chain is intact: how many lines, and the
+/// head — the SHA-256 of the last line, the chain's tip. The head is what
+/// makes the chain's blind spot checkable: the chain alone cannot see an edit
+/// or a deletion of the *last* line, nor a truncation, because nothing follows
+/// them to disagree. Printing the head lets an owner compare it with the
+/// syslog copy, or with a value noted earlier.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Verified {
+    /// The number of lines in the log.
+    pub lines: u64,
+    /// The hash of the last line, or `None` when the log is empty.
+    pub head: Option<String>,
+}
+
+/// Walk the log and recompute the chain. `Ok(Verified)` is the line count and
+/// the head hash when the chain is intact; `Err` names the first line whose
+/// `prev` does not match the line before it (1-based) — the line after an
+/// edited or deleted one, which is where the break shows. The last line and a
+/// truncation cannot be caught here: compare the returned [`Verified::head`]
+/// with the syslog copy or a value noted earlier.
+pub fn verify(log: &Path) -> Result<Verified, String> {
     let file = match File::open(log) {
         Ok(file) => file,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Verified { lines: 0, head: None }),
         Err(e) => return Err(format!("cannot read {}: {e}", log.display())),
     };
     let mut prev = GENESIS.to_string();
@@ -229,7 +247,8 @@ pub fn verify(log: &Path) -> Result<u64, String> {
         }
         prev = hash_hex(line.as_bytes());
     }
-    Ok(n)
+    // `prev` is the last line's hash (or GENESIS with no lines at all).
+    Ok(Verified { lines: n, head: (n > 0).then_some(prev) })
 }
 
 /// Remove the oldest whole recordings under `dir` that are older than
@@ -319,8 +338,12 @@ mod tests {
         drop(audit); // joins the writer thread, so the file is complete
 
         let log = dir.path().join(AUDIT_DIR).join(LOG_FILE);
-        assert_eq!(verify(&log), Ok(3));
+        let verified = verify(&log).expect("an intact chain");
+        assert_eq!(verified.lines, 3);
         let lines = lines(&log);
+        // The head is the hash of the last line: what an owner notes down to
+        // check against later, and what catches an edit of the last line.
+        assert_eq!(verified.head.as_deref(), Some(hash_hex(lines[2].as_bytes()).as_str()));
         // Each line's prev is the hash of the one before it; the first is GENESIS.
         let value: serde_json::Value = serde_json::from_str(&lines[0]).unwrap();
         assert_eq!(value["prev"], GENESIS);
@@ -346,7 +369,7 @@ mod tests {
 
         // If the second run had started from GENESIS instead of the last
         // line's hash, line 3's prev would not match and this would fail.
-        assert_eq!(verify(&log), Ok(3));
+        assert_eq!(verify(&log).map(|v| v.lines), Ok(3));
     }
 
     #[test]
@@ -386,11 +409,33 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_or_missing_log_verifies_as_zero() {
+    fn an_empty_or_missing_log_verifies_as_empty() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(verify(&dir.path().join("nope.jsonl")), Ok(0));
+        assert_eq!(verify(&dir.path().join("nope.jsonl")), Ok(Verified { lines: 0, head: None }));
         fs::write(dir.path().join("empty.jsonl"), "").unwrap();
-        assert_eq!(verify(&dir.path().join("empty.jsonl")), Ok(0));
+        assert_eq!(verify(&dir.path().join("empty.jsonl")), Ok(Verified { lines: 0, head: None }));
+    }
+
+    /// The last line's own edit cannot be caught by the chain — nothing
+    /// follows it — but the head hash it changes can be compared with a noted
+    /// value. This is the honest limit the docs state.
+    #[test]
+    fn an_edited_last_line_leaves_the_chain_intact_but_moves_the_head() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join(AUDIT_DIR).join(LOG_FILE);
+        let audit = Audit::open(dir.path(), false, Retention { max_days: 90, max_bytes: 1 << 30 });
+        audit.record(record(1, "t1"));
+        audit.record(record(2, "t2"));
+        drop(audit);
+
+        let head = verify(&log).unwrap().head;
+        let mut lines = lines(&log);
+        lines[1] = lines[1].replace("\"t2\"", "\"tX\"");
+        fs::write(&log, lines.join("\n") + "\n").unwrap();
+
+        // Still "intact" — the point of printing the head.
+        assert_eq!(verify(&log).map(|v| v.lines), Ok(2));
+        assert_ne!(verify(&log).unwrap().head, head, "the head hash moved, so a noted value would not match");
     }
 
     #[test]
@@ -401,7 +446,7 @@ mod tests {
         let audit = Audit::open(dir.path(), true, Retention { max_days: 90, max_bytes: 1 << 30 });
         audit.record(record(1, "t1"));
         drop(audit);
-        assert_eq!(verify(&dir.path().join(AUDIT_DIR).join(LOG_FILE)), Ok(1));
+        assert_eq!(verify(&dir.path().join(AUDIT_DIR).join(LOG_FILE)).map(|v| v.lines), Ok(1));
     }
 
     fn cast(dir: &Path, name: &str, bytes: usize, age_days: u64) {

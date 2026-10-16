@@ -136,7 +136,7 @@ install runbook.
 | `agents install <agent>…` / `agents remove <agent>…` | Install agents at the version this build pins, or remove what CodeDeck installed of them. A running bridge sees the change once its agent host restarts; the phone's Install and Remove take effect at once. |
 | `terminal pending` | The devices that asked for a terminal and were refused, with their id, name and when they were last seen. |
 | `terminal allow <id>` / `terminal disallow <id>` | Approve a device for a terminal, or withdraw it (an unambiguous id prefix works). These edit the allowlist file directly, so they work while the bridge runs; a withdrawn device's terminals close at once. |
-| `audit verify` | Recompute the terminal audit's hash chain; prints the line count, or the first broken line and exits non-zero. |
+| `audit verify` | Recompute the terminal audit's hash chain; prints the line count and the head hash (compare it with the syslog copy or a value noted earlier), or the first broken line and exits non-zero. |
 | `version` | The bridge version and protocol version. |
 
 `--test-mode` (or `CODEDECK_TEST_MODE=1`) makes the agents answer canned
@@ -258,12 +258,14 @@ lost phone.
   resized, closed, exited, refused), each with the device, identity, transport
   and reason. Every line carries `prev`, the SHA-256 of the line before it (the
   first line's is all zeros), so an edited or deleted line breaks the chain:
-  `codedeck-bridge audit verify` recomputes it and prints the line count, or
-  the first broken line, exiting non-zero. The honest limit: anyone running as
-  the bridge's user can rewrite the whole file, chain and all. The chain
-  catches tampering that is not that thorough; `audit.syslog: true` also
-  copies each line to the log target `audit` (journald / rsyslog, if a handler
-  forwards it), which survives even that.
+  `codedeck-bridge audit verify` recomputes it and prints the line count and
+  the head (the last line's SHA-256), or the first broken line, exiting
+  non-zero. The chain catches an edit or a deletion in the middle; the last
+  line and a truncation need the syslog copy or a noted head hash. The honest
+  limit: anyone running as the bridge's user can rewrite the whole file, chain
+  and all. The chain catches tampering that is not that thorough;
+  `audit.syslog: true` also copies each line to the log target `audit`
+  (journald / rsyslog, if a handler forwards it), which survives even that.
 - `term-<id>.cast` — a full recording of each terminal in asciicast v2
   (replayable with `asciinema play`). Input typed at a password prompt is
   recorded as a byte count, never the bytes.
