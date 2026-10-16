@@ -68,6 +68,10 @@ class CoreHost(
     dbPath: String,
     proxy: String?,
     tor: Boolean,
+    /** This phone's name for the bridge, built by the top-level `deviceLabel`
+     *  function. Sent on every session-key grant, shown in the bridge's
+     *  terminal allowlist and in a refusal to open a terminal. */
+    deviceLabel: String,
 ) : CoreListener {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -161,7 +165,7 @@ class CoreHost(
     // Constructed last: `Core` holds `this` as its listener and may call back
     // from its own thread straight away, so every field a callback touches
     // (the refreshers above) must already be initialized.
-    private val core: Core = Core(identity, sessionKeys, this, notifier, CoreHttpFetch(), dbPath, proxy, tor)
+    private val core: Core = Core(identity, sessionKeys, this, notifier, CoreHttpFetch(), dbPath, proxy, tor, deviceLabel)
 
     fun start() {
         core.start()
@@ -326,3 +330,31 @@ class CoreHost(
 
     private fun refreshPairing() = pairingRefresher.request()
 }
+
+/**
+ * This phone's name for the bridge's terminal allowlist and its refusal
+ * message, built from the platform's own model string ([model]) and the
+ * manufacturer. The make is added only when the model does not already name
+ * it: a "Google Pixel 8a" says nothing "Pixel 8a" does not, while a bare
+ * model code like "SM-S918B" names no make on its own. The manufacturer is
+ * capitalized because `Build.MANUFACTURER` is often lowercase ("samsung").
+ *
+ * The bridge sanitizes and caps the name before showing it (see
+ * `CoreConfig::device_label`), so a name that is empty here is simply no
+ * name.
+ */
+internal fun deviceLabel(manufacturer: String, model: String): String {
+    val make = capitalizeAscii(manufacturer.trim())
+    val name = model.trim()
+    return when {
+        name.isEmpty() -> make
+        make.isEmpty() -> name
+        // Already names its make: either it starts with the make, or it reads
+        // as a product name (it carries lowercase) rather than a model code.
+        name.startsWith(make, ignoreCase = true) || name.any { it.isLowerCase() } -> name
+        else -> "$make $name"
+    }.ifBlank { "Android device" }
+}
+
+private fun capitalizeAscii(value: String): String =
+    if (value.isEmpty()) "" else value.take(1).uppercase() + value.drop(1)
