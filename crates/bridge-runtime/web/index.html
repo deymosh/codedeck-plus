@@ -45,6 +45,9 @@
   <nav class="tabs" aria-label="Pages">
     <a href="#overview" data-tab="overview">Overview</a>
     <a href="#usage" data-tab="usage">Usage</a>
+    <a href="#browsers" data-tab="browsers">Browsers</a>
+    <a href="#devices" data-tab="devices">Devices</a>
+    <a href="#settings" data-tab="settings">Settings</a>
   </nav>
 
   <div class="pane" data-pane="overview">
@@ -86,6 +89,40 @@
       <p class="dim" id="usage-context-empty" hidden>No session has reported its context yet.</p>
     </section>
     <p class="dim small">What the bridge reports about each session. An agent's plan limits are on the phone, in a session's usage.</p>
+  </div>
+
+  <div class="pane" data-pane="browsers" hidden>
+    <section class="card">
+      <h2>Signed-in browsers</h2>
+      <div class="rows" id="browsers"></div>
+      <p class="error" id="browsers-error" hidden></p>
+    </section>
+    <p class="dim small">A browser stays signed in for 30 days. Signing one out here ends it at once; a phone signs a new one in.</p>
+  </div>
+
+  <div class="pane" data-pane="devices" hidden>
+    <section class="card">
+      <h2>Paired phones</h2>
+      <div class="rows" id="devices"></div>
+      <p class="dim" id="no-devices" hidden>No phone is paired.</p>
+    </section>
+    <p class="dim small">A phone is paired from its app; <span class="mono">codedeck-bridge unpair</span> on the machine removes one.</p>
+  </div>
+
+  <div class="pane" data-pane="settings" hidden>
+    <form class="card" id="settings-form" autocomplete="off">
+      <h2>Settings</h2>
+      <div class="form" id="settings-fields"></div>
+      <div class="actions">
+        <button class="primary" type="submit" id="settings-save">Save</button>
+        <span class="small" id="settings-result" role="status"></span>
+      </div>
+    </form>
+    <section class="card">
+      <h2>Set on the machine</h2>
+      <dl class="facts" id="settings-fixed"></dl>
+      <p class="dim small">These change only in <span class="mono">config.json</span> or the bridge's flags: they choose what runs and where its traffic goes.</p>
+    </section>
   </div>
 
   <p class="dim small foot" id="signed-in-as"></p>

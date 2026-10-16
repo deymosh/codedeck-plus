@@ -4,7 +4,7 @@
 "use strict";
 
 const views = ["loading", "signed-out", "pending", "dashboard"];
-const tabs = ["overview", "usage"];
+const tabs = ["overview", "usage", "browsers", "devices", "settings"];
 let pollTimer = null;
 let expiresAt = 0;
 // The latest status, so switching tabs renders at once instead of waiting
@@ -18,12 +18,12 @@ function show(view) {
   $("sign-out").hidden = view !== "dashboard";
 }
 
-async function api(path, method = "GET") {
+async function api(path, method = "GET", payload = {}) {
   const response = await fetch(path, {
     method,
     credentials: "same-origin",
     headers: method === "POST" ? { "Content-Type": "application/json" } : {},
-    body: method === "POST" ? "{}" : undefined,
+    body: method === "POST" ? JSON.stringify(payload) : undefined,
   });
   const body = await response.json().catch(() => ({}));
   return { status: response.status, body };
@@ -168,6 +168,9 @@ function render() {
   for (const pane of document.querySelectorAll("[data-pane]")) pane.hidden = pane.dataset.pane !== tab;
   $("signed-in-as").textContent = `Signed in by ${body.signedInBy.slice(0, 16)}… ${relative(body.signedInSince)}.`;
   if (tab === "usage") usage(hb);
+  else if (tab === "browsers") browsers();
+  else if (tab === "devices") devices();
+  else if (tab === "settings") settings();
   else overview(body, hb);
 }
 
@@ -253,7 +256,152 @@ function usage(hb) {
   }));
 }
 
-window.addEventListener("hashchange", render);
+/** "Firefox on Windows" from a User-Agent, or the string itself. */
+function browserName(agent) {
+  if (!agent) return "A browser";
+  const name = /Edg\//.test(agent) ? "Edge" : /OPR\//.test(agent) ? "Opera" : /Firefox\//.test(agent) ? "Firefox"
+    : /Chrome\//.test(agent) ? "Chrome" : /Safari\//.test(agent) ? "Safari" : null;
+  const os = /Android/.test(agent) ? "Android" : /iPhone|iPad/.test(agent) ? "iOS" : /Windows/.test(agent) ? "Windows"
+    : /Mac OS X/.test(agent) ? "macOS" : /Linux/.test(agent) ? "Linux" : null;
+  return name ? (os ? `${name} on ${os}` : name) : agent;
+}
+
+async function browsers() {
+  const { status, body } = await api("/api/browsers");
+  if (status !== 200) return;
+  $("browsers").replaceChildren(...(body.browsers || []).map((b) => {
+    const out = el("button", { class: "quiet danger", type: "button" }, "Sign out");
+    out.addEventListener("click", async () => {
+      if (!confirm(b.current ? "Sign this browser out?" : `Sign out ${browserName(b.agent)} at ${b.peer}?`)) return;
+      const answer = await api("/api/browsers/sign-out", "POST", { id: b.id });
+      $("browsers-error").hidden = answer.status === 200;
+      $("browsers-error").textContent = "The bridge did not sign it out.";
+      if (b.current && answer.status === 200) return refresh();
+      browsers();
+    });
+    return el("div", { class: "row" },
+      el("div", { class: "row-main" },
+        el("div", { class: "row-title" }, browserName(b.agent), b.current ? el("span", { class: "chip" }, "this browser") : null),
+        el("div", { class: "dim small" }, `${b.peer} · signed in ${relative(b.sinceMs)} · seen ${relative(b.lastSeenMs)} · by ${b.by.slice(0, 16)}…`)),
+      out);
+  }));
+}
+
+async function devices() {
+  const { status, body } = await api("/api/devices");
+  if (status !== 200) return;
+  const list = body.devices || [];
+  $("no-devices").hidden = list.length > 0;
+  const now = Date.now();
+  $("devices").replaceChildren(...list.map((d) => {
+    const present = d.clients.filter((c) => c.presentUntilMs > now).length;
+    const clients = d.clients.length;
+    const lapse = Math.max(0, ...d.clients.map((c) => c.expiresAt * 1000));
+    return el("div", { class: "row" },
+      el("div", { class: "row-main" },
+        el("div", { class: "row-title" }, d.label || "A phone", present ? el("span", { class: "state ok" }, "here now") : null),
+        el("div", { class: "dim small mono" }, d.npub),
+        el("div", { class: "dim small" },
+          `Paired ${relative(d.pairedAt)} · ${clients} ${clients === 1 ? "copy of the app" : "copies of the app"}`
+          + (lapse ? ` · keys valid until ${new Date(lapse).toLocaleDateString()}` : ""))));
+  }));
+}
+
+// What each setting is called on the page, and how it is edited.
+const SETTINGS = {
+  machineName: { label: "Machine name", kind: "text" },
+  relays: { label: "Relays", kind: "list", hint: "One per line: wss://, or ws:// only to an .onion address." },
+  "direct.endpoints": { label: "Direct link addresses", kind: "list", hint: "Where phones dial the bridge, in order. One per line." },
+  transcriptKeepLast: { label: "Transcripts kept", kind: "number", hint: "The newest this many; empty keeps them all." },
+  relayRegisterToken: { label: "Relay admin token", kind: "secret", needs: "relayRegisterEndpoint" },
+  blossomRegisterToken: { label: "Blossom admin token", kind: "secret", needs: "blossomRegisterEndpoint" },
+};
+const FIXED_LABELS = {
+  workspaceRoots: "Workspace", torProxyUrl: "Tor proxy", nodePath: "Node", agentHostPath: "Agent host",
+  testMode: "Test mode", "direct.listen": "Direct link listens on", "direct.onionListen": "Onion listener",
+  relayRegisterEndpoint: "Relay admin endpoint", blossomRegisterEndpoint: "Blossom admin endpoint",
+};
+// The form is built once per visit to the tab, so a poll does not wipe what
+// is being typed.
+let settingsShown = false;
+
+function shownValue(v) {
+  if (v === null || v === undefined || v === "") return "—";
+  if (Array.isArray(v)) return v.length ? v.join("\n") : "—";
+  return String(v);
+}
+
+async function settings() {
+  if (settingsShown) return;
+  const { status, body } = await api("/api/config");
+  if (status !== 200) return;
+  settingsShown = true;
+  const fields = body.fields || [];
+  const byKey = Object.fromEntries(fields.map((f) => [f.key, f]));
+  // A token is offered only beside its endpoint: one without the other does nothing.
+  const editable = fields.filter((f) => f.editable && SETTINGS[f.key]
+    && (!SETTINGS[f.key].needs || (byKey[SETTINGS[f.key].needs] && byKey[SETTINGS[f.key].needs].value)));
+  $("settings-fields").replaceChildren(...editable.map((f) => {
+    const spec = SETTINGS[f.key];
+    let input;
+    if (spec.kind === "list") {
+      input = el("textarea", { rows: "3", spellcheck: "false", class: "mono" });
+      input.value = (f.value || []).join("\n");
+    } else if (spec.kind === "secret") {
+      input = el("input", { type: "password", placeholder: f.set ? "Set — type to replace" : "Not set" });
+    } else {
+      input = el("input", { type: spec.kind === "number" ? "number" : "text", min: "0" });
+      input.value = f.value ?? "";
+    }
+    input.dataset.key = f.key;
+    input.dataset.kind = spec.kind;
+    if (f.overridden) input.disabled = true;
+    const note = f.overridden ? "Set by a flag or an environment variable, which wins over the file." : spec.hint;
+    const clear = spec.kind === "secret" && f.set && !f.overridden
+      ? el("label", { class: "check small dim" }, el("input", { type: "checkbox", "data-clear": f.key }), " Clear it")
+      : null;
+    return el("label", { class: "field" }, el("span", { class: "field-label" }, spec.label), input,
+      note ? el("span", { class: "dim small" }, note) : null, clear);
+  }));
+  $("settings-fixed").replaceChildren(...fields.filter((f) => !f.editable).flatMap((f) => [
+    el("dt", {}, FIXED_LABELS[f.key] || f.key), el("dd", { class: "mono" }, shownValue(f.value)),
+  ]));
+}
+
+$("settings-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const set = {};
+  const secrets = {};
+  for (const input of $("settings-fields").querySelectorAll("[data-key]")) {
+    if (input.disabled) continue;
+    const { key, kind } = input.dataset;
+    if (kind === "secret") {
+      if (input.value) secrets[key] = input.value;
+    } else if (kind === "list") {
+      set[key] = input.value.split("\n").map((line) => line.trim()).filter(Boolean);
+    } else if (kind === "number") {
+      set[key] = input.value === "" ? null : Number(input.value);
+    } else {
+      set[key] = input.value.trim();
+    }
+  }
+  for (const box of $("settings-fields").querySelectorAll("[data-clear]")) if (box.checked) secrets[box.dataset.clear] = null;
+  const result = $("settings-result");
+  const answer = await api("/api/config", "POST", { set, secrets });
+  if (answer.status === 200) {
+    result.className = "small ok";
+    result.textContent = "Saved. Restart the bridge to apply it.";
+    for (const input of $("settings-fields").querySelectorAll("input[type=password]")) input.value = "";
+  } else {
+    result.className = "small error";
+    result.textContent = answer.body.error ? `${SETTINGS[answer.body.key]?.label || answer.body.key}: ${answer.body.error}` : "The bridge did not save it.";
+  }
+});
+
+window.addEventListener("hashchange", () => {
+  settingsShown = false;
+  render();
+});
 
 $("start").addEventListener("click", start);
 $("sign-out").addEventListener("click", async () => {
