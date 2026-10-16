@@ -116,7 +116,7 @@ struct Runtime {
     /// The terminal audit's writer thread.
     audit: audit::Audit,
     /// `<home>/terminal-allow.json`, shared with the periodic change check so
-    /// its mtime is read once between the two.
+    /// its metadata is read once between the two.
     allowlist: Rc<RefCell<AllowlistCache>>,
     /// Writes the allowlist file, on a thread of its own: the runtime's single
     /// thread never writes it.
@@ -245,7 +245,7 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
 /// Watch the terminal allowlist file for a change every few seconds, so a
 /// `terminal disallow` closes a device's terminals even when no terminal
 /// message arrives to carry the check. The check is one `metadata` call; the
-/// file is read only when its mtime moved, and the same cache is shared with
+/// file is read only when its stamp moved, and the same cache is shared with
 /// the per-message check, so the change is noticed and read once.
 fn watch_allowlist(cache: Rc<RefCell<AllowlistCache>>, inputs: mpsc::UnboundedSender<Input>) {
     tokio::task::spawn_local(async move {
@@ -441,15 +441,15 @@ impl Runtime {
             }
             Effect::TerminalClose { term } => self.terminals.close(&term),
             Effect::TerminalPending(pending) => {
-                // Merge the refused devices with the approved ones as they are
-                // on disk now (the owner may have run `terminal allow` since
-                // this engine last read the file). The write goes to a thread
-                // of its own — never the runtime's — and the engine is handed
-                // the merged list, whose approved devices would otherwise be a
-                // file change behind.
-                let merged = self.allowlist.borrow().merge_pending(&pending);
-                self.allowlist_writer.write(merged.clone());
-                let _ = self.inputs.send(Input::TerminalAllowlist(merged));
+                // The refused devices go to the allowlist's writer thread,
+                // which reads the file, replaces `pending` with this list and
+                // writes it — never the runtime's thread, which an unapproved
+                // device spamming `terminal-open` would otherwise stall with a
+                // read per message. The engine already holds its own pending
+                // list, and the write's new mtime reaches it through the
+                // per-message and periodic allowlist checks, so nothing is
+                // sent back to it here.
+                self.allowlist_writer.set_pending(pending);
             }
             Effect::Audit(record) => self.audit.record(record),
         }
