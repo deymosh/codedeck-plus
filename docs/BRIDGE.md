@@ -234,11 +234,25 @@ accepting it. Plain `http://` on the port redirects to
 A browser signs in with a paired phone: the page shows a code and a QR, and
 on the phone the machine's page, "Sign in a browser", scans or types it. The
 browser then stays signed in for 30 days (a cookie only the bridge can read,
-sent only over HTTPS), until it signs out, or until the bridge restarts: the
-bridge keeps signed-in browsers in memory only. Until then it sees only the
-sign-in page. The page shows what the heartbeat carries — the bridge, the
-direct link, the agents and their credential status, the sessions — and never
-a secret.
+sent only over HTTPS), and it survives a restart: signed-in browsers are kept
+in `<home>/web-sessions.json`, keyed by the cookie's SHA-256 so the file
+holds no token a copy could be replayed from. Signing out, or revoking one
+from the page, ends it; a pending sign-in is never written. Until signed in
+it sees only the sign-in page. The page shows what the heartbeat carries —
+the bridge, the direct link, the agents and their credential status, the
+sessions — and never a secret.
+
+Signed in, the page also has a few JSON APIs: `GET /api/browsers` lists the
+signed-in browsers (each with its id, approver, sign-in and last-seen times,
+expiry, address and User-Agent, and which is the caller) and
+`POST /api/browsers/sign-out` ends one; `GET /api/devices` shows the paired
+identities and their clients (labels and key expiries, never a key);
+`GET /api/config` shows the config as it is in effect (a secret only as
+set/not set, and each field whether a flag or environment variable overrides
+the file) and `POST /api/config` changes the safe set — the machine name,
+the relays, the direct endpoints, the transcript retention and the relay /
+Blossom registration tokens — validating each and rewriting `config.json`
+keeping every other key.
 
 Because a LAN or VPN is not a trusted place, the page refuses a `Host` that
 is not an IP address, `localhost` or a host the direct endpoints name,
@@ -314,6 +328,8 @@ In `<home>`:
 - `bridge.lock` — held while a bridge runs, so two never share one identity;
   `bridge.pid` beside it names the process holding it.
 - `config.json` — optional; tightened to 0600 when read (it may hold admin tokens).
+- `web-sessions.json` — the signed-in browsers of the web page, keyed by the
+  cookie's SHA-256 (never a token), 0600. Deleting it signs every browser out.
 - `direct/cert.der`, `direct/key.der` — the direct link's certificate and its
   key (0600). Deleting them makes a new one; phones pick up the new pin from
   the next heartbeat.

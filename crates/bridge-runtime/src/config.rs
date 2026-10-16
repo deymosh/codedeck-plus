@@ -2,7 +2,7 @@
 //! `$CODEDECK_HOME/config.json` > defaults. Same keys as the TypeScript
 //! bridge's config, so an existing `config.json` keeps working.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use protocol::capabilities::BridgeHostKind;
 use protocol::relays::DEFAULT_RELAYS;
 use serde::Deserialize;
+use serde_json::Value;
 
 /// Flags that feed configuration (the rest of the CLI lives in `main.rs`).
 #[derive(Debug, Default, Clone)]
@@ -135,9 +136,12 @@ impl DirectConfig {
     }
 }
 
-/// Whether `url` is a direct endpoint a phone may dial: `wss://` anywhere,
-/// `ws://` only to an onion service.
-pub fn is_direct_endpoint(url: &str) -> bool {
+/// Whether `url` is a WebSocket URL that may carry the bridge's traffic:
+/// `wss://` anywhere, `ws://` only to an onion service. Cleartext never
+/// leaves the machine except inside Tor, so a `ws://` host that is not a
+/// `.onion` is refused wherever such a URL is accepted — relays and direct
+/// endpoints alike.
+fn is_wss_or_onion(url: &str) -> bool {
     let host = |rest: &str| rest.split(['/', ':']).next().unwrap_or("").to_ascii_lowercase();
     if let Some(rest) = url.strip_prefix("wss://") {
         !host(rest).is_empty()
@@ -146,6 +150,16 @@ pub fn is_direct_endpoint(url: &str) -> bool {
     } else {
         false
     }
+}
+
+/// Whether `url` is a direct endpoint a phone may dial.
+pub fn is_direct_endpoint(url: &str) -> bool {
+    is_wss_or_onion(url)
+}
+
+/// Whether `url` is a relay a phone or the bridge may connect to.
+pub fn is_relay_url(url: &str) -> bool {
+    is_wss_or_onion(url)
 }
 
 fn direct_config(flags: &Flags, file: Option<FileDirect>) -> Result<DirectConfig, String> {
@@ -306,6 +320,10 @@ pub struct Config {
     pub terminal: TerminalSettings,
     /// How the terminal audit is kept.
     pub audit: AuditSettings,
+    /// The config-file keys a command-line flag or a `CODEDECK_*` variable
+    /// overrode. The page's config API reports these as `overridden`, since
+    /// an edit of the file would not take effect while the override stands.
+    pub overridden: BTreeSet<String>,
 }
 
 /// Read an env var; empty counts as unset (Compose's `${VAR:-}` defines every
@@ -542,8 +560,173 @@ pub fn load(flags: &Flags) -> Result<Config, String> {
         direct,
         terminal,
         audit,
+        overridden: overridden_keys(flags),
         home,
     })
+}
+
+/// The config-file keys a flag or a `CODEDECK_*` variable supplied, named as
+/// they are in the file (`direct.listen` for the nested key). Read from the
+/// same sources `load` reads, so the two cannot drift.
+fn overridden_keys(flags: &Flags) -> BTreeSet<String> {
+    let mut keys = BTreeSet::new();
+    let mut mark = |set: bool, key: &str| {
+        if set {
+            keys.insert(key.to_string());
+        }
+    };
+    mark(flags.machine_name.is_some() || env("CODEDECK_MACHINE_NAME").is_some(), "machineName");
+    mark(!flags.relays.is_empty() || env("CODEDECK_RELAYS").is_some(), "relays");
+    mark(!flags.workspaces.is_empty() || env("CODEDECK_WORKSPACE_ROOTS").is_some(), "workspaceRoots");
+    mark(env("CODEDECK_RELAY_REGISTER_ENDPOINT").is_some(), "relayRegisterEndpoint");
+    mark(env("CODEDECK_RELAY_REGISTER_TOKEN").is_some(), "relayRegisterToken");
+    mark(env("CODEDECK_BLOSSOM_REGISTER_ENDPOINT").is_some(), "blossomRegisterEndpoint");
+    mark(env("CODEDECK_BLOSSOM_REGISTER_TOKEN").is_some(), "blossomRegisterToken");
+    mark(env("CODEDECK_TRANSCRIPT_KEEP_LAST").is_some(), "transcriptKeepLast");
+    mark(flags.tor_proxy.is_some() || env("CODEDECK_TOR_PROXY_URL").is_some(), "torProxyUrl");
+    mark(env("CODEDECK_NODE_PATH").is_some(), "nodePath");
+    mark(flags.agent_host.is_some() || env("CODEDECK_AGENT_HOST").is_some(), "agentHostPath");
+    mark(flags.test_mode || env_bool("CODEDECK_TEST_MODE").is_some(), "testMode");
+    mark(flags.direct_listen.is_some() || env("CODEDECK_DIRECT_LISTEN").is_some(), "direct.listen");
+    mark(flags.direct_onion_listen.is_some() || env("CODEDECK_DIRECT_ONION_LISTEN").is_some(), "direct.onionListen");
+    mark(!flags.direct_endpoints.is_empty() || env("CODEDECK_DIRECT_ENDPOINTS").is_some(), "direct.endpoints");
+    keys
+}
+
+/// The config-file keys a signed-in browser may change through the page's
+/// config API — the "safe set". Everything else stays read-only: the other
+/// keys name paths, listeners or process settings whose change could break a
+/// running bridge, so the page has no business writing them.
+pub const WEB_EDITABLE: [&str; 4] = ["machineName", "relays", "direct.endpoints", "transcriptKeepLast"];
+
+/// The secrets the page may set or clear. Write-only: the page never reads
+/// one back, so a token can be replaced but never leaked.
+pub const WEB_EDITABLE_SECRETS: [&str; 2] = ["relayRegisterToken", "blossomRegisterToken"];
+
+/// Check one value the page wants to write for a safe-set key. The rules
+/// mirror what `load` accepts, so a written file is one the bridge would
+/// read back.
+pub fn validate_web_value(key: &str, value: &Value) -> Result<(), String> {
+    match key {
+        "machineName" => {
+            let name = value.as_str().ok_or("machineName: expected a string")?;
+            let chars = name.chars().count();
+            if !(1..=64).contains(&chars) {
+                return Err(format!("machineName: 1 to 64 characters, got {chars}"));
+            }
+            if name.chars().any(char::is_control) {
+                return Err("machineName: no control characters".into());
+            }
+            Ok(())
+        }
+        "relays" => {
+            let urls = value.as_array().ok_or("relays: expected an array of URLs")?;
+            if urls.is_empty() {
+                return Err("relays: name at least one relay".into());
+            }
+            for url in urls {
+                let url = url.as_str().ok_or("relays: every entry must be a string")?;
+                if !is_relay_url(url) {
+                    return Err(format!("relays: {url:?} must be wss://, or ws:// only to a .onion"));
+                }
+            }
+            Ok(())
+        }
+        "direct.endpoints" => {
+            let urls = value.as_array().ok_or("direct.endpoints: expected an array of URLs")?;
+            for url in urls {
+                let url = url.as_str().ok_or("direct.endpoints: every entry must be a string")?;
+                if !is_direct_endpoint(url) {
+                    return Err(format!("direct.endpoints: {url:?} must be wss://, or ws:// only to a .onion"));
+                }
+            }
+            Ok(())
+        }
+        "transcriptKeepLast" => match value {
+            Value::Null => Ok(()),
+            Value::Number(n) if n.as_u64().is_some() => Ok(()),
+            _ => Err("transcriptKeepLast: a whole number of transcripts, or null".into()),
+        },
+        _ => Err(format!("{key}: not a setting the page may change")),
+    }
+}
+
+/// Check one value the page wants to write for a secret key: a non-empty
+/// token, or `null` to clear it.
+pub fn validate_web_secret(key: &str, value: &Value) -> Result<(), String> {
+    match value {
+        Value::Null => Ok(()),
+        Value::String(s) if !s.is_empty() => Ok(()),
+        _ => Err(format!("{key}: a non-empty token, or null to clear")),
+    }
+}
+
+/// Change the given config-file keys and write the file back atomically,
+/// keeping every other key — including ones this bridge does not know —
+/// exactly as it was. `None` removes a key (clearing a token, or the
+/// retention limit). The file may hold admin tokens, so it stays 0600.
+pub fn write_web_settings(path: &Path, changes: &[(String, Option<Value>)]) -> Result<(), String> {
+    let mut root: Value = match fs::read_to_string(path) {
+        Ok(raw) => serde_json::from_str(&raw).map_err(|e| format!("invalid config in {}: {e}", path.display()))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
+        Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
+    };
+    let obj = root.as_object_mut().ok_or_else(|| format!("{} does not hold a JSON object", path.display()))?;
+    for (key, value) in changes {
+        match key.as_str() {
+            "direct.endpoints" => {
+                let direct = obj.entry("direct").or_insert_with(|| serde_json::json!({}));
+                let direct = direct.as_object_mut().ok_or("direct is not a JSON object")?;
+                set_or_remove(direct, "endpoints", value.clone());
+            }
+            plain => set_or_remove(obj, plain, value.clone()),
+        }
+    }
+    let json = serde_json::to_vec_pretty(&root).map_err(|e| e.to_string())?;
+    crate::state::write_private(path, &json).map_err(|e| format!("cannot write {}: {e}", path.display()))
+}
+
+fn set_or_remove(obj: &mut serde_json::Map<String, Value>, key: &str, value: Option<Value>) {
+    match value {
+        Some(value) => {
+            obj.insert(key.to_string(), value);
+        }
+        None => {
+            obj.remove(key);
+        }
+    }
+}
+
+/// The page's view of the config: every field as it is in effect, with
+/// whether the page may change it, whether it is a secret (shown only as
+/// set/not set), and whether a flag or environment variable overrides the
+/// file — an edit of an overridden field would not take effect.
+pub fn web_config_fields(config: &Config) -> Vec<Value> {
+    let overridden = |key: &str| config.overridden.contains(key);
+    let field = |key: &str, value: Value, editable: bool| {
+        serde_json::json!({ "key": key, "value": value, "editable": editable, "secret": false, "overridden": overridden(key) })
+    };
+    let secret = |key: &str, set: bool, editable: bool| {
+        serde_json::json!({ "key": key, "set": set, "editable": editable, "secret": true, "overridden": overridden(key) })
+    };
+    let path = |p: &Path| p.to_string_lossy().into_owned();
+    vec![
+        field("machineName", Value::from(config.machine.clone()), true),
+        field("relays", serde_json::json!(config.relays), true),
+        field("direct.endpoints", serde_json::json!(config.direct.endpoints), true),
+        field("transcriptKeepLast", config.transcript_keep_last.map(|n| Value::from(n as u64)).unwrap_or(Value::Null), true),
+        field("workspaceRoots", serde_json::json!(config.workspace_roots.iter().map(|p| path(p)).collect::<Vec<_>>()), false),
+        field("torProxyUrl", config.tor_proxy.clone().map(Value::from).unwrap_or(Value::Null), false),
+        field("nodePath", Value::from(config.node_path.clone()), false),
+        field("agentHostPath", Value::from(path(&config.agent_host_path)), false),
+        field("testMode", Value::from(config.test_mode), false),
+        field("direct.listen", config.direct.listen.map(|a| Value::from(a.to_string())).unwrap_or(Value::Null), false),
+        field("direct.onionListen", config.direct.onion_listen.map(|a| Value::from(a.to_string())).unwrap_or(Value::Null), false),
+        field("relayRegisterEndpoint", config.relay_register.as_ref().map(|r| Value::from(r.url.clone())).unwrap_or(Value::Null), false),
+        field("blossomRegisterEndpoint", config.blossom_register.as_ref().map(|r| Value::from(r.url.clone())).unwrap_or(Value::Null), false),
+        secret("relayRegisterToken", config.relay_register.is_some(), true),
+        secret("blossomRegisterToken", config.blossom_register.is_some(), true),
+    ]
 }
 
 #[cfg(test)]
@@ -767,5 +950,102 @@ mod tests {
         fs::write(dir.path().join("config.json"), "{nope").unwrap();
         let err = load(&Flags { home: Some(dir.path().into()), ..Default::default() }).unwrap_err();
         assert!(err.contains("invalid config"));
+    }
+
+    #[test]
+    fn the_safe_set_validates_names_relays_and_endpoints() {
+        // A machine name: 1 to 64 characters, no control characters.
+        assert!(validate_web_value("machineName", &Value::from("laptop")).is_ok());
+        assert!(validate_web_value("machineName", &Value::from("")).is_err());
+        assert!(validate_web_value("machineName", &Value::from("a".repeat(65))).is_err());
+        assert!(validate_web_value("machineName", &Value::from("two\nlines")).is_err());
+        // Relays: wss:// anywhere, ws:// only to a .onion, at least one.
+        assert!(validate_web_value("relays", &serde_json::json!(["wss://relay.example", "ws://abc.onion:80"])).is_ok());
+        assert!(validate_web_value("relays", &serde_json::json!(["ws://192.168.1.9:7447"])).is_err());
+        assert!(validate_web_value("relays", &serde_json::json!([])).is_err());
+        // Direct endpoints: the same rule, but an empty list is allowed.
+        assert!(validate_web_value("direct.endpoints", &serde_json::json!([])).is_ok());
+        assert!(validate_web_value("direct.endpoints", &serde_json::json!(["wss://192.168.1.9:7447"])).is_ok());
+        assert!(validate_web_value("direct.endpoints", &serde_json::json!(["https://x"])).is_err());
+        // Retention: a whole number, or null to clear.
+        assert!(validate_web_value("transcriptKeepLast", &Value::from(0)).is_ok());
+        assert!(validate_web_value("transcriptKeepLast", &Value::Null).is_ok());
+        assert!(validate_web_value("transcriptKeepLast", &Value::from(-1)).is_err());
+        // Anything else is not the page's to change.
+        assert!(validate_web_value("nodePath", &Value::from("/usr/bin/node")).is_err());
+        assert!(validate_web_secret("relayRegisterToken", &Value::from("tok")).is_ok());
+        assert!(validate_web_secret("relayRegisterToken", &Value::Null).is_ok());
+        assert!(validate_web_secret("relayRegisterToken", &Value::from("")).is_err());
+    }
+
+    #[test]
+    fn writing_settings_keeps_unknown_keys_and_clears_on_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        fs::write(&path, r#"{"machineName":"desktop","direct":{"listen":"0.0.0.0:7447"},"keepMe":{"x":1}}"#).unwrap();
+        let changes = vec![
+            ("machineName".to_string(), Some(Value::from("laptop"))),
+            ("direct.endpoints".to_string(), Some(serde_json::json!(["wss://192.168.1.9:7447"]))),
+            ("relayRegisterToken".to_string(), Some(Value::from("tok"))),
+        ];
+        write_web_settings(&path, &changes).unwrap();
+        let written: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(written["machineName"], "laptop");
+        assert_eq!(written["direct"]["endpoints"][0], "wss://192.168.1.9:7447");
+        assert_eq!(written["direct"]["listen"], "0.0.0.0:7447", "a key beside the changed one is kept");
+        assert_eq!(written["keepMe"]["x"], 1, "an unknown key is kept");
+        assert_eq!(written["relayRegisterToken"], "tok");
+
+        // None clears: the key comes out, everything else stays.
+        write_web_settings(&path, &[("relayRegisterToken".to_string(), None)]).unwrap();
+        let written: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(written.get("relayRegisterToken").is_none());
+        assert_eq!(written["machineName"], "laptop");
+
+        // A missing file starts from an empty object.
+        let fresh = dir.path().join("fresh.json");
+        write_web_settings(&fresh, &[("machineName".to_string(), Some(Value::from("new")))]).unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&fs::read_to_string(&fresh).unwrap()).unwrap()["machineName"], "new");
+    }
+
+    #[test]
+    fn the_config_view_shows_secrets_as_set_or_not_and_marks_overrides() {
+        let config = Config {
+            home: PathBuf::from("/home/me/.codedeck"),
+            config_file: PathBuf::from("/home/me/.codedeck/config.json"),
+            config_file_exists: true,
+            machine: "desktop".into(),
+            host_kind: BridgeHostKind::Cli,
+            relays: vec!["wss://relay.example".into()],
+            workspace_roots: vec![PathBuf::from("/srv/w")],
+            relay_register: Some(RegisterEndpoint { url: "https://relay.example/admin".into(), token: "s3cret".into() }),
+            blossom_register: None,
+            tor_proxy: Some("127.0.0.1:9050".into()),
+            transcript_keep_last: Some(5),
+            node_path: "node".into(),
+            agent_host_path: PathBuf::from("/opt/agent-host/dist/main.js"),
+            test_mode: false,
+            host_env: BTreeMap::new(),
+            direct: DirectConfig { listen: Some("0.0.0.0:7447".parse().unwrap()), onion_listen: None, endpoints: vec![] },
+            terminal: TerminalSettings::default(),
+            audit: AuditSettings::default(),
+            overridden: BTreeSet::from(["machineName".to_string()]),
+        };
+        let fields = web_config_fields(&config);
+        let of = |key: &str| fields.iter().find(|f| f["key"] == key).unwrap().clone();
+        assert_eq!(of("machineName")["value"], "desktop");
+        assert_eq!(of("machineName")["editable"], true);
+        assert_eq!(of("machineName")["overridden"], true, "a flag or env overrides the file");
+        assert_eq!(of("nodePath")["editable"], false, "a path stays read-only");
+        assert_eq!(of("nodePath")["overridden"], false);
+        assert_eq!(of("direct.listen")["value"], "0.0.0.0:7447");
+        // A secret is shown as set/not set, and never carries its value.
+        let token = of("relayRegisterToken");
+        assert_eq!(token["secret"], true);
+        assert_eq!(token["editable"], true);
+        assert_eq!(token["set"], true);
+        assert!(token.get("value").is_none());
+        assert_eq!(of("blossomRegisterToken")["set"], false);
+        assert!(!serde_json::to_string(&fields).unwrap().contains("s3cret"), "no secret value is in the view");
     }
 }

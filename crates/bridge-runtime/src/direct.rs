@@ -269,18 +269,20 @@ impl Hub {
 }
 
 /// Start the listeners `config` asks for; `None` when it asks for none.
+/// `web_config` is what the page's config API reads and writes.
 pub async fn start(
     config: &DirectConfig,
     home: &Path,
     bridge_pubkey: String,
     inputs: mpsc::UnboundedSender<Input>,
+    web_config: crate::web::ConfigView,
 ) -> Result<Option<Direct>, String> {
     if !config.enabled() {
         log::info!("[Direct] Off (no direct listener configured)");
         return Ok(None);
     }
     let npub = protocol::crypto::npub_from_hex(&bridge_pubkey).unwrap_or_else(|_| bridge_pubkey.clone());
-    let web = crate::web::Web::new(npub, &config.endpoints, inputs.clone());
+    let web = crate::web::Web::new(npub, &config.endpoints, inputs.clone(), home, web_config);
     let hub = Hub::new(bridge_pubkey, inputs);
     let mut tasks = Vec::new();
     let mut bound_wss = None;

@@ -166,7 +166,8 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
     };
 
     let (inputs, mut rx) = mpsc::unbounded_channel();
-    let direct = crate::direct::start(&config.direct, &config.home, keys.pubkey_hex.clone(), inputs.clone()).await?;
+    let web_config = crate::web::ConfigView { path: config.config_file.clone(), fields: crate::config::web_config_fields(&config) };
+    let direct = crate::direct::start(&config.direct, &config.home, keys.pubkey_hex.clone(), inputs.clone(), web_config).await?;
     engine_config.direct = direct.as_ref().map(|d| d.info.clone());
     let relays = Relays::start(
         config.relays.clone(),
@@ -348,6 +349,10 @@ impl Runtime {
             Effect::Publish { to, message } => {
                 if let (protocol::events::BridgeToPhone::Sessions(list), Some(direct)) = (&message, &self.direct) {
                     direct.web.set_heartbeat(list);
+                    // The devices API follows the heartbeat: the paired
+                    // phones are cheap to hand over, and this is where they
+                    // change.
+                    direct.web.set_devices(self.engine.paired_phones());
                 }
                 self.relays.publish(to, message)
             }
@@ -374,6 +379,9 @@ impl Runtime {
                 let filter = self.engine.commands_filter();
                 if let Some(direct) = &self.direct {
                     direct.hub.set_paired(&filter.authors);
+                    // Pairing changed (this effect rebuilds the command
+                    // subscription): keep the devices API in step at once.
+                    direct.web.set_devices(self.engine.paired_phones());
                 }
                 self.relays.subscribe_commands(filter.authors, filter.since, self.terminals_on_relays);
             }
