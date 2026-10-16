@@ -155,6 +155,11 @@ dependencies {
     implementation(libs.markdown.renderer.m3)
     implementation(libs.kotlinx.serialization.json)
 
+    // The vendored Termux terminal view and its emulator (Apache-2.0) — a
+    // Compose screen hosts the view; see terminal-view/README.md.
+    implementation(project(":terminal-view"))
+    implementation(project(":terminal-emulator"))
+
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.robolectric)

@@ -1,0 +1,5 @@
+<!--
+  The upstream manifest declared its package here; AGP 9 requires the
+  namespace in build.gradle.kts instead, so this file is left empty.
+-->
+<manifest />

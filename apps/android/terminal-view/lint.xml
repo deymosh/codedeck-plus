@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Third-party code kept as upstream: these sources are a verbatim copy of
+  termux/termux-app's terminal-view (Apache-2.0, see LICENSE and README.md).
+  Its lint findings are not ours to fix — editing the logic to satisfy the
+  detector would diverge from upstream for no behavioural reason — so each
+  reported check is disabled here rather than touched in the source.
+
+  ObsoleteSdkInt: @RequiresApi/@TargetApi guards for API levels below this
+  module's minSdk 26, which upstream still supports.
+  UseRequiresApi: an @TargetApi where @RequiresApi would be preferred.
+-->
+<lint>
+    <issue id="ObsoleteSdkInt" severity="ignore" />
+    <issue id="UseRequiresApi" severity="ignore" />
+</lint>

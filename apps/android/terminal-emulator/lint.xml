@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Third-party code kept as upstream: these sources are a verbatim copy of
+  termux/termux-app's terminal-emulator (Apache-2.0, see LICENSE and
+  ../terminal-view/README.md). Its lint findings are not ours to fix — editing
+  the logic to satisfy the detector would diverge from upstream for no
+  behavioural reason — so each reported check is disabled here rather than
+  touched in the source.
+
+  DefaultLocale: String.format without a Locale in a log message.
+-->
+<lint>
+    <issue id="DefaultLocale" severity="ignore" />
+</lint>
