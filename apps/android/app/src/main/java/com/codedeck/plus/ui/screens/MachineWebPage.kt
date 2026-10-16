@@ -22,6 +22,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -226,17 +227,23 @@ fun WebSignInScreen(core: CoreHost, pubkey: String, onBack: () -> Unit) {
     var notice by remember { mutableStateOf<String?>(null) }
     var noAnswer by remember { mutableStateOf(false) }
     var scanOpen by remember { mutableStateOf(false) }
+    // Each send waits for its own answer, a resend of the same code too.
+    var attempt by remember { mutableIntStateOf(0) }
 
     fun send(sent: String) {
         notice = null
         noAnswer = false
+        attempt++
         scope.launch { core.dispatch(UniffiIntent.WebSignIn(pubkey, sent)) }
     }
 
     DisposableEffect(pubkey) {
         onDispose { core.dispatchDetached(UniffiIntent.ClearWebSignIn(pubkey)) }
     }
-    LaunchedEffect(signIn?.code, signIn?.state) {
+    // An answer, however late, replaces "no answer": the bridge's own verdict
+    // (did not match, signed in) is what the user needs to read.
+    LaunchedEffect(attempt, signIn?.code, signIn?.state) {
+        noAnswer = false
         if (signIn?.state == UniffiWebSignInState.SENDING) {
             delay(ANSWER_WAIT_MS)
             noAnswer = true
