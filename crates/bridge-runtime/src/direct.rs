@@ -35,7 +35,7 @@ use protocol::direct::{
 use protocol::kinds::{COMMAND_KIND, LIVE_KIND};
 use protocol::nostr_event::SignedEvent;
 use sha2::{Digest, Sha256};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadBuf};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -297,9 +297,22 @@ pub async fn start(
         let hub = Rc::clone(&hub);
         let web = Rc::clone(&web);
         tasks.push(tokio::task::spawn_local(async move {
+            let pages = Rc::clone(&web);
             accept_loop(listener, hub, Some(web), move |stream| {
                 let acceptor = acceptor.clone();
-                async move { acceptor.accept(stream).await.ok() }
+                let pages = Rc::clone(&pages);
+                async move {
+                    // A TLS handshake opens with a handshake record (0x16);
+                    // anything else is a browser that typed `http://`, which
+                    // is sent to the `https://` page rather than handed TLS
+                    // bytes it cannot read.
+                    let mut first = [0u8; 1];
+                    if matches!(stream.peek(&mut first).await, Ok(1) if first[0] != 0x16) {
+                        crate::web::redirect_to_https(stream, &pages).await;
+                        return None;
+                    }
+                    acceptor.accept(stream).await.ok()
+                }
             })
             .await
         }));
@@ -425,30 +438,12 @@ where
 /// request head, then hand a WebSocket upgrade to the direct link (with the
 /// bytes already read put back in front) and anything else to the page.
 async fn route<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, peer: IpAddr, hub: &Hub, web: &crate::web::Web) {
-    let Ok(Some(head)) = tokio::time::timeout(HANDSHAKE_TIMEOUT, read_head(&mut stream)).await else { return };
+    let Ok(Some(head)) = tokio::time::timeout(HANDSHAKE_TIMEOUT, crate::web::read_head(&mut stream)).await else { return };
     if crate::web::is_websocket(&head) {
         serve(Replay { prefix: head, at: 0, inner: stream }, hub).await;
     } else {
         crate::web::serve(&head, stream, peer, web).await;
     }
-}
-
-/// Read until the request head is complete (with whatever followed it in the
-/// same reads), or `None` past [`crate::web::MAX_HEAD_BYTES`] or at the end.
-async fn read_head<S: AsyncRead + Unpin>(stream: &mut S) -> Option<Vec<u8>> {
-    let mut buf = Vec::with_capacity(1024);
-    let mut chunk = [0u8; 2048];
-    while crate::web::head_len(&buf).is_none() {
-        if buf.len() >= crate::web::MAX_HEAD_BYTES {
-            return None;
-        }
-        let read = stream.read(&mut chunk).await.ok()?;
-        if read == 0 {
-            return None;
-        }
-        buf.extend_from_slice(&chunk[..read]);
-    }
-    Some(buf)
 }
 
 /// A stream that yields `prefix` before reading on from `inner`: the request

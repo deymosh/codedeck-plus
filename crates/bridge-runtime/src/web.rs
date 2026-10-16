@@ -101,11 +101,22 @@ pub struct Web {
     browsers: RefCell<HashMap<String, Browser>>,
     starts: RefCell<HashMap<IpAddr, (u64, u32)>>,
     inputs: mpsc::UnboundedSender<Input>,
+    /// Sign-in switched off for development (`CODEDECK_WEB_NO_SIGN_IN=1`):
+    /// a browser on a loopback or private address is let in without a
+    /// phone. Never on by default, logged loudly, and shown on the page.
+    no_sign_in: bool,
 }
 
 impl Web {
     pub fn new(machine_npub: String, endpoints: &[String], inputs: mpsc::UnboundedSender<Input>) -> Rc<Self> {
         let hosts = endpoints.iter().filter_map(|url| endpoint_host(url)).collect();
+        let no_sign_in = std::env::var("CODEDECK_WEB_NO_SIGN_IN").is_ok_and(|v| v == "1");
+        if no_sign_in {
+            log::warn!(
+                "[Web] SIGN-IN IS OFF (CODEDECK_WEB_NO_SIGN_IN=1): any browser on a loopback or private \
+                 address sees this bridge's page without a phone. For development only."
+            );
+        }
         Rc::new(Self {
             machine_npub,
             hosts,
@@ -113,6 +124,7 @@ impl Web {
             browsers: RefCell::default(),
             starts: RefCell::default(),
             inputs,
+            no_sign_in,
         })
     }
 
@@ -184,6 +196,7 @@ impl Web {
             "machine": self.machine_npub,
             "signedInBy": by,
             "signedInSince": since_ms,
+            "noSignIn": self.no_sign_in,
             "heartbeat": heartbeat.as_ref().map(|h| serde_json::to_value(h).unwrap_or(serde_json::Value::Null)),
         })
         .to_string()
@@ -360,6 +373,56 @@ fn session_cookie(token: &str, max_age_secs: u64) -> String {
     format!("{COOKIE}={token}; Path=/; Max-Age={max_age_secs}; Secure; HttpOnly; SameSite=Strict")
 }
 
+/// Answer a plain-HTTP request that reached the TLS port with a redirect to
+/// the same page over HTTPS. Nothing else is served in cleartext, and a
+/// `Host` the page would refuse gets no redirect, so this is no open
+/// redirector.
+pub async fn redirect_to_https<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, web: &Web) {
+    let Ok(Some(head)) = tokio::time::timeout(BODY_TIMEOUT, read_head(&mut stream)).await else { return };
+    let mut headers = [httparse::EMPTY_HEADER; 64];
+    let mut request = httparse::Request::new(&mut headers);
+    let host = match request.parse(&head) {
+        Ok(httparse::Status::Complete(_)) => {
+            request.headers.iter().find(|h| h.name.eq_ignore_ascii_case("host")).and_then(|h| std::str::from_utf8(h.value).ok()).map(str::to_string)
+        }
+        _ => None,
+    };
+    let path = request.path.filter(|p| p.starts_with('/') && !p.starts_with("//")).unwrap_or("/");
+    let reply = match host.filter(|h| host_allowed(h, &web.hosts)) {
+        Some(host) => format!("HTTP/1.1 301 Moved Permanently
+Location: https://{host}{path}
+Content-Length: 0
+Connection: close
+
+"),
+        None => "HTTP/1.1 400 Bad Request
+Content-Length: 0
+Connection: close
+
+".to_string(),
+    };
+    let _ = stream.write_all(reply.as_bytes()).await;
+    let _ = stream.shutdown().await;
+}
+
+/// Read until the request head is complete (with whatever followed it in the
+/// same reads), or `None` past [`MAX_HEAD_BYTES`] or at the end.
+pub async fn read_head<S: AsyncRead + Unpin>(stream: &mut S) -> Option<Vec<u8>> {
+    let mut buf = Vec::with_capacity(1024);
+    let mut chunk = [0u8; 2048];
+    while head_len(&buf).is_none() {
+        if buf.len() >= MAX_HEAD_BYTES {
+            return None;
+        }
+        let read = stream.read(&mut chunk).await.ok()?;
+        if read == 0 {
+            return None;
+        }
+        buf.extend_from_slice(&chunk[..read]);
+    }
+    Some(buf)
+}
+
 /// Serve one page request whose head is in `buf`, from a browser at `peer`.
 pub async fn serve<S: AsyncRead + AsyncWrite + Unpin>(buf: &[u8], mut stream: S, peer: IpAddr, web: &Web) {
     let response = match read_request(buf, &mut stream).await {
@@ -376,7 +439,11 @@ fn route(request: &Request, peer: IpAddr, web: &Web) -> Response {
     if request.method == "POST" && request.origin.as_deref() != Some(&format!("https://{host}")) {
         return Response::error(403);
     }
-    let browser = web.browser(request.cookie.as_deref());
+    let browser = if web.no_sign_in && is_local(peer) {
+        Some((String::new(), Browser { access: Access::SignedIn { by: "sign-in switched off".into(), since_ms: 0, expires_ms: u64::MAX }, peer, created_ms: 0 }))
+    } else {
+        web.browser(request.cookie.as_deref())
+    };
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/") => Response::new(200, "text/html; charset=utf-8", INDEX_HTML),
         ("GET", "/app.js") => Response::new(200, "text/javascript; charset=utf-8", APP_JS),
@@ -419,13 +486,27 @@ fn route(request: &Request, peer: IpAddr, web: &Web) -> Response {
     }
 }
 
+/// Loopback, a private network (RFC 1918, unique-local IPv6) or link-local:
+/// where the development switch lets a browser in without a phone.
+fn is_local(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
+        IpAddr::V6(v6) => {
+            v6.is_loopback() || (v6.segments()[0] & 0xfe00) == 0xfc00 || (v6.segments()[0] & 0xffc0) == 0xfe80
+                || v6.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback() || v4.is_private())
+        }
+    }
+}
+
 fn me_json(browser: Option<&Browser>) -> String {
     let now = now_ms();
     match browser.map(|b| &b.access) {
         Some(Access::Pending { code, expires_ms }) => {
             serde_json::json!({ "state": "pending", "code": code, "expiresInMs": expires_ms.saturating_sub(now) })
         }
-        Some(Access::SignedIn { by, since_ms, .. }) => serde_json::json!({ "state": "signed-in", "by": by, "since": since_ms }),
+        Some(Access::SignedIn { by, since_ms, expires_ms }) => {
+            serde_json::json!({ "state": "signed-in", "by": by, "since": since_ms, "noSignIn": *expires_ms == u64::MAX })
+        }
         None => serde_json::json!({ "state": "signed-out" }),
     }
     .to_string()

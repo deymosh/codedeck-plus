@@ -133,6 +133,7 @@ async function dashboard() {
   if (status === 401) return refresh();
   if (status !== 200) return schedule(dashboard, 5000);
   show("dashboard");
+  $("no-sign-in").hidden = !body.noSignIn;
   const hb = body.heartbeat || {};
   $("machine").textContent = hb.machine || "";
   document.title = `${hb.machine || "Bridge"} · CodeDeck+`;

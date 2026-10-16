@@ -43,6 +43,9 @@ services:
       # 1 runs terminals (docs/TERMINAL.md): a shell an approved phone
       # drives. Off unless set; each phone is still approved on the machine.
       - CODEDECK_TERMINAL=${CODEDECK_TERMINAL:-}
+      # Development only: the web page lets in browsers on this network
+      # without a phone sign-in. Never set it on a bridge you rely on.
+      - CODEDECK_WEB_NO_SIGN_IN=${CODEDECK_WEB_NO_SIGN_IN:-}
     # The direct link: phones on your network (or VPN) reach the bridge here
     # without a relay. Only paired phones get past its handshake.
     ports:
