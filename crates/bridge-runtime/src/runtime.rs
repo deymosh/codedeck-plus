@@ -10,11 +10,15 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::time::Duration;
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use bridge_core::ports::{Ports, System};
-use bridge_core::{Config as EngineConfig, Effect, Engine, Input, NotifyLevel, PairingCloseReason, PairingWindowInfo, TimerId};
+use bridge_core::{
+    Config as EngineConfig, Effect, Engine, Input, NotifyLevel, PairingCloseReason, PairingWindowInfo, TerminalConfig,
+    TimerId,
+};
 use protocol::commands::UploadFileMsg;
 use protocol::crypto::Keypair;
 use protocol::events::{BridgeToPhone, TerminalOutputMsg};
@@ -26,10 +30,11 @@ use crate::host::{self, HostCommand, HostHandle};
 use crate::relay::Relays;
 use crate::state::StateFile;
 use crate::terminal::Terminals;
+use crate::terminal_allow::{self, Cache as AllowlistCache};
 use crate::transcripts::FileTranscripts;
 use crate::workspace::FsWorkspace;
 use crate::uploads::{self, Uploads};
-use crate::{qr, work};
+use crate::{audit, qr, work};
 
 /// The real clock, ids and environment.
 pub struct RealSystem;
@@ -104,6 +109,14 @@ struct Runtime {
     /// rings of output and their recordings. Empty unless the owner turned
     /// terminals on: the engine emits no terminal effect otherwise.
     terminals: Terminals,
+    /// The terminal audit's writer thread.
+    audit: audit::Audit,
+    /// `<home>/terminal-allow.json`, shared with the periodic change check so
+    /// its mtime is read once between the two.
+    allowlist: Rc<RefCell<AllowlistCache>>,
+    /// Writes the allowlist file, on a thread of its own: the runtime's single
+    /// thread never writes it.
+    allowlist_writer: terminal_allow::Writer,
 }
 
 fn say(line: &str) {
@@ -120,6 +133,18 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
     engine_config.host_kind = Some(config.host_kind);
     engine_config.relays = config.relays.clone();
     engine_config.bridge_version = crate::version().to_string();
+    // The owner's decision about terminals, and the devices already approved.
+    // The allowlist file is read once here (the cache's first check) and again
+    // whenever its mtime moves.
+    let mut allowlist_cache = AllowlistCache::new(&config.home);
+    let allowlist = allowlist_cache.changed().unwrap_or_default();
+    engine_config.terminal = TerminalConfig {
+        enabled: config.terminal.enabled,
+        relays_allowed: config.terminal.relays_allowed,
+        max_terminals: config.terminal.max_terminals,
+        idle_secs: config.terminal.idle_minutes * 60,
+        allowlist,
+    };
     let first_root = config.workspace_roots[0].clone();
     if let Some(keep) = config.transcript_keep_last {
         engine_config.transcript_keep_last = keep;
@@ -158,6 +183,14 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
 
     let nostr_http = work::NostrHttp::new(config.tor_proxy.as_deref())?;
     let terminals = Terminals::new(config.home.join("audit"), inputs.clone());
+    // The audit's writer thread, fed by a channel: the runtime never touches
+    // the log file itself.
+    let audit = audit::Audit::open(
+        &config.home,
+        config.audit.syslog,
+        audit::Retention { max_days: config.audit.max_days, max_bytes: config.audit.max_bytes },
+    );
+    let allowlist_writer = terminal_allow::Writer::start(terminal_allow::path_in(&config.home));
     let mut rt = Runtime {
         engine: Engine::new(engine_config, ports),
         config,
@@ -173,7 +206,13 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
         pairing_urls: options.pairing_urls,
         direct,
         terminals,
+        audit,
+        allowlist: Rc::new(RefCell::new(allowlist_cache)),
+        allowlist_writer,
     };
+    // The periodic half of the allowlist check: a `terminal disallow` with no
+    // terminal message arriving still closes a terminal, within a few seconds.
+    watch_allowlist(Rc::clone(&rt.allowlist), rt.inputs.clone());
 
     rt.step(Input::Start).await;
     if rt.mode == Mode::Pair || rt.engine.paired_phones().is_empty() {
@@ -188,6 +227,28 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
         }
     }
     Ok(rt.outcome)
+}
+
+/// Watch the terminal allowlist file for a change every few seconds, so a
+/// `terminal disallow` closes a device's terminals even when no terminal
+/// message arrives to carry the check. The check is one `metadata` call; the
+/// file is read only when its mtime moved, and the same cache is shared with
+/// the per-message check, so the change is noticed and read once.
+fn watch_allowlist(cache: Rc<RefCell<AllowlistCache>>, inputs: mpsc::UnboundedSender<Input>) {
+    tokio::task::spawn_local(async move {
+        let mut ticker = tokio::time::interval(Duration::from_secs(5));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // The first tick is immediate; the start-up read already happened.
+        ticker.tick().await;
+        loop {
+            ticker.tick().await;
+            if let Some(list) = cache.borrow_mut().changed() {
+                if inputs.send(Input::TerminalAllowlist(list)).is_err() {
+                    return;
+                }
+            }
+        }
+    });
 }
 
 fn watch_signals(inputs: mpsc::UnboundedSender<Input>) {
@@ -224,6 +285,29 @@ impl Runtime {
         if let Input::TerminalExited { term, .. } = &input {
             self.terminals.forget(term);
         }
+        // A terminal command can arrive between the periodic checks, so the
+        // allowlist's mtime is checked here too, before the command is routed:
+        // `terminal disallow` then takes effect on the very next command, not
+        // up to five seconds later. The runtime cannot tell which commands are
+        // terminal ones — they are NIP-44 ciphertext until the engine decrypts
+        // them — so this covers every inbound event, at the cost of one
+        // `metadata` call each and a read only when the file moved. A bridge
+        // with terminals off (the default) has nothing to check.
+        let changed = if self.config.terminal.enabled && matches!(input, Input::RelayEvent { .. }) {
+            self.allowlist.borrow_mut().changed()
+        } else {
+            None
+        };
+        if let Some(list) = changed {
+            if self.dispatch(Input::TerminalAllowlist(list)).await {
+                return true;
+            }
+        }
+        self.dispatch(input).await
+    }
+
+    /// Feed one input to the engine and carry out its effects in order.
+    async fn dispatch(&mut self, input: Input) -> bool {
         let effects = self.engine.handle(input);
         for effect in effects {
             if self.execute(effect) {
@@ -344,11 +428,17 @@ impl Runtime {
             }
             Effect::TerminalClose { term } => self.terminals.close(&term),
             Effect::TerminalPending(pending) => {
-                log::debug!("[Runtime] {} device(s) are waiting for terminal approval", pending.len());
+                // Merge the refused devices with the approved ones as they are
+                // on disk now (the owner may have run `terminal allow` since
+                // this engine last read the file). The write goes to a thread
+                // of its own — never the runtime's — and the engine is handed
+                // the merged list, whose approved devices would otherwise be a
+                // file change behind.
+                let merged = self.allowlist.borrow().merge_pending(&pending);
+                self.allowlist_writer.write(merged.clone());
+                let _ = self.inputs.send(Input::TerminalAllowlist(merged));
             }
-            Effect::Audit(record) => {
-                log::debug!("[Runtime] terminal audit line: {:?} {}", record.what, record.term);
-            }
+            Effect::Audit(record) => self.audit.record(record),
         }
         false
     }
