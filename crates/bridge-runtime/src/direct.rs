@@ -134,6 +134,15 @@ impl TermLane {
     fn pop(&self) -> Option<String> {
         self.queue.borrow_mut().pop_front()
     }
+
+    /// Ready once a frame is waiting. A `push` while nobody waits leaves
+    /// `Notify`'s permit behind, so no wake-up is lost between the check and
+    /// the wait.
+    async fn ready(&self) {
+        while self.queue.borrow().is_empty() {
+            self.wake.notified().await;
+        }
+    }
 }
 
 impl Conn {
@@ -460,16 +469,6 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(stream: S, hub: &Hub) {
                     ok = false;
                 }
             },
-            _ = term.wake.notified() => {
-                // Drain the lane: the normal lane was empty a moment ago, and
-                // draining keeps the notify permit from being missed.
-                while let Some(text) = term.pop() {
-                    if sink.send(Message::Text(text)).await.is_err() {
-                        ok = false;
-                        break;
-                    }
-                }
-            },
             incoming = tokio::time::timeout(IDLE_TIMEOUT, source.next()) => match incoming {
                 Ok(Some(Ok(Message::Text(text)))) => match decode_direct_frame(&text) {
                     Ok(DirectFrame::Event(event)) => {
@@ -488,6 +487,16 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(stream: S, hub: &Hub) {
                 Ok(Some(Ok(Message::Ping(_) | Message::Pong(_)))) => ok = sink.flush().await.is_ok(),
                 Ok(Some(Ok(Message::Binary(_) | Message::Frame(_)))) => {}
                 _ => ok = false,
+            },
+            // Terminal output last, one frame per turn: the loop then looks at
+            // the normal lane and at the phone's own frames again before the
+            // next one, so a terminal's backlog (up to its whole lane) never
+            // stands in front of a session's event or a phone's command — on
+            // an onion endpoint a megabyte of it could take seconds.
+            () = term.ready() => {
+                if let Some(text) = term.pop() {
+                    ok = sink.send(Message::Text(text)).await.is_ok();
+                }
             },
         }
     }
