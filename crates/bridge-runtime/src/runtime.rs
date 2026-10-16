@@ -11,10 +11,13 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
 use bridge_core::ports::{Ports, System};
 use bridge_core::{Config as EngineConfig, Effect, Engine, Input, NotifyLevel, PairingCloseReason, PairingWindowInfo, TimerId};
 use protocol::commands::UploadFileMsg;
 use protocol::crypto::Keypair;
+use protocol::events::{BridgeToPhone, TerminalOutputMsg};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -22,6 +25,7 @@ use crate::config::Config;
 use crate::host::{self, HostCommand, HostHandle};
 use crate::relay::Relays;
 use crate::state::StateFile;
+use crate::terminal::Terminals;
 use crate::transcripts::FileTranscripts;
 use crate::workspace::FsWorkspace;
 use crate::uploads::{self, Uploads};
@@ -96,6 +100,10 @@ struct Runtime {
     uploads: Rc<RefCell<Uploads>>,
     pairing_urls: Option<mpsc::UnboundedSender<String>>,
     direct: Option<crate::direct::Direct>,
+    /// The ptys behind the terminals the engine decided to open, with their
+    /// rings of output and their recordings. Empty unless the owner turned
+    /// terminals on: the engine emits no terminal effect otherwise.
+    terminals: Terminals,
 }
 
 fn say(line: &str) {
@@ -149,6 +157,7 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
     }
 
     let nostr_http = work::NostrHttp::new(config.tor_proxy.as_deref())?;
+    let terminals = Terminals::new(config.home.join("audit"), inputs.clone());
     let mut rt = Runtime {
         engine: Engine::new(engine_config, ports),
         config,
@@ -163,6 +172,7 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
         uploads: Rc::new(RefCell::new(Uploads::new(&first_root))),
         pairing_urls: options.pairing_urls,
         direct,
+        terminals,
     };
 
     rt.step(Input::Start).await;
@@ -208,6 +218,12 @@ impl Runtime {
     /// Handle one input; true once the engine has stopped and everything is
     /// flushed.
     async fn step(&mut self, input: Input) -> bool {
+        // The shell is gone: the pty is dropped before the engine hears
+        // about it. `forget` does not signal it — it has already exited, and
+        // by then its pid may belong to another process.
+        if let Input::TerminalExited { term, .. } = &input {
+            self.terminals.forget(term);
+        }
         let effects = self.engine.handle(input);
         for effect in effects {
             if self.execute(effect) {
@@ -296,15 +312,37 @@ impl Runtime {
             }
             Effect::Stopped => return true,
             // The engine decides terminals and the runtime serves them: the
-            // ptys, the per-terminal ring of output, the allowlist file and
-            // the audit. None of that is here, and with terminals switched off
-            // — the only state a configuration leaves them in — the engine
-            // emits none of these effects.
-            Effect::TerminalSpawn { .. }
-            | Effect::TerminalWrite { .. }
-            | Effect::TerminalResize { .. }
-            | Effect::TerminalReplay { .. }
-            | Effect::TerminalClose { .. } => {}
+            // ptys, the per-terminal ring of output and the recordings
+            // (`crate::terminal`). With terminals switched off — the only
+            // state a configuration leaves them in — the engine emits none of
+            // these effects, so a bridge without terminals starts no shell.
+            Effect::TerminalSpawn { term, cwd, cols, rows } => {
+                // `None`: the owner has configured no `terminal.command`, so
+                // the shell runs. A failure is answered as a refusal, not
+                // left as a terminal that never appears.
+                let result = self.terminals.spawn(&term, &cwd, cols, rows, None);
+                let _ = match result {
+                    Ok(shell) => self.inputs.send(Input::TerminalSpawned { term, shell }),
+                    Err(note) => self.inputs.send(Input::TerminalSpawnFailed { term, note }),
+                };
+            }
+            Effect::TerminalWrite { term, bytes } => self.terminals.write(&term, &bytes),
+            Effect::TerminalResize { term, cols, rows } => self.terminals.resize(&term, cols, rows),
+            Effect::TerminalReplay { term, from, client } => {
+                // The engine named the one client this goes to (a terminal's
+                // output is not a broadcast); the runtime only serves the
+                // ring it keeps. An oversize replay is split into `chunk`
+                // fragments by the transport, like any other message.
+                if let Some((offset, data)) = self.terminals.replay(&term, from) {
+                    let message = BridgeToPhone::TerminalOutput(TerminalOutputMsg {
+                        term,
+                        offset,
+                        data: STANDARD.encode(data),
+                    });
+                    self.relays.publish(vec![client], message);
+                }
+            }
+            Effect::TerminalClose { term } => self.terminals.close(&term),
             Effect::TerminalPending(pending) => {
                 log::debug!("[Runtime] {} device(s) are waiting for terminal approval", pending.len());
             }

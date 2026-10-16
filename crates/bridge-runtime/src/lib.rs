@@ -14,6 +14,7 @@ pub mod qr;
 pub mod relay;
 pub mod runtime;
 pub mod state;
+pub mod terminal;
 pub mod transcripts;
 pub mod work;
 pub mod workspace;
