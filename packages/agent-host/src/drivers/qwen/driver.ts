@@ -90,6 +90,14 @@ const EFFORT_CONFIG_ID = 'reasoning_effort';
  *  client the messages a user typed while the turn ran. */
 const MID_TURN_DRAIN_METHOD = 'craft/drainMidTurnQueue';
 
+/** The environment names that would let the machine's own OpenAI/Qwen setup
+ *  outrank the provider profiles this driver writes into Qwen Code's settings.
+ *  Qwen Code resolves a model from the environment before its `settings.json`,
+ *  so an inherited one would start the session on the operator's account
+ *  rather than the profile the phone chose — the profile wiring is the
+ *  driver's, so these never reach the process. */
+const HOST_OPENAI_ENV = ['OPENAI_API_KEY', 'OPENAI_BASE_URL', 'OPENAI_MODEL', 'QWEN_MODEL'] as const;
+
 /** What one Qwen Code session is built with, beyond the shared ACP base. */
 interface QwenSessionDeps extends AcpSessionDeps<undefined, AcpProcessEvents> {
   runtime: QwenRuntime;
@@ -107,6 +115,9 @@ export class QwenSession extends AcpSession<undefined, AcpProcessEvents, QwenSes
   private commands: SlashCommand[] = [];
   /** Messages typed while a turn ran, waiting for the agent's next drain. */
   private readonly midTurn: string[] = [];
+  /** Slash lines steered into the running turn: they cannot join it, so they
+   *  wait for it to end — the state the drain's answer reports. */
+  private queuedAfterTurn = 0;
 
   constructor(params: StartSession, ctx: SessionContext, deps: QwenSessionDeps) {
     super(params, ctx, deps);
@@ -117,6 +128,7 @@ export class QwenSession extends AcpSession<undefined, AcpProcessEvents, QwenSes
 
   protected override buildEnv(params: StartSession): Record<string, string> {
     const env = inherited(this.deps.baseEnv);
+    for (const name of HOST_OPENAI_ENV) delete env[name];
     // The profile tokens, under the names settings.json refers to, and a
     // fingerprint of the settings themselves: the runtime keys its process
     // pool by the environment, and a process reads settings.json as it boots,
@@ -195,6 +207,11 @@ export class QwenSession extends AcpSession<undefined, AcpProcessEvents, QwenSes
           text: `${QWEN_LABEL} could not switch to the '${mode}' mode: ${reason(error)}`,
           timestamp: now(),
         });
+        // The switch did not happen, so the session is in the mode the agent
+        // itself reports — Qwen Code starts every session in `auto`. Keeping
+        // the requested id here would make the phone's mode lie, and a `yolo`
+        // that never took hold would auto-approve every ask.
+        this.sessionMode = this.modeState()?.currentModeId ?? DEFAULT_MODE;
       }
     }
     const wanted = this.params.model;
@@ -264,6 +281,9 @@ export class QwenSession extends AcpSession<undefined, AcpProcessEvents, QwenSes
   protected override steer(text: string): void {
     if (parseSlashCommand(text)) {
       this.enqueue(text);
+      // It waits for the turn to end rather than joining it, which is the
+      // state the next drain reports.
+      this.queuedAfterTurn += 1;
       return;
     }
     this.midTurn.push(text);
@@ -272,20 +292,30 @@ export class QwenSession extends AcpSession<undefined, AcpProcessEvents, QwenSes
   /** A turn ended: anything the agent never drained runs as the next turn,
    *  rather than sitting in the queue forever. */
   protected override promptSettled(): void {
+    // The turn is over, so whatever was queued behind it starts now: nothing
+    // is waiting any more.
+    this.queuedAfterTurn = 0;
     if (this.midTurn.length === 0) return;
     const queued = this.midTurn.splice(0);
     for (const text of queued) this.enqueue(text);
   }
 
-  /** Qwen Code's extension requests. The drain is the only one this driver
-   *  answers; every other unknown method stays unclaimed, and the client
-   *  refuses it with `-32601` at once. */
+  /**
+   * Qwen Code's extension requests. The drain is the only one this driver
+   * answers; every other unknown method stays unclaimed, and the client
+   * refuses it with `-32601` at once.
+   *
+   * The answer always carries `hasQueuedPrompt`: a request that set
+   * `todoStopGuardWatchQueuedPrompt` and got no boolean back is judged
+   * unreliable, and Qwen Code switches its todo-stop guard off until the next
+   * prompt starts.
+   */
   protected override async handleExtRequest(method: string, params: Record<string, unknown>): Promise<unknown> {
     if (method !== MID_TURN_DRAIN_METHOD) return undefined;
     if (params.sessionId !== this.nativeId) return undefined;
     // Answered from an in-memory queue, so it must resolve at once: the agent
     // waits two seconds and latches the drain off after three timeouts.
-    return { messages: this.midTurn.splice(0) };
+    return { messages: this.midTurn.splice(0), hasQueuedPrompt: this.queuedAfterTurn > 0 };
   }
 
   // --- the model and the session's own state ---

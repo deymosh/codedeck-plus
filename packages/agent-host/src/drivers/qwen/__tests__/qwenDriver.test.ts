@@ -240,6 +240,49 @@ describe('QwenSession startup', () => {
     expect(ready.spawns[0]?.env.KEEP).toBe('yes');
   });
 
+  it('keeps the host’s own OpenAI and Qwen variables out of the session’s process', async () => {
+    const ready = withDriver({
+      env: {
+        PATH: '/bin',
+        OPENAI_API_KEY: 'host-key',
+        OPENAI_BASE_URL: 'https://api.openai.com/v1',
+        OPENAI_MODEL: 'gpt-4o',
+        QWEN_MODEL: 'qwen3-coder',
+      },
+    });
+    await started(ready);
+    const env = ready.spawns[0]?.env ?? {};
+    // The session runs on the profile, not on whatever OpenAI configuration
+    // the machine the host happens to run on carries.
+    expect(env.PATH).toBe('/bin');
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(env.OPENAI_BASE_URL).toBeUndefined();
+    expect(env.OPENAI_MODEL).toBeUndefined();
+    expect(env.QWEN_MODEL).toBeUndefined();
+    expect(env.CODEDECK_QWEN_KEY_0).toBe('sk-secret');
+  });
+
+  it('does not keep a mode the agent refused, so the session is not treated as one it never entered', async () => {
+    const ready = withDriver();
+    // The agent offers `auto` only, so the switch to `yolo` is refused — what
+    // an agent without that mode reports.
+    ready.agent.modes = { currentModeId: 'auto', availableModes: [{ id: 'auto', name: 'Auto' }] };
+    const ctx = recordingContext({ permission: () => ({ outcome: 'selected', optionId: 'allow-once' }) });
+    await started(ready, { mode: 'yolo' }, ctx);
+    const errors = ctx.entries().filter((entry) => entry.entryType === 'error').map((entry) => entry.text);
+    expect(errors.some((text) => text.includes("could not switch to the 'yolo' mode"))).toBe(true);
+    // The session reports the mode the agent really is in, and an ask is still
+    // made: `yolo` never took hold, so nothing is auto-approved.
+    expect(infoEvents(ctx)[0]).toMatchObject({ mode: 'auto' });
+    const answer = await ready.agent.requestPermission({
+      sessionId: 's1',
+      options: [{ optionId: 'allow-once', name: 'Allow', kind: 'allow_once' }],
+      toolCall: { toolCallId: 'c1', title: 'Shell', rawInput: { command: 'ls' } },
+    });
+    expect(ctx.permissions).toHaveLength(1);
+    expect(answer).toEqual({ outcome: { outcome: 'selected', optionId: 'allow-once' } });
+  });
+
   it('opens with the version the CLI reports', async () => {
     const ready = withDriver();
     ready.agent.agentInfo = { name: 'qwen-code', title: 'Qwen Code', version: '0.25.2' };
@@ -484,14 +527,42 @@ describe('QwenSession steering', () => {
     ready.session.prompt('use a recursive descent one');
 
     const answer = await ready.agent.extRequest('craft/drainMidTurnQueue', { sessionId: 's1' });
-    expect(answer.result).toEqual({ messages: ['use a recursive descent one'] });
+    expect(answer.result).toEqual({ messages: ['use a recursive descent one'], hasQueuedPrompt: false });
     // A second drain finds nothing: the message was handed over once.
     const again = await ready.agent.extRequest('craft/drainMidTurnQueue', { sessionId: 's1' });
-    expect(again.result).toEqual({ messages: [] });
+    expect(again.result).toEqual({ messages: [], hasQueuedPrompt: false });
 
     release?.();
     await vi.waitFor(() => expect(ctx.events.some((event) => event.type === 'turn' && event.state === 'idle')).toBe(true));
     expect(ready.agent.requests.filter((r) => r.method === 'session/prompt')).toHaveLength(1);
+  });
+
+  it('tells the agent a slash command is waiting behind the turn, so its stop guard stays on', async () => {
+    const ready = withDriver();
+    await started(ready);
+    const releases: Array<() => void> = [];
+    ready.agent.onPrompt = () => new Promise<string>((resolve) => releases.push(() => resolve('end_turn')));
+    ready.session.prompt('build the parser');
+    await vi.waitFor(() => expect(ready.agent.requests.some((r) => r.method === 'session/prompt')).toBe(true));
+    // A command cannot join the running turn, so it is queued behind it.
+    ready.session.prompt('/status');
+
+    const answer = await ready.agent.extRequest('craft/drainMidTurnQueue', {
+      sessionId: 's1',
+      todoStopGuardWatchQueuedPrompt: true,
+    });
+    expect(answer.result).toEqual({ messages: [], hasQueuedPrompt: true });
+
+    // The turn ends, the queued command becomes its own turn, and the next
+    // drain — of that turn — has nothing waiting behind it.
+    releases[0]?.();
+    await vi.waitFor(() => expect(releases).toHaveLength(2));
+    const after = await ready.agent.extRequest('craft/drainMidTurnQueue', {
+      sessionId: 's1',
+      todoStopGuardWatchQueuedPrompt: true,
+    });
+    expect(after.result).toEqual({ messages: [], hasQueuedPrompt: false });
+    releases[1]?.();
   });
 
   it('prompts a message the turn never drained once the turn ends', async () => {
