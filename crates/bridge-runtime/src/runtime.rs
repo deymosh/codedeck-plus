@@ -212,7 +212,10 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
     };
     // The periodic half of the allowlist check: a `terminal disallow` with no
     // terminal message arriving still closes a terminal, within a few seconds.
-    watch_allowlist(Rc::clone(&rt.allowlist), rt.inputs.clone());
+    // With terminals off there is no terminal to close.
+    if rt.config.terminal.enabled {
+        watch_allowlist(Rc::clone(&rt.allowlist), rt.inputs.clone());
+    }
 
     rt.step(Input::Start).await;
     if rt.mode == Mode::Pair || rt.engine.paired_phones().is_empty() {
@@ -404,7 +407,7 @@ impl Runtime {
                 // `None`: the owner has configured no `terminal.command`, so
                 // the shell runs. A failure is answered as a refusal, not
                 // left as a terminal that never appears.
-                let result = self.terminals.spawn(&term, &cwd, cols, rows, None);
+                let result = self.terminals.spawn(&term, &cwd, cols, rows, self.config.terminal.command.as_deref());
                 let _ = match result {
                     Ok(shell) => self.inputs.send(Input::TerminalSpawned { term, shell }),
                     Err(note) => self.inputs.send(Input::TerminalSpawnFailed { term, note }),
