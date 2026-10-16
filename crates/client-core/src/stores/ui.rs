@@ -302,13 +302,17 @@ impl UiState {
 
     /// The bridge's answer to a `web-sign-in` on this machine, which moves the
     /// entry only when it answers the code recorded now — an answer to an
-    /// older code says nothing about the attempt on screen. Whether the entry
+    /// older code says nothing about the attempt on screen. Once a code has
+    /// signed a browser in, a later refusal of the same code does not undo
+    /// it: a code works once, so the answer to a resend of it (the phone sent
+    /// it again while the first answer was late) is always a refusal, and
+    /// says nothing about the browser it already let in. Whether the entry
     /// moved.
     pub fn apply_web_sign_in_result(&mut self, machine_pubkey: &str, code: &str, signed_in: bool) -> bool {
         let Some(entry) = self.web_sign_in.get_mut(machine_pubkey) else {
             return false;
         };
-        if entry.code != code {
+        if entry.code != code || (!signed_in && entry.state == WebSignInState::SignedIn) {
             return false;
         }
         entry.state = if signed_in {
@@ -464,6 +468,17 @@ mod tests {
         ui.note_web_sign_in_sent("m", "AAAA-BBBB");
         assert!(ui.apply_web_sign_in_result("m", "AAAA-BBBB", false));
         assert_eq!(ui.web_sign_in["m"].state, WebSignInState::NotMatched);
+    }
+
+    #[test]
+    fn a_resent_code_refused_after_it_signed_in_stays_signed_in() {
+        let mut ui = UiState::default();
+        ui.note_web_sign_in_sent("m", "K7QM-4XPA");
+        // The first answer was late, so the code went again.
+        ui.note_web_sign_in_sent("m", "K7QM-4XPA");
+        assert!(ui.apply_web_sign_in_result("m", "K7QM-4XPA", true));
+        assert!(!ui.apply_web_sign_in_result("m", "K7QM-4XPA", false), "the resend was refused because the code was used");
+        assert_eq!(ui.web_sign_in["m"].state, WebSignInState::SignedIn);
     }
 
     #[test]
