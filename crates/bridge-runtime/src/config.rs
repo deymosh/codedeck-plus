@@ -236,7 +236,8 @@ impl Default for AuditSettings {
 fn terminal_settings(flags: &Flags, file: Option<FileTerminal>) -> TerminalSettings {
     let file = file.unwrap_or_default();
     // Flags win, then the environment, then the file, then the default. The
-    // flag and the environment variable can only switch terminals on.
+    // `--terminal` flag can only switch terminals on; `CODEDECK_TERMINAL`
+    // carries a boolean, so it overrides the file in either direction.
     let enabled = if flags.terminal {
         true
     } else if let Some(v) = env_bool("CODEDECK_TERMINAL") {
