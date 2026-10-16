@@ -48,9 +48,11 @@ impl Engine {
         codes.insert(normalize(&code), expires_ms);
     }
 
-    /// A paired phone sent `code`: sign in the browser showing it, once.
-    pub(super) fn on_web_sign_in(&mut self, code: &str, phone: &str) {
-        let code = normalize(code);
+    /// A paired phone sent `code`: sign in the browser showing it, once. The
+    /// answer echoes the code exactly as the phone sent it, so the phone can
+    /// match it to the attempt it is showing however the user typed it.
+    pub(super) fn on_web_sign_in(&mut self, sent: &str, phone: &str) {
+        let code = normalize(sent);
         let now = self.now();
         let live = self.web_sign_ins.codes.remove(&code).is_some_and(|expires| expires > now);
         if live {
@@ -60,7 +62,7 @@ impl Engine {
         } else {
             log::info!("[Engine] A web sign-in code did not match");
         }
-        self.publish_to(phone, BridgeToPhone::WebSignInResult(WebSignInResultMsg { code, signed_in: live }));
+        self.publish_to(phone, BridgeToPhone::WebSignInResult(WebSignInResultMsg { code: sent.to_string(), signed_in: live }));
     }
 }
 
