@@ -14,6 +14,9 @@
 //!   a reconnect subscribes with `since` = last seen − 5 s, so the relay
 //!   replays recent commands, and without the ids they would run twice
 //!   (duplicate sessions, re-sent input).
+//! - Terminal keystrokes take the live kind and [`Ingest::accept_live`]
+//!   instead: their per-terminal `seq` is the dedup, and remembering their
+//!   ids here would age command ids out of the set (see below).
 //! - The pairing window's subscription has no author filter, so it attracts
 //!   junk: anything that does not decrypt is dropped silently and only then
 //!   takes a dedup slot, and only a `pair-request` gets through.
@@ -82,6 +85,9 @@ impl Ingest {
     /// keys, newest first: the payload is encrypted with one of them or with
     /// the author's identity. Returns the command and the key it was
     /// encrypted with: which client sent it.
+    ///
+    /// The event id is remembered, so a relay replaying it runs nothing
+    /// twice. Keystrokes take [`Self::accept_live`] instead.
     pub fn accept(
         &mut self,
         event: &InboundEvent,
@@ -89,13 +95,61 @@ impl Ingest {
         session_keys: &[String],
         now_secs: u64,
     ) -> Option<(PhoneToBridge, String)> {
-        if event.created_at + MAX_EVENT_AGE_SECS < now_secs {
-            log::info!("[Ingest] Ignoring stale event ({}s old)", now_secs - event.created_at);
+        if self.stale(event, now_secs) {
             return None;
         }
+        // Remembered before it is read, as it always was: a paired phone's
+        // junk takes a slot rather than being read again on every redelivery.
         if !self.mark(&event.id) {
             return None;
         }
+        let opened = self.open(event, keys, session_keys);
+        if opened.is_some() {
+            self.last_seen = self.last_seen.max(event.created_at);
+        }
+        opened
+    }
+
+    /// A phone's keystrokes, which ride the live kind: the same event, read
+    /// without remembering its id.
+    ///
+    /// They must not take a dedup slot. A typing phone sends an event per key
+    /// a program reacts to and per pause, so a few minutes at a terminal
+    /// would push every command id out of the set of
+    /// [`MAX_PROCESSED_IDS`] — and a command id that has aged out is a
+    /// command a relay's replay window runs a second time. What stops a
+    /// replayed keystroke from typing twice is the terminal's own `seq`,
+    /// which the engine checks per terminal. The age limit still applies: an
+    /// old event is not typed.
+    ///
+    /// The cursor does not move either: it is where the command subscription
+    /// resumes from, and a keystroke is not a command.
+    pub fn accept_live(
+        &mut self,
+        event: &InboundEvent,
+        keys: &Keypair,
+        session_keys: &[String],
+        now_secs: u64,
+    ) -> Option<(PhoneToBridge, String)> {
+        if self.stale(event, now_secs) {
+            return None;
+        }
+        self.open(event, keys, session_keys)
+    }
+
+    /// Whether an event is too old to act on: a relay that does not honour
+    /// `since` must not replay old commands (or type old keystrokes).
+    fn stale(&self, event: &InboundEvent, now_secs: u64) -> bool {
+        if event.created_at + MAX_EVENT_AGE_SECS < now_secs {
+            log::info!("[Ingest] Ignoring stale event ({}s old)", now_secs - event.created_at);
+            return true;
+        }
+        false
+    }
+
+    /// Decrypt and decode an event from the standing subscription: the
+    /// command it carries, and the key its payload came under.
+    fn open(&self, event: &InboundEvent, keys: &Keypair, session_keys: &[String]) -> Option<(PhoneToBridge, String)> {
         let opened = session_keys
             .iter()
             .chain(std::iter::once(&event.pubkey))
@@ -104,15 +158,13 @@ impl Ingest {
             log::info!("[Ingest] Failed to decrypt event {}...", short(&event.id));
             return None;
         };
-        let msg = match protocol::decode_phone_to_bridge(&plaintext) {
-            Ok(msg) => msg,
+        match protocol::decode_phone_to_bridge(&plaintext) {
+            Ok(msg) => Some((msg, key)),
             Err(err) => {
                 log::info!("[Ingest] Dropping invalid payload from {}...: {err}", short(&event.pubkey));
-                return None;
+                None
             }
-        };
-        self.last_seen = self.last_seen.max(event.created_at);
-        Some((msg, key))
+        }
     }
 
     /// An event from the pairing window's subscription.
@@ -238,6 +290,23 @@ mod tests {
         }
         assert!(f.accept(&first).is_some(), "the oldest id aged out");
         assert_eq!(f.ingest.processed_ids().len(), MAX_PROCESSED_IDS);
+    }
+
+    #[test]
+    fn live_input_is_read_without_taking_a_dedup_slot_or_moving_the_cursor() {
+        let mut f = Fixture::new();
+        let ev = f.event(INPUT);
+        assert!(f.ingest.accept_live(&ev, &f.bridge, &[], NOW).is_some());
+        // Read again, and again: nothing was remembered, so the same event
+        // reads every time — the terminal's own seq, not this set, is what
+        // stops a replayed keystroke from typing twice.
+        assert!(f.ingest.accept_live(&ev, &f.bridge, &[], NOW).is_some());
+        assert!(f.ingest.processed_ids().is_empty());
+        assert_eq!(f.ingest.last_seen(), 0, "the command cursor does not move");
+        // The age limit still holds.
+        let phone = f.phone.clone();
+        let old = f.event_from(&phone, INPUT, NOW - MAX_EVENT_AGE_SECS - 1);
+        assert!(f.ingest.accept_live(&old, &f.bridge, &[], NOW).is_none());
     }
 
     #[test]

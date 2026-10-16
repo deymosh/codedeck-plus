@@ -1031,3 +1031,41 @@ fn a_state_file_from_before_devices_existed_still_hydrates() {
     assert!(restarted.store.snapshot()["pairedPhones"].contains(&device_id(&world.key.pubkey_hex)));
     let _ = term;
 }
+
+// --- the command dedup set ---
+
+#[test]
+fn terminal_input_never_evicts_a_command_id_from_the_dedup_set() {
+    let mut world = World::new();
+    let term = world.open();
+    let client_phone = world.rig.phone.clone();
+    let key = world.key.clone();
+    let phone = world.rig.phone.clone();
+    world.rig.take();
+
+    // A command the relay may well replay: its id is remembered so the replay
+    // runs nothing. The heartbeat is how it shows: a refresh answers the
+    // client that asked.
+    let command = world.rig.phone_event_via_key(&phone, &key, json!({"v":12,"type":"refresh-sessions"}), Via::Direct);
+    assert_eq!(world.messages().len(), 1, "the refresh is answered");
+    let since = world.rig.engine.commands_filter().since;
+
+    for i in 0..2000 {
+        world.rig.live_event(
+            &client_phone,
+            &key,
+            json!({"v":12,"type":"terminal-input","term": term, "seq": i + 1, "data": STANDARD.encode("x")}),
+            Via::Direct,
+        );
+        world.rig.take();
+    }
+
+    // The keystrokes typed, and moved nothing else: the cursor the command
+    // subscription resumes from is where the command left it.
+    assert_eq!(world.rig.engine.commands_filter().since, since);
+    // And the command's id is still remembered: the same event runs nothing a
+    // second time.
+    let via = Via::Direct;
+    world.rig.input(Input::RelayEvent { event: command, via });
+    assert!(world.messages().is_empty(), "a replayed command is still a no-op");
+}

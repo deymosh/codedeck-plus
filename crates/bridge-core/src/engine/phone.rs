@@ -88,7 +88,23 @@ impl Engine {
                     return;
                 }
                 let keys = self.payload_keys(&event.pubkey, now_secs);
-                let Some((msg, key)) = self.ingest.accept(event, &self.config.keys, &keys, now_secs) else { return };
+                // A phone's keystrokes ride the live kind. Their per-terminal
+                // `seq` is what keeps a replayed one from typing twice, so
+                // they must not take a slot in the command dedup set: a burst
+                // of typing would push command ids out of it and reopen the
+                // replay window that remembering them closes.
+                let accepted = if event.kind == protocol::kinds::LIVE_KIND {
+                    self.ingest.accept_live(event, &self.config.keys, &keys, now_secs)
+                } else {
+                    self.ingest.accept(event, &self.config.keys, &keys, now_secs)
+                };
+                let Some((msg, key)) = accepted else { return };
+                // The live kind carries terminal input from a phone and
+                // nothing else.
+                if event.kind == protocol::kinds::LIVE_KIND && !matches!(msg, PhoneToBridge::TerminalInput(_)) {
+                    log::info!("[Engine] Ignoring a live event that is not terminal input");
+                    return;
+                }
                 log::info!("[Engine] Received {} from {}...", type_name(&msg), short(&event.pubkey));
                 let client = Addressee { phone: event.pubkey.clone(), key: key.clone() };
                 // Any command says its client is running; a `presence` also
