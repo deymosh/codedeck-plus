@@ -113,6 +113,16 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
     "session_new_claude" to { NewSession(claudeLook, DesignFixtures.claudeOptions, "Claude Code 2.1.283") },
     "session_new_opencode" to { NewSession(opencodeLook, DesignFixtures.opencodeOptions, "OpenCode 2.0.28") },
     "session_new_deepseek" to { NewSession(deepseekLook, DesignFixtures.deepseekOptions, "DeepSeek Harness 0.2.0-rc.2") },
+    "session_new_qwen" to { NewSession(qwenLook, DesignFixtures.qwenOptions, "Qwen Code 0.25.2") },
+    "transcript_qwen" to {
+        Styled(qwenLook) {
+            TranscriptList(
+                displayEntries = DesignFixtures.transcript().take(7), outboxItems = emptyList(), machine = workstation.pubkeyHex, sessionId = "s1",
+                syncState = "idle", contiguous = true, respondedCards = emptySet(), planApprovalChoices = emptyMap(), running = true,
+                activity = DesignFixtures.activity(), canStopTasks = false, dispatch = {}, modifier = Modifier.background(Tokens.Bg),
+            )
+        }
+    },
     "transcript_opencode" to {
         Styled(opencodeLook) {
             TranscriptList(
@@ -379,6 +389,7 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
 private val claudeLook = AgentLook.of("Claude Code", DesignFixtures.claudeStyle, "plan")
 private val opencodeLook = AgentLook.of("OpenCode", DesignFixtures.opencodeStyle, "build")
 private val deepseekLook = AgentLook.of("DeepSeek Harness", DesignFixtures.deepseekStyle, "ask")
+private val qwenLook = AgentLook.of("Qwen Code", DesignFixtures.qwenStyle, "plan")
 
 /** [content] drawn as a session of the agent [look] belongs to. */
 /** One agent's page on the workstation. */
@@ -431,6 +442,8 @@ class DesignSnapshotTest {
     @Test fun session_new_claude() = paparazzi.page("session_new_claude")
     @Test fun session_new_opencode() = paparazzi.page("session_new_opencode")
     @Test fun session_new_deepseek() = paparazzi.page("session_new_deepseek")
+    @Test fun session_new_qwen() = paparazzi.page("session_new_qwen")
+    @Test fun transcript_qwen() = paparazzi.page("transcript_qwen")
     @Test fun transcript_opencode() = paparazzi.page("transcript_opencode")
     @Test fun session_options() = paparazzi.page("session_options")
     @Test fun session_options_more() = paparazzi.page("session_options_more")
