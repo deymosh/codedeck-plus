@@ -414,6 +414,12 @@ pub struct SessionKeyGrant {
     /// commands still encrypted with it. Absent for a client's first key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replaces: Option<String>,
+    /// The device's name as its user set it (the phone's model by default) —
+    /// what a person reads in the bridge's audit and allowlist. Display only:
+    /// the device id derived from this client's first key, never this label,
+    /// is what the bridge trusts. Absent when the phone has no name to give.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 /// `presence`: this client is running and wants the identity's shared
@@ -427,9 +433,10 @@ pub struct SessionKeyGrant {
 /// `watching` says which session this client shows live text for: only its
 /// `partial`s are sent to it, and only while it is present. Absent or
 /// `null` means it watches no session, so it gets no live text at all —
-/// every other kind of update still comes. This is the only command that
-/// changes what a client watches, and every `presence` does — a renewal
-/// says it again; any other command leaves it as it was.
+/// every other kind of update still comes. `watching_terminal` does the
+/// same for a terminal (`terminal-output`), and is set the same way.
+/// A `presence` is the only command that changes what a client watches, and
+/// every one says both again — any other command leaves them as they were.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct PresenceMsg {
@@ -438,6 +445,11 @@ pub struct PresenceMsg {
     /// The session whose live text this client shows, or `None` for none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub watching: Option<String>,
+    /// The terminal whose output this client shows, or `None` for none:
+    /// `terminal-output` is sent only to the clients watching that terminal,
+    /// exactly as `partial` is sent only to those watching a session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watching_terminal: Option<String>,
 }
 
 /// How long a `presence` (or any command) keeps a client present: two
@@ -493,6 +505,65 @@ pub struct SetProviderProfileMsg {
     pub profile: Option<ProviderProfileWrite>,
 }
 
+// --- terminals ---
+
+/// Open a real shell on the bridge's machine (a bridge advertising
+/// [`TERMINAL`](crate::capabilities::TERMINAL)). `open_id` is chosen by the
+/// phone and echoed in `terminal-opened`, so a phone can match an answer to
+/// the request that earned it. `cols`/`rows` are the window the shell starts
+/// with; `session` starts it in that session's working directory — the phone
+/// never names a path of its own.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalOpenMsg {
+    pub open_id: String,
+    pub cols: u16,
+    pub rows: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+}
+
+/// Type into a terminal. `seq` counts up by one from 1 within one terminal:
+/// the bridge applies input in that order and drops a seq it has already
+/// applied, so a signed event a relay replays types nothing twice. `data` is
+/// base64 of the bytes, so a key press need not be valid UTF-8. Rides
+/// [`LIVE_KIND`](crate::kinds::LIVE_KIND): keystrokes are never stored on a
+/// relay.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalInputMsg {
+    pub term: String,
+    #[specta(type = specta_typescript::Number)]
+    pub seq: u64,
+    pub data: String,
+}
+
+/// Tell a terminal its window changed; only its writer's size counts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalResizeMsg {
+    pub term: String,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+/// Attach to a terminal read-only from `from`, a byte offset into its
+/// output: the bridge resends what it still has of that output from there.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalReplayMsg {
+    pub term: String,
+    #[specta(type = specta_typescript::Number)]
+    pub from: u64,
+}
+
+/// One terminal, by the id the bridge assigned it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalIdMsg {
+    pub term: String,
+}
+
 /// The phone→bridge message union.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(tag = "type", rename_all = "kebab-case")]
@@ -539,6 +610,20 @@ pub enum PhoneToBridge {
     ProviderProfilesRequest(BareMsg),
     SessionKey(SessionKeyMsg),
     Presence(PresenceMsg),
+    /// Open a shell on a bridge with the `terminal` capability. Reply:
+    /// `terminal-opened`, or `terminal-exited` when the open is refused.
+    TerminalOpen(TerminalOpenMsg),
+    /// Type into a terminal, writer only. Rides LIVE_KIND.
+    TerminalInput(TerminalInputMsg),
+    /// The writer's new window size.
+    TerminalResize(TerminalResizeMsg),
+    /// Attach to a terminal read-only from a byte offset.
+    TerminalReplay(TerminalReplayMsg),
+    /// Become a terminal's writer. Audited: every present client is told
+    /// (`terminal-event`).
+    TerminalTakeover(TerminalIdMsg),
+    /// Hang up a terminal.
+    TerminalClose(TerminalIdMsg),
 }
 
 #[cfg(test)]
@@ -612,6 +697,22 @@ mod tests {
         rt(&json!({"v":12,"type":"pair-request","npub":"npub1","pubkeyHex":"aa","label":"phone","token":"t","sessionKey":{"pubkeyHex":"bb","bridgePubkeyHex":"cc","expiresAt":1800000000}}));
         rt(&json!({"v":12,"type":"provider-profiles-request"}));
         rt(&json!({"v":12,"type":"session-key","sessionKey":{"pubkeyHex":"bb","bridgePubkeyHex":"cc","expiresAt":1800000000}}));
+        rt(&json!({"v":12,"type":"session-key","sessionKey":{"pubkeyHex":"bb","bridgePubkeyHex":"cc","expiresAt":1800000000,"label":"Pixel 8"}}));
+        rt(&json!({"v":12,"type":"presence","watchingTerminal":"t1"}));
+        rt(&json!({"v":12,"type":"terminal-open","openId":"o1","cols":80,"rows":24}));
+        rt(&json!({"v":12,"type":"terminal-open","openId":"o1","cols":80,"rows":24,"session":"s"}));
+        rt(&json!({"v":12,"type":"terminal-input","term":"t1","seq":1,"data":"aGk="}));
+        rt(&json!({"v":12,"type":"terminal-resize","term":"t1","cols":132,"rows":43}));
+        rt(&json!({"v":12,"type":"terminal-replay","term":"t1","from":4096}));
+        rt(&json!({"v":12,"type":"terminal-takeover","term":"t1"}));
+        rt(&json!({"v":12,"type":"terminal-close","term":"t1"}));
+    }
+
+    #[test]
+    fn a_terminal_message_rejects_what_its_fields_cannot_hold() {
+        // A window size past u16, and input without its bytes.
+        assert!(serde_json::from_str::<PhoneToBridge>(r#"{"v":12,"type":"terminal-open","openId":"o","cols":70000,"rows":24}"#).is_err());
+        assert!(serde_json::from_str::<PhoneToBridge>(r#"{"v":12,"type":"terminal-input","term":"t","seq":1}"#).is_err());
     }
 
     #[test]

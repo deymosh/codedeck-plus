@@ -492,6 +492,14 @@ impl<'a> Router<'a> {
                 );
                 r.ui_changed = true;
             }
+            // No terminal store yet: the bridge needs the `terminal`
+            // capability before it serves one, and nothing here holds a
+            // terminal's state until it does.
+            BridgeToPhone::TerminalOpened(_)
+            | BridgeToPhone::TerminalOutput(_)
+            | BridgeToPhone::TerminalInputFrom(_)
+            | BridgeToPhone::TerminalExited(_)
+            | BridgeToPhone::TerminalEvent(_) => {}
         }
         r
     }
@@ -934,6 +942,7 @@ mod tests {
             removed_sessions: None,
             machine_offline: None,
             direct: None,
+            terminals: None,
             rev: None,
         }
     }

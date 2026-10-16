@@ -103,9 +103,15 @@ fn p2b_type(m: &PhoneToBridge) -> &'static str {
         PhoneToBridge::ProviderProfilesRequest(_) => "provider-profiles-request",
         PhoneToBridge::SessionKey(_) => "session-key",
         PhoneToBridge::Presence(_) => "presence",
+        PhoneToBridge::TerminalOpen(_) => "terminal-open",
+        PhoneToBridge::TerminalInput(_) => "terminal-input",
+        PhoneToBridge::TerminalResize(_) => "terminal-resize",
+        PhoneToBridge::TerminalReplay(_) => "terminal-replay",
+        PhoneToBridge::TerminalTakeover(_) => "terminal-takeover",
+        PhoneToBridge::TerminalClose(_) => "terminal-close",
     }
 }
-const P2B_TYPES: usize = 36;
+const P2B_TYPES: usize = 42;
 
 /// Every bridge→phone message type, by wire name (see [`p2b_type`]).
 fn b2p_type(m: &BridgeToPhone) -> &'static str {
@@ -142,9 +148,14 @@ fn b2p_type(m: &BridgeToPhone) -> &'static str {
         BridgeToPhone::PairAck(_) => "pair-ack",
         BridgeToPhone::ProviderProfiles(_) => "provider-profiles",
         BridgeToPhone::ProviderProfileAck(_) => "provider-profile-ack",
+        BridgeToPhone::TerminalOpened(_) => "terminal-opened",
+        BridgeToPhone::TerminalOutput(_) => "terminal-output",
+        BridgeToPhone::TerminalInputFrom(_) => "terminal-input-from",
+        BridgeToPhone::TerminalExited(_) => "terminal-exited",
+        BridgeToPhone::TerminalEvent(_) => "terminal-event",
     }
 }
-const B2P_TYPES: usize = 32;
+const B2P_TYPES: usize = 37;
 
 #[test]
 fn corpus_covers_every_message_type() {

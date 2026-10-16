@@ -110,6 +110,7 @@ impl PhoneKeys {
             bridge_pubkey_hex: bridge.to_string(),
             expires_at: self.session_expires_at,
             replaces: replaces.filter(|old| *old != self.session_pubkey_hex).map(str::to_string),
+            label: None,
         }
     }
 

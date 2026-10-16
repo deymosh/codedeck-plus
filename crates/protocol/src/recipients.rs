@@ -37,6 +37,21 @@ pub fn fragment_d(recipient_tag: &str, index: usize) -> String {
     digest(&["codedeck/fragment", recipient_tag, &index.to_string()])
 }
 
+/// The id of the device a client is: the first 16 bytes, in hex, of
+/// `sha256("codedeck/device\0" + first_session_key_hex + "\0")`, where the
+/// key is the FIRST session key this client ever granted the bridge — the
+/// one its later [`SessionKeyGrant::replaces`](crate::commands::SessionKeyGrant::replaces)
+/// chains back to. The bridge derives it once per client and names it in a
+/// terminal's `writer`, in every `terminal-event`, and in its audit and
+/// allowlist, so a device keeps one identity while its key rotates; what a
+/// signed grant calls itself (`label`) never takes part. Re-pairing, or
+/// reinstalling with a fresh identity, makes a new device — the old chain of
+/// keys is gone. Case-blind: both ends lowercase the key, as the recipient
+/// tag does.
+pub fn device_id(first_session_key_hex: &str) -> String {
+    digest(&["codedeck/device", &first_session_key_hex.to_ascii_lowercase()])
+}
+
 /// The first 16 bytes of the SHA-256 of `parts`, each ended by a NUL (none
 /// of them holds one), as hex.
 fn digest(parts: &[&str]) -> String {
@@ -90,5 +105,17 @@ mod tests {
         let tag = recipient_tag(BRIDGE, KEY);
         assert_eq!(tag, "4a7ce9e7ef864a34441d699f45429335");
         assert_eq!(fragment_d(&tag, 2), "596da8b0093949098d6a58c85b4145cc");
+    }
+
+    #[test]
+    fn a_device_id_is_pinned_and_case_blind() {
+        // The pin: sha256("codedeck/device\0" + first key + "\0")[..16].
+        const FIRST_KEY: &str = "d0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeef";
+        assert_eq!(device_id(FIRST_KEY), "bf1f111943b3930a4c64a5c06d9153b2");
+        assert_eq!(device_id("D0D1D2D3D4D5D6D7D8D9DADBDCDDDEDFE0E1E2E3E4E5E6E7E8E9EAEBECEDEEEF"), "bf1f111943b3930a4c64a5c06d9153b2");
+        // A different first key is a different device.
+        assert_ne!(device_id("aa11"), device_id(FIRST_KEY));
+        // The parts cannot run into each other, as for the recipient tag.
+        assert_ne!(device_id("aa"), device_id("aa00"));
     }
 }

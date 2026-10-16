@@ -1447,6 +1447,79 @@ pub struct ContextItem {
 /// id is left unchanged.
 pub type CredentialValues = BTreeMap<String, Option<String>>;
 
+// --- terminals ---
+
+/// Why a terminal stopped existing. Open: a reason a newer bridge adds
+/// decodes as [`Unknown`](Self::Unknown) instead of failing the whole
+/// message, and a phone that does not know one still knows the terminal is
+/// gone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum TerminalEndReason {
+    /// The shell exited on its own; `code` carries what it returned.
+    Exit,
+    /// The bridge ended it (its owner stopped it, or the bridge is going
+    /// down).
+    Killed,
+    /// A client hung up (`terminal-close`).
+    Closed,
+    /// It sat idle past the bridge's limit.
+    Idle,
+    /// A `terminal-open` was refused: the bridge's terminals are full.
+    Limit,
+    /// A `terminal-open` was refused: this device may not open one.
+    NotAllowed,
+    /// A `terminal-open` was refused: the bridge's owner has terminals
+    /// switched off.
+    Disabled,
+    /// The bridge lost its pipe to the shell.
+    Transport,
+    /// The bridge restarted; the shell did not survive it.
+    Restart,
+    /// A reason this client does not know (a newer bridge's).
+    Unknown,
+}
+
+open_vocabulary!(TerminalEndReason, Unknown, [Exit, Killed, Closed, Idle, Limit, NotAllowed, Disabled, Transport, Restart, Unknown]);
+
+/// What happened to a terminal, which every present client of the identity
+/// is told so a phone that did not act learns at once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum TerminalEventKind {
+    /// A client opened it.
+    Opened,
+    /// A client attached to its output without becoming the writer.
+    Attached,
+    /// A client became the writer.
+    Takeover,
+    /// A client hung up, or an attached client left.
+    Closed,
+    /// The shell ended (see `terminal-exited` for why).
+    Exited,
+    /// A kind this client does not know (a newer bridge's).
+    Unknown,
+}
+
+open_vocabulary!(TerminalEventKind, Unknown, [Opened, Attached, Takeover, Closed, Exited, Unknown]);
+
+/// How the client that acted reached the bridge: what its command arrived
+/// over, which a person reading the audit can tell apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum TerminalVia {
+    /// The bridge's direct link (LAN, VPN).
+    Direct,
+    /// The direct link over Tor: an `.onion` endpoint.
+    Onion,
+    /// A relay.
+    Relay,
+    /// A way this client does not know (a newer bridge's).
+    Unknown,
+}
+
+open_vocabulary!(TerminalVia, Unknown, [Direct, Onion, Relay, Unknown]);
+
 #[cfg(test)]
 mod tests {
     use super::*;

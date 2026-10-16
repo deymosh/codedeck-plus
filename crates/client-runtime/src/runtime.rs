@@ -1361,7 +1361,7 @@ impl Loop {
             for machine in self.stores.machines.machine_pubkeys() {
                 if matches!(self.cipher_for(&machine), Cipher::SessionKey(_)) {
                     let (tx, rx) = oneshot::channel();
-                    let away = PhoneToBridge::Presence(PresenceMsg { away: true, watching: None });
+                    let away = PhoneToBridge::Presence(PresenceMsg { away: true, watching: None, watching_terminal: None });
                     self.sign_and_publish(machine, away, Some(tx), None, true);
                     sent.push(rx);
                 }
@@ -2215,7 +2215,7 @@ impl Loop {
             // The renewal also carries what this client watches now, so a
             // bridge that missed a change catches up within one period.
             let watching = self.watching_for(&machine);
-            self.sign_and_publish(machine, PhoneToBridge::Presence(PresenceMsg { away: false, watching }), None, None, true);
+            self.sign_and_publish(machine, PhoneToBridge::Presence(PresenceMsg { away: false, watching, watching_terminal: None }), None, None, true);
         }
     }
 
@@ -2280,7 +2280,7 @@ impl Loop {
         if !matches!(self.cipher_for(machine), Cipher::SessionKey(_)) {
             return false;
         }
-        self.sign_and_publish(machine.to_string(), PhoneToBridge::Presence(PresenceMsg { away: false, watching }), None, None, true);
+        self.sign_and_publish(machine.to_string(), PhoneToBridge::Presence(PresenceMsg { away: false, watching, watching_terminal: None }), None, None, true);
         true
     }
 

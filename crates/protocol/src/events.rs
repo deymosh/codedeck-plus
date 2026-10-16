@@ -8,7 +8,7 @@ use super::common::{
     AgentAction, AgentDescriptor, AgentStyle, AvailablePlugin, CredentialStatus, InstalledPlugin, McpAction, McpServerInfo, OptionChoice, OutputEntry,
     AgentAccount, PermissionRule, SessionMcpServer, SignInAttempt, SignInStatus,
     PartialKind, Persona, PluginAction, PluginMarketplace, ProviderProfileInfo, RemoteSessionInfo, SessionOption,
-    Subagent, UsageData,
+    Subagent, UsageData, TerminalEndReason, TerminalEventKind, TerminalVia,
 };
 use crate::ranges::SeqRange;
 
@@ -43,6 +43,10 @@ pub struct SessionListMsg {
     /// [`crate::direct`]). Absent when it serves no direct link.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub direct: Option<crate::direct::DirectInfo>,
+    /// The terminals open on this bridge now: what a phone shows without
+    /// having opened one itself. Absent or empty when there are none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminals: Option<Vec<TerminalInfo>>,
     /// The list's revision: strictly greater in each list the bridge
     /// publishes (its clock in ms, kept ahead of the last one). The same
     /// list reaches a phone over several relays and the direct link, and
@@ -502,6 +506,107 @@ pub struct ProviderProfileAckMsg {
     pub error: Option<String>,
 }
 
+// --- terminals ---
+
+/// One terminal open on the bridge, as the heartbeat's `terminals` lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalInfo {
+    /// The bridge's id for it, which every other terminal message names.
+    pub term: String,
+    /// What runs in it (`/bin/bash`).
+    pub shell: String,
+    /// When it opened, ms since the Unix epoch.
+    #[specta(type = specta_typescript::Number)]
+    pub opened: u64,
+    /// The device that opened it (see
+    /// [`device_id`](crate::recipients::device_id)).
+    pub device: String,
+    /// That device's name as its user set it; absent when it gave none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// The device whose input it takes now (the writer).
+    pub writer: String,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+/// The answer to `terminal-open`: the id the bridge gave the terminal, and
+/// what runs in it. `open_id` echoes the request's, so a phone can match the
+/// answer to the request that earned it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalOpenedMsg {
+    pub open_id: String,
+    pub term: String,
+    /// The program the shell runs, e.g. `/bin/bash`.
+    pub shell: String,
+}
+
+/// Output a terminal produced: `data` (base64 of the bytes) starts at
+/// `offset`, a byte offset into everything this terminal has ever written.
+/// Rides [`LIVE_KIND`](crate::kinds::LIVE_KIND) and is sent only to the
+/// clients watching this terminal (see
+/// [`PresenceMsg::watching_terminal`](crate::commands::PresenceMsg::watching_terminal));
+/// a client that missed a run asks for the bytes again with
+/// `terminal-replay`, naming the offset it got to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalOutputMsg {
+    pub term: String,
+    #[specta(type = specta_typescript::Number)]
+    pub offset: u64,
+    pub data: String,
+}
+
+/// The input the bridge is still waiting for: it last applied `seq`, and
+/// something after it never arrived, so the writer resends from `seq + 1`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalInputFromMsg {
+    pub term: String,
+    #[specta(type = specta_typescript::Number)]
+    pub seq: u64,
+}
+
+/// A terminal is gone, and why. `term` names the terminal; `open_id` is set
+/// instead when a `terminal-open` was refused (reason `limit`, `not-allowed`
+/// or `disabled`), so the phone learns its open will never be answered any
+/// other way. `code` carries the shell's exit status with `exit`; `device`
+/// is set with `not-allowed`, naming the device the open was refused for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalExitedMsg {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub term: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<i32>,
+    pub reason: TerminalEndReason,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+}
+
+/// Something happened to a terminal, or to who is attached to it. Sent to
+/// every present client of the identity, so a phone learns of a takeover or
+/// a close at once even when another client did it. `device` is the device
+/// that acted, `name` its user's name for it (absent when it gave none), and
+/// `via` how its command reached the bridge.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalEventMsg {
+    pub term: String,
+    pub what: TerminalEventKind,
+    pub device: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    pub via: TerminalVia,
+    /// When it happened, ms since the Unix epoch.
+    #[specta(type = specta_typescript::Number)]
+    pub at: u64,
+}
+
 /// The bridge→phone message union.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(tag = "type", rename_all = "kebab-case")]
@@ -538,6 +643,13 @@ pub enum BridgeToPhone {
     PairAck(PairAckMsg),
     ProviderProfiles(ProviderProfilesMsg),
     ProviderProfileAck(ProviderProfileAckMsg),
+    TerminalOpened(TerminalOpenedMsg),
+    /// Rides LIVE_KIND, to the clients watching `term` only.
+    TerminalOutput(TerminalOutputMsg),
+    TerminalInputFrom(TerminalInputFromMsg),
+    TerminalExited(TerminalExitedMsg),
+    /// To every present client of the identity.
+    TerminalEvent(TerminalEventMsg),
 }
 
 #[cfg(test)]
@@ -677,12 +789,45 @@ mod tests {
         rt(&json!({"v":12,"type":"pair-ack","machine":"m","ok":false,"reason":"bad-token","relays":["wss://r"],"host":"cli"}));
         rt(&json!({"v":12,"type":"provider-profiles","machine":"m","profiles":[{"id":"p","agent":"claude-code","label":"L","baseUrl":"https://x","models":[{"id":"m"}],"hasToken":true}]}));
         rt(&json!({"v":12,"type":"provider-profile-ack","machine":"m","profileId":"p","success":true,"tokenValid":false}));
+        rt(&json!({"v":12,"type":"terminal-opened","openId":"o1","term":"t1","shell":"/bin/bash"}));
+        rt(&json!({"v":12,"type":"terminal-output","term":"t1","offset":0,"data":"bHMgLWxhCg=="}));
+        rt(&json!({"v":12,"type":"terminal-input-from","term":"t1","seq":4}));
+        rt(&json!({"v":12,"type":"terminal-exited","term":"t1","code":0,"reason":"exit"}));
+        rt(&json!({"v":12,"type":"terminal-exited","openId":"o1","reason":"not-allowed","device":"d1"}));
+        rt(&json!({"v":12,"type":"terminal-event","term":"t1","what":"takeover","device":"d1","name":"Pixel 8","via":"relay","at":1792008058637_u64}));
+    }
+
+    #[test]
+    fn a_heartbeat_lists_terminals_both_shapes() {
+        let m = rt(&json!({"v":12,"type":"sessions","machine":"m","sessions":[],"agents":[],
+            "terminals":[{"term":"t1","shell":"/bin/bash","opened":1792008058637_u64,"device":"d1","name":"Pixel 8","writer":"d1","cols":80,"rows":24},
+                         {"term":"t2","shell":"/bin/zsh","opened":1792008058638_u64,"device":"d2","writer":"d2","cols":132,"rows":43}]}));
+        match m {
+            BridgeToPhone::Sessions(s) => {
+                let t = s.terminals.unwrap();
+                assert_eq!(t.len(), 2);
+                assert_eq!(t[0].name.as_deref(), Some("Pixel 8"));
+                assert_eq!(t[1].name, None);
+            }
+            _ => panic!(),
+        }
     }
 
     #[test]
     fn unknown_type_is_a_decode_error() {
         assert!(serde_json::from_str::<BridgeToPhone>(r#"{"v":12,"type":"warp","sessionId":"s"}"#).is_err());
         assert!(serde_json::from_str::<BridgeToPhone>(r#"{"v":12,"type":"mode-confirmed","sessionId":"s","mode":"plan"}"#).is_err());
+    }
+
+    #[test]
+    fn an_unknown_terminal_vocabulary_value_is_its_catch_all() {
+        let m = rt(&json!({"v":12,"type":"terminal-exited","term":"t1","reason":"melted"}));
+        let BridgeToPhone::TerminalExited(e) = m else { panic!() };
+        assert_eq!(e.reason, crate::common::TerminalEndReason::Unknown);
+        let m = rt(&json!({"v":12,"type":"terminal-event","term":"t1","what":"hologram","device":"d","via":"telepathy","at":1}));
+        let BridgeToPhone::TerminalEvent(e) = m else { panic!() };
+        assert_eq!(e.what, crate::common::TerminalEventKind::Unknown);
+        assert_eq!(e.via, crate::common::TerminalVia::Unknown);
     }
 
     #[test]

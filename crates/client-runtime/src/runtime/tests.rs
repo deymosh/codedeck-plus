@@ -2335,7 +2335,7 @@ async fn a_quiet_client_renews_its_presence_and_says_when_it_goes_away() {
             tokio::time::advance(STALE_WATCHDOG_EVERY + Duration::from_secs(1)).await;
             tokio::time::resume();
             let renewal = next_command_via(&mut mock, &phone, key.pubkey_hex(), &machine).await;
-            assert!(matches!(renewal, Some(PhoneToBridge::Presence(PresenceMsg { away: false, watching: None }))), "{renewal:?}");
+            assert!(matches!(renewal, Some(PhoneToBridge::Presence(PresenceMsg { away: false, watching: None, watching_terminal: None }))), "{renewal:?}");
 
             core.stop();
             let away = next_command_via(&mut mock, &phone, key.pubkey_hex(), &machine).await;

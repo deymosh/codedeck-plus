@@ -59,6 +59,12 @@ fn type_name(msg: &PhoneToBridge) -> &'static str {
         PhoneToBridge::ProviderProfilesRequest(_) => "provider-profiles-request",
         PhoneToBridge::SessionKey(_) => "session-key",
         PhoneToBridge::Presence(_) => "presence",
+        PhoneToBridge::TerminalOpen(_) => "terminal-open",
+        PhoneToBridge::TerminalInput(_) => "terminal-input",
+        PhoneToBridge::TerminalResize(_) => "terminal-resize",
+        PhoneToBridge::TerminalReplay(_) => "terminal-replay",
+        PhoneToBridge::TerminalTakeover(_) => "terminal-takeover",
+        PhoneToBridge::TerminalClose(_) => "terminal-close",
     }
 }
 
@@ -163,6 +169,15 @@ impl Engine {
                 let msg = self.provider_profiles_msg();
                 self.publish_to(phone, msg);
             }
+            // The engine runs no terminals: the bridge advertises the
+            // `terminal` capability only once one exists here, and until then
+            // a phone has no reason to send these.
+            PhoneToBridge::TerminalOpen(_)
+            | PhoneToBridge::TerminalInput(_)
+            | PhoneToBridge::TerminalResize(_)
+            | PhoneToBridge::TerminalReplay(_)
+            | PhoneToBridge::TerminalTakeover(_)
+            | PhoneToBridge::TerminalClose(_) => {}
         }
     }
 

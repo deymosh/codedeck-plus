@@ -613,6 +613,7 @@ impl Engine {
             removed_sessions: (!removed.is_empty()).then_some(removed),
             machine_offline: offline.then_some(true),
             direct: self.config.direct.clone(),
+            terminals: None,
             rev: Some(rev),
         });
         match to {

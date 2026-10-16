@@ -17,7 +17,10 @@
 //! * [`FILES`]: the phone shows the attach control only when the bridge
 //!   advertises it;
 //! * [`SESSION_KEYS`]: the phone grants a session key to a bridge that
-//!   honours one, and to none whose heartbeat lacks it.
+//!   honours one, and to none whose heartbeat lacks it;
+//! * [`TERMINAL`]: the phone shows the terminal only when the bridge
+//!   advertises it, since a `terminal-open` sent to a bridge without it
+//!   would wait on a terminal that never opens.
 
 /// v12 = one copy of each message per client of an identity, each tagged
 /// with its recipient (see [`crate::recipients`]); a session-key grant names
@@ -35,6 +38,12 @@ pub const FILES: &str = "files";
 // uses one only once the bridge confirmed it: a bridge without it could not
 // read a payload encrypted with one.
 pub const SESSION_KEYS: &str = "session-keys";
+// The bridge runs real shells on its machine (`terminal-open` and the rest).
+// A phone offers the terminal only against a bridge whose heartbeat carries
+// this, and does NOT list it among the ones a reference bridge always has:
+// whether terminals exist is the bridge owner's decision (a machine with
+// terminals switched off advertises nothing here), not a build feature.
+pub const TERMINAL: &str = "terminal";
 
 /// Every capability the reference bridge ships with.
 pub const ALL_BRIDGE_CAPABILITIES: [&str; 2] = [FILES, SESSION_KEYS];
