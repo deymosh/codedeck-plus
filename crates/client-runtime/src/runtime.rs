@@ -49,7 +49,7 @@ use crate::nostr_client::{NostrClient, NostrClientHost, NostrEvent};
 use crate::ports::{
     Kv, KvSessionKeyStore, MemoryKv, MemoryTranscriptStore, NullNotifier, Notifier, SessionKeyStore, TranscriptStore,
 };
-use crate::signer::{Cipher, IdentityAuth, IdentitySigner, PhoneKeys, SignerError};
+use crate::signer::{sanitize_device_label, Cipher, IdentityAuth, IdentitySigner, PhoneKeys, SignerError};
 use crate::stores::{hydrate, CoreStores, Persister, StoresConfig};
 use client_core::stores::backup::ConfigBackup;
 use crate::transport::ws::{WsConfig, WsTransport, PING_EVERY, PUBLISH_CONFIRM_ATTEMPTS, PUBLISH_CONFIRM_BUDGET};
@@ -281,6 +281,14 @@ pub struct CoreConfig {
     /// regardless, so `Intent::SetTorEnabled` can toggle between `Some` and
     /// `None` without needing the phone to resend the address.
     pub tor: bool,
+    /// The phone's own name, sent on every session-key grant as
+    /// `SessionKeyGrant::label`: what a person reads in the bridge's terminal
+    /// allowlist (`codedeck-bridge terminal pending`) and in a refusal to open
+    /// a terminal. Sanitized by [`sanitize_device_label`] — at most
+    /// [`crate::signer::DEVICE_LABEL_MAX`] characters, control characters
+    /// stripped, trimmed, and empty becomes `None`. Display only: the bridge
+    /// trusts the device id derived from the first key, never this name.
+    pub device_label: Option<String>,
     /// Backoff / stale-window timing. [`CoreConfig::new`] picks the Tor variant
     /// when `tor` is set; tests override directly.
     pub reconnect: ReconnectConfig,
@@ -315,11 +323,20 @@ impl Default for CorePorts {
 }
 
 impl CoreConfig {
-    pub fn new(identity: Rc<dyn IdentitySigner>, proxy: Option<String>, tor: bool) -> Self {
+    /// `device_label` is the phone's name for the bridge (see the field doc);
+    /// it is sanitized here, so an empty or whitespace-only name is stored as
+    /// `None` and a long one is capped before it ever reaches a grant.
+    pub fn new(
+        identity: Rc<dyn IdentitySigner>,
+        proxy: Option<String>,
+        tor: bool,
+        device_label: Option<String>,
+    ) -> Self {
         Self {
             identity,
             proxy,
             tor,
+            device_label: device_label.as_deref().and_then(sanitize_device_label),
             reconnect: if tor {
                 TOR_RECONNECT_CONFIG
             } else {
@@ -374,7 +391,7 @@ impl Core {
         if changed {
             key_store.save(&session.encode()).await;
         }
-        let keys = PhoneKeys::new(&config.identity.pubkey_hex(), &session.current);
+        let keys = PhoneKeys::new(&config.identity.pubkey_hex(), &session.current, config.device_label.clone());
 
         // A machine paired in a PRIOR run is already in `hydrated.stores.machines`
         // — nothing about a plain (re)connect ever calls `refresh_authors()` for
@@ -1645,7 +1662,8 @@ impl Loop {
     pub(super) async fn session_ring_changed(&mut self) {
         self.key_store.save(&self.session.encode()).await;
         if self.keys.session_pubkey_hex != self.session.current.pubkey_hex() {
-            self.keys = PhoneKeys::new(&self.keys.identity_pubkey_hex, &self.session.current);
+            self.keys =
+                PhoneKeys::new(&self.keys.identity_pubkey_hex, &self.session.current, self.keys.device_label.clone());
             // The old key's grant attempts say nothing about the new one.
             self.grant_attempts.clear();
         }

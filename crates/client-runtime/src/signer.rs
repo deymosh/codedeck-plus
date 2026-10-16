@@ -79,7 +79,27 @@ impl IdentitySigner for LocalSigner {
     }
 }
 
-/// The public halves of the phone's keys — what the wire needs to name them.
+/// The most characters a device label may carry. The bridge prints it in its
+/// terminal allowlist and in a refusal, so a longer one would only crowd the
+/// line it is shown on.
+pub const DEVICE_LABEL_MAX: usize = 64;
+
+/// Clean a device name for the wire: control characters removed (the name is
+/// shown on a single line, and it comes from the platform's own model string),
+/// then trimmed, then capped at [`DEVICE_LABEL_MAX`] characters. A name that
+/// is empty or whitespace-only becomes `None` — the bridge then shows the
+/// device by its id alone rather than a blank name.
+pub fn sanitize_device_label(raw: &str) -> Option<String> {
+    let stripped: String = raw.chars().filter(|c| !c.is_control()).collect();
+    let trimmed = stripped.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.chars().take(DEVICE_LABEL_MAX).collect())
+}
+
+/// The public halves of the phone's keys — what the wire needs to name them —
+/// and the device name every grant carries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PhoneKeys {
     pub identity_pubkey_hex: String,
@@ -88,29 +108,39 @@ pub struct PhoneKeys {
     pub session_pubkey_hex: String,
     /// When it, and every grant of it, lapses (seconds).
     pub session_expires_at: u64,
+    /// The device's name as the bridge shows it in its terminal allowlist and
+    /// in a refusal, sent on every grant. Sanitized by
+    /// [`sanitize_device_label`]; `None` when the phone has no name to give.
+    pub device_label: Option<String>,
 }
 
 impl PhoneKeys {
-    pub fn new(identity_pubkey_hex: &str, session: &SessionKey) -> Self {
+    /// `device_label` is the phone's name for the bridge (see
+    /// [`sanitize_device_label`]); it is stored as given, so callers pass it
+    /// already sanitized.
+    pub fn new(identity_pubkey_hex: &str, session: &SessionKey, device_label: Option<String>) -> Self {
         Self {
             identity_pubkey_hex: identity_pubkey_hex.to_string(),
             identity_npub: protocol::crypto::npub_from_hex(identity_pubkey_hex).unwrap_or_default(),
             session_pubkey_hex: session.pubkey_hex().to_string(),
             session_expires_at: session.expires_at,
+            device_label,
         }
     }
 
     /// A grant of the current session key to `bridge`, for the wire.
     /// `replaces` is the key the bridge confirmed before, if another: the
     /// bridge then moves this client to the new key rather than counting a
-    /// new client.
+    /// new client. Every grant carries the device's label, so the bridge can
+    /// name the device in its allowlist and in a refusal whether this is the
+    /// first grant, a rotation or a re-grant.
     pub fn grant_for(&self, bridge: &str, replaces: Option<&str>) -> SessionKeyGrant {
         SessionKeyGrant {
             pubkey_hex: self.session_pubkey_hex.clone(),
             bridge_pubkey_hex: bridge.to_string(),
             expires_at: self.session_expires_at,
             replaces: replaces.filter(|old| *old != self.session_pubkey_hex).map(str::to_string),
-            label: None,
+            label: self.device_label.clone(),
         }
     }
 
@@ -268,6 +298,33 @@ mod tests {
         let ev = auth.sign_auth("wss://relay.example", "chal", 1_000).await.unwrap();
         assert_eq!((ev.kind, ev.pubkey.as_str()), (22242, id.pubkey_hex.as_str()));
         assert!(ev.tags.iter().any(|t| t[0] == "challenge" && t[1] == "chal"));
+    }
+
+    #[test]
+    fn a_device_label_is_sanitized_for_the_wire() {
+        assert_eq!(sanitize_device_label("Pixel 8a").as_deref(), Some("Pixel 8a"));
+        // Trimmed, and control characters (a newline or a tab, say) dropped:
+        // the bridge prints the name on one line.
+        assert_eq!(sanitize_device_label("  Pixel 8a\n").as_deref(), Some("Pixel 8a"));
+        assert_eq!(sanitize_device_label("Pix\u{7}el 8a").as_deref(), Some("Pixel 8a"));
+        // Nothing left to name the device.
+        assert_eq!(sanitize_device_label("   "), None);
+        assert_eq!(sanitize_device_label(""), None);
+        // Capped, by characters, at the length the bridge's line allows.
+        let long = "x".repeat(DEVICE_LABEL_MAX + 16);
+        assert_eq!(sanitize_device_label(&long).unwrap().chars().count(), DEVICE_LABEL_MAX);
+    }
+
+    #[test]
+    fn a_grant_carries_the_device_label() {
+        let session = SessionKey { keypair: generate_keypair(), expires_at: 1_800_000_000 };
+        let named = PhoneKeys::new("ab", &session, Some("Pixel 8a".to_string()));
+        assert_eq!(named.grant_for("cd", None).label.as_deref(), Some("Pixel 8a"));
+        // The rotation and re-grant paths go through the same `grant_for`.
+        assert_eq!(named.grant_for("cd", Some("ee")).label.as_deref(), Some("Pixel 8a"));
+        // A phone with no name to give sends none, not an empty string.
+        let unnamed = PhoneKeys::new("ab", &session, None);
+        assert_eq!(unnamed.grant_for("cd", None).label, None);
     }
 
     #[test]

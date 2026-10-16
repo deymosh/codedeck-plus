@@ -1042,7 +1042,7 @@ mod tests {
         let h = hydrate(&kv, &ts, &StoresConfig::default()).await;
         let identity = protocol::crypto::generate_keypair();
         let (ring, _) = client_core::stores::session_key::SessionKeyRing::load(None, 1_000);
-        (h.stores, ts, PhoneKeys::new(&identity.pubkey_hex, &ring.current))
+        (h.stores, ts, PhoneKeys::new(&identity.pubkey_hex, &ring.current, None))
     }
 
     fn text_entry(content: &str) -> OutputEntry {
@@ -1181,7 +1181,7 @@ mod tests {
         let ts = MemoryTranscriptStore::new();
         let identity = protocol::crypto::generate_keypair();
         let (ring, _) = client_core::stores::session_key::SessionKeyRing::load(None, 1_000);
-        let kp = PhoneKeys::new(&identity.pubkey_hex, &ring.current);
+        let kp = PhoneKeys::new(&identity.pubkey_hex, &ring.current, None);
 
         // Deleted (and acked: no rows left), then the app was killed.
         let mut before = hydrate(&kv, &ts, &StoresConfig::default()).await.stores;

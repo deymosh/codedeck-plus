@@ -214,7 +214,7 @@ async fn a_phone_drives_the_real_bridge_through_a_relay() {
             // --- the phone ---
             let store = Rc::new(MemoryTranscriptStore::new());
             let core = Core::spawn(
-                CoreConfig::new(Rc::new(LocalSigner(generate_keypair())), None, false),
+                CoreConfig::new(Rc::new(LocalSigner(generate_keypair())), None, false, None),
                 CorePorts { transcript_store: store.clone(), ..CorePorts::default() },
                 Rc::new(Observer),
                 Rc::new(SystemClock),
@@ -424,7 +424,7 @@ async fn a_phone_opens_a_terminal_and_types_through_the_bridge() {
             let store = Rc::new(MemoryTranscriptStore::new());
             let observer = Rc::new(TerminalObserver::default());
             let core = Core::spawn(
-                CoreConfig::new(Rc::new(LocalSigner(phone.clone())), None, false),
+                CoreConfig::new(Rc::new(LocalSigner(phone.clone())), None, false, None),
                 CorePorts { kv: kv.clone(), transcript_store: store.clone(), ..CorePorts::default() },
                 observer.clone(),
                 Rc::new(SystemClock),

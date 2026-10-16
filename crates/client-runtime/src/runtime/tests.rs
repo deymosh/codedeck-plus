@@ -79,6 +79,7 @@ async fn core_for_ports(
             identity: Rc::new(crate::signer::LocalSigner(phone.clone())),
             proxy: None,
             tor: false,
+            device_label: None,
             reconnect: fast_reconnect(),
         },
         ports,
@@ -218,6 +219,7 @@ async fn spawn_applies_the_boot_time_proxy_to_the_http_port_when_tor_is_on() {
                     identity: Rc::new(crate::signer::LocalSigner(phone.clone())),
                     proxy: Some("127.0.0.1:9050".to_string()),
                     tor: true,
+                    device_label: None,
                     reconnect: fast_reconnect(),
                 },
                 ports,
@@ -254,6 +256,7 @@ async fn spawn_leaves_the_http_port_direct_when_tor_is_off() {
                     identity: Rc::new(crate::signer::LocalSigner(phone.clone())),
                     proxy: Some("127.0.0.1:9050".to_string()),
                     tor: false,
+                    device_label: None,
                     reconnect: fast_reconnect(),
                 },
                 ports,
@@ -363,6 +366,7 @@ async fn a_relay_dying_while_another_survives_is_reported_at_once() {
                     identity: Rc::new(crate::signer::LocalSigner(phone.clone())),
                     proxy: None,
                     tor: false,
+                    device_label: None,
                     reconnect: fast_reconnect(),
                 },
                 CorePorts::default(),
@@ -1021,6 +1025,7 @@ async fn editing_a_machines_relays_repoints_the_transport() {
                     identity: Rc::new(crate::signer::LocalSigner(phone.clone())),
                     proxy: None,
                     tor: false,
+                    device_label: None,
                     reconnect: fast_reconnect(),
                 },
                 CorePorts { kv: Rc::new(kv), ..CorePorts::default() },
@@ -1638,6 +1643,7 @@ async fn a_phone_with_no_relays_pairs_over_the_relays_its_pairing_names() {
                     identity: Rc::new(crate::signer::LocalSigner(phone.clone())),
                     proxy: None,
                     tor: false,
+                    device_label: None,
                     reconnect: fast_reconnect(),
                 },
                 CorePorts::default(),
@@ -2141,6 +2147,7 @@ async fn restored_core(mock: &MockRelay, phone: &Keypair, machine: &Keypair, spy
             identity: Rc::new(DecryptCounter(crate::signer::LocalSigner(phone.clone()), Rc::clone(&decrypts))),
             proxy: None,
             tor: false,
+            device_label: None,
             reconnect: fast_reconnect(),
         },
         CorePorts { kv: Rc::new(kv), ..CorePorts::default() },
@@ -2151,6 +2158,47 @@ async fn restored_core(mock: &MockRelay, phone: &Keypair, machine: &Keypair, spy
     .await;
     core.set_relays(vec![mock.url.clone()]);
     (core, decrypts)
+}
+
+/// Every grant carries the phone's configured device name — what the bridge
+/// shows in its terminal allowlist and in a refusal — and none when the phone
+/// has no name to give. `CoreConfig::new` sanitizes, so a whitespace-only
+/// setting is stored (and granted) as no name rather than a blank one.
+#[tokio::test]
+async fn every_grant_carries_the_configured_device_label() {
+    LocalSet::new()
+        .run_until(async {
+            for (configured, expected) in [
+                (Some("Pixel 8a".to_string()), Some("Pixel 8a")),
+                (Some("   ".to_string()), None),
+                (None, None),
+            ] {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let machine = generate_keypair();
+                let spy = Rc::new(Spy::default());
+                let mut state = client_core::stores::machines::MachinesState::default();
+                state.register_machine(&machine.pubkey_hex, "bridge", None, None, &[]);
+                let kv = MemoryKv::seeded([(
+                    crate::stores::MACHINES_KEY,
+                    client_core::stores::machines::serialize_machines(&state.machines),
+                )]);
+                let core = Core::spawn(
+                    CoreConfig::new(Rc::new(crate::signer::LocalSigner(phone.clone())), None, false, configured.clone()),
+                    CorePorts { kv: Rc::new(kv), ..CorePorts::default() },
+                    spy,
+                    Rc::new(FixedClock(RefCell::new(1_000_000))),
+                    Rc::new(ZeroEntropy),
+                )
+                .await;
+                core.set_relays(vec![mock.url.clone()]);
+                core.start();
+                eose_all(&mut mock).await;
+                let grant = expect_grant(&mut mock, &phone, &machine).await;
+                assert_eq!(grant.label.as_deref(), expected, "configured {configured:?}");
+            }
+        })
+        .await;
 }
 
 /// A restored device costs the identity's signer no decrypt: what the
@@ -2314,6 +2362,7 @@ async fn a_quiet_client_renews_its_presence_and_says_when_it_goes_away() {
                     identity: Rc::new(crate::signer::LocalSigner(phone.clone())),
                     proxy: None,
                     tor: false,
+                    device_label: None,
                     reconnect: fast_reconnect(),
                 },
                 CorePorts { kv: Rc::new(kv), session_keys: Some(Rc::new(store.clone())), ..CorePorts::default() },
@@ -2368,6 +2417,7 @@ async fn a_machine_settings_change_nobody_answers_stops_being_busy_at_the_deadli
                     identity: Rc::new(crate::signer::LocalSigner(phone.clone())),
                     proxy: None,
                     tor: false,
+                    device_label: None,
                     reconnect: fast_reconnect(),
                 },
                 CorePorts { kv: Rc::new(kv), ..CorePorts::default() },
@@ -2495,6 +2545,7 @@ async fn a_resume_refreshes_only_machines_not_heard_from_lately() {
                     identity: Rc::new(crate::signer::LocalSigner(phone.clone())),
                     proxy: None,
                     tor: false,
+                    device_label: None,
                     reconnect: fast_reconnect(),
                 },
                 CorePorts { kv: Rc::new(kv), ..CorePorts::default() },
@@ -2682,6 +2733,7 @@ async fn a_burst_of_sync_chunks_costs_one_signed_ack() {
                     identity: Rc::new(CountingSigner(crate::signer::LocalSigner(phone.clone()), Rc::clone(&signs))),
                     proxy: None,
                     tor: false,
+                    device_label: None,
                     reconnect: fast_reconnect(),
                 },
                 CorePorts { kv: Rc::new(kv), ..CorePorts::default() },
