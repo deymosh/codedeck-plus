@@ -87,6 +87,7 @@ tiers, cheapest first — pick by what needs proving:
 ./codedeck live claude-code --fake-model --prompt /tool
 ./codedeck live opencode    --fake-model --prompt /question --prompt /long
 ./codedeck live deepseek-harness --fake-model --prompt /error
+./codedeck live qwen-code   --fake-model --prompt /tool
 
 # 3. A real model. Free on OpenCode's Zen models; anything else spends the account.
 ./codedeck live opencode --model opencode/cat-jam-free --prompt "Reply with exactly: ok"

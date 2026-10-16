@@ -233,10 +233,11 @@ the full runbook.
 
 - [`docs/BRIDGE.md`](docs/BRIDGE.md) — the bridge: install, commands, config, files, systemd
 - [`docs/CLIENT.md`](docs/CLIENT.md) — the phone: the Rust client core, the Android app, transport rules, building the APK
-- [`docs/PROTOCOL.md`](docs/PROTOCOL.md) — the v11 wire contract, the driver protocol, adding an agent
+- [`docs/PROTOCOL.md`](docs/PROTOCOL.md) — the v12 wire contract, the driver protocol, adding an agent
 - [`docs/OPENCODE.md`](docs/OPENCODE.md) — OpenCode, the default agent: the server it runs on, provider profiles, credentials
 - [`docs/CLAUDE-CODE.md`](docs/CLAUDE-CODE.md) — Claude Code: sign-in, modes and models, the 1M window, gateways and provider profiles
 - [`docs/DEEPSEEK.md`](docs/DEEPSEEK.md) — the DeepSeek Harness: API key, models and reasoning, gateways, MCP servers and plugins
+- [`docs/QWEN.md`](docs/QWEN.md) — Qwen Code: install, OpenAI-compatible providers, its home, modes
 - [`docs/AGENT-CANDIDATES.md`](docs/AGENT-CANDIDATES.md) — which agents to add next and how
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — work decided but not built yet
 - [`.claude/skills/cut-release/SKILL.md`](.claude/skills/cut-release/SKILL.md) — the release runbook

@@ -205,14 +205,8 @@ module list names a driver.
 
 ## Order
 
-1. Driver SDK layout and `DriverModule` registry (above), then install on
-   demand on top of it (done, in the v1.3.0 cycle).
-2. Extract the generic ACP driver from the DeepSeek driver into `acp/` (done),
-   then the first other ACP agent on it: Qwen Code (done — it needed modes,
-   the extension requests its mid-turn queue and question form arrive as, and
-   a permission reply that carries more than an option; its provider profiles
-   reach it as the OpenAI providers in its own `settings.json`). It is free to
-   test — it runs against a local OpenAI-compatible fake model — so the base
-   got a second user without spending an account.
-3. Codex (native), Pi (RPC, with the permission gate).
-4. Tier 2 on the ACP driver, as users ask for them.
+The driver SDK layout, install on demand, the generic ACP base and Qwen Code
+on it are in. Next:
+
+1. Codex (native), Pi (RPC, with the permission gate).
+2. Tier 2 on the ACP driver, as users ask for them.
