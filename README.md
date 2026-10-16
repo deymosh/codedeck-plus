@@ -53,6 +53,9 @@ Pairing is a one-time QR scan; it survives restarts on both ends.
 - NIP-42 `AUTH` relays, and Tor on both ends (see below)
 - A direct link on your LAN or VPN: the phone talks to the bridge over its
   own WebSocket, with the relays as the fallback
+- A web page on the same port: the bridge's dashboard in a browser, signed in
+  from a paired phone instead of a password
+  ([`docs/BRIDGE.md`](docs/BRIDGE.md#web-page))
 
 ## About this fork
 
