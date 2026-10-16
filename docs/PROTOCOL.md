@@ -878,6 +878,9 @@ restart.
    environment, and its runtime (what the machine already has, and how to
    install the pinned one). Add it to the list in `src/host/modules.ts`; it
    is enabled through `CODEDECK_AGENT_HOST_DRIVERS`.
+   The host ships four: `drivers/opencode/`, `drivers/claude/`,
+   `drivers/deepseek/` and `drivers/qwen/` (the last two over the shared
+   `acp/` machinery, which is what an ACP agent's driver reuses).
 4. Test it beside the driver, in `src/drivers/<agent>/__tests__/`, like
    `drivers/claude/__tests__/claudeDriver.test.ts` and
    `drivers/opencode/__tests__/opencodeDriver.test.ts` do, with the

@@ -4,9 +4,9 @@
 
 # CodeDeck+
 
-**Control coding agents (OpenCode, Claude Code, DeepSeek Harness) running on
-your laptop or VPS from your Android phone, over end-to-end encrypted
-Nostr.** No accounts and no CodeDeck server: the phone and the bridge pair by
+**Control coding agents (OpenCode, Claude Code, DeepSeek Harness, Qwen Code)
+running on your laptop or VPS from your Android phone, over end-to-end
+encrypted Nostr.** No accounts and no CodeDeck server: the phone and the bridge pair by
 scanning a QR code and talk through ordinary Nostr relays — public ones, or
 your own.
 
@@ -42,10 +42,11 @@ Pairing is a one-time QR scan; it survives restarts on both ends.
   from the endpoint)
 - What fills the context window, part by part, and Claude Code's plan limits
 - [OpenCode](https://opencode.ai) (the default, installed on first start),
-  Claude Code and the
-  [DeepSeek Harness](https://www.deepseek.com/en/harness/) (installed from
-  the phone when chosen), picked per session — the protocol is agent-neutral,
-  so another agent is one driver away
+  Claude Code, the
+  [DeepSeek Harness](https://www.deepseek.com/en/harness/) and
+  [Qwen Code](https://github.com/QwenLM/qwen-code) (installed from the phone
+  when chosen), picked per session — the protocol is agent-neutral, so another
+  agent is one driver away
   ([`docs/PROTOCOL.md`](docs/PROTOCOL.md#adding-an-agent))
 - Plugins and MCP servers of each agent, managed from the phone
 - File attachments (photos or any file), and project/folder management on every paired bridge

@@ -1,8 +1,9 @@
 # DeepSeek Harness backend
 
 CodeDeck+ runs sessions on any agent its agent host has a driver for:
-[OpenCode](https://opencode.ai), Claude Code, and the
-[DeepSeek Harness](https://www.deepseek.com/en/harness/) (`dsh`). A phone picks
+[OpenCode](https://opencode.ai), Claude Code, the
+[DeepSeek Harness](https://www.deepseek.com/en/harness/) (`dsh`), and
+[Qwen Code](https://github.com/QwenLM/qwen-code). A phone picks
 the agent per session from the "New session" sheet, which lists what the
 bridge advertises in its heartbeat. The DeepSeek Harness is installed when
 someone chooses it, and needs one thing: a DeepSeek API key (set from the

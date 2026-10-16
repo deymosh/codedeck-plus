@@ -77,6 +77,10 @@ const FLAGS = new Set(['models', 'fake-model']);
  * profile is a config entry, and the model is `codedeck-fake/fake-model-1`.
  * Its config is the operator's own with this provider added beside it, the
  * same placement the driver gives a profile.
+ *
+ * Qwen Code takes a profile the way the phone hands one over: the driver's
+ * `set-providers` writes it into Qwen Code's own settings, so the probe sends
+ * that frame (see `main`) and names the profile's model.
  */
 function fakeModelSession(agent, url) {
   const provider = {
@@ -90,6 +94,10 @@ function fakeModelSession(agent, url) {
   switch (agent) {
     case 'claude-code':
       return { provider, model: FAKE_MODEL_ID };
+    case 'qwen-code':
+      // Qwen Code's models come from the profiles the bridge hands the driver
+      // (`set-providers`, sent below), not from a session binding.
+      return { providers: [provider], model: FAKE_MODEL_ID };
     case 'deepseek-harness':
       // Bound, so its endpoint is the stub, but no model named: the harness
       // answers an id it does not know with an error entry ("unknown model
@@ -414,6 +422,18 @@ async function main() {
       case 'ended':
         say(`ended${event.error ? `: ${event.error}` : ''}`);
         if (event.error) failed = true;
+        // A session that is gone can never satisfy a waiter: reject them all
+        // so the probe reports why and exits, rather than sitting out its
+        // whole timeout on something that can no longer arrive. A probe past
+        // its own last step (its own `end-session`) has no waiter left, so
+        // that path is untouched.
+        if (!finished) {
+          for (const entry of [...waits]) {
+            waits.splice(waits.indexOf(entry), 1);
+            deadline.clear(entry);
+            entry.reject(new Error(`the session ended${event.error ? `: ${event.error}` : ''}`));
+          }
+        }
         break;
       default:
         say(`event: ${JSON.stringify(event)}`);
@@ -508,6 +528,15 @@ async function main() {
     }
     say(`modes: ${(agent.modes ?? []).map((m) => m.id).join(', ') || '(none)'}`);
 
+    // An agent whose models come from the bridge's provider profiles (Qwen
+    // Code) is handed the local server as one, the way the bridge hands over
+    // a real profile: the driver writes it into the agent's own settings.
+    if (fakeSession?.providers) {
+      const refused = await send('set-providers', { agent: args.agent, providers: fakeSession.providers });
+      const left = refused.refused ?? [];
+      say(`providers: the fake model profile was ${left.length > 0 ? `refused (${left[0].reason})` : 'taken'}`);
+    }
+
     // What the agent offers, and which of it a session with no `--model` runs.
     // Free of charge: this asks the host, and starts nothing.
     const listed = await send('list-models', { agent: args.agent });
@@ -532,6 +561,13 @@ async function main() {
       ...(args.persona ? { persona: args.persona } : {}),
       ...(fakeSession?.provider ? { provider: fakeSession.provider } : {}),
     });
+    // A session the host refused never reports `ready`: without this the probe
+    // would sit out its whole timeout on something that cannot arrive, after
+    // having already printed why (see `handleFrame`).
+    if (failed) {
+      say('!! the session could not be started — see the error above');
+      return finish(1);
+    }
     await waitFor('the session to be ready', (value) => value.type === 'ready');
     // Who the session can run as, for an agent with personas: the list a
     // phone shows in the session's options.

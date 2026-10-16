@@ -123,6 +123,21 @@ internal object DesignFixtures {
         wordmarkSplit = 0u, accent = null, modeColors = emptyMap(),
     )
 
+    /** Qwen Code's style as its driver reports it: its CLI's spinner and prompt mark, a gold "QWEN", its mode colours. */
+    val qwenStyle = UniffiAgentStyle(
+        spinnerFrames = listOf("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"), spinnerIntervalMs = 80u,
+        workingWords = emptyList(), workingCounter = true,
+        toolGlyphs = emptyMap(), resultMark = null, userMessage = UniffiUserMessageShape.Prompt(">"),
+        wordmark = listOf(
+            "▄▄▄▄ ▄  ▄ ▄▄▄▄ ▄▖ ▄",
+            "█  █ █  █ █    █▜▖█",
+            "█ ▜█ █▐▌█ █▀▀  █ ▜█",
+            "▀▀▀█ ▀▀▀▀ ▀▀▀▀ ▀  ▀",
+        ),
+        wordmarkSplit = 0u, accent = 0xFFFFD700u,
+        modeColors = mapOf("plan" to 0xFFAAD94Cu, "auto-edit" to 0xFFFFD700u, "auto" to 0xFF39BAE6u),
+    )
+
     val claude = UniffiAgent(
         id = "claude-code", displayName = "Claude Code",
         modes = listOf(UniffiOptionChoice("default", "Ask first", null), UniffiOptionChoice("acceptEdits", "Accept edits", null), UniffiOptionChoice("plan", "Plan", null)),
@@ -521,5 +536,17 @@ internal object DesignFixtures {
         models = listOf(UniffiModelEntry("deepseek-v4-pro", "DeepSeek-V4-Pro", null, null, emptyList())),
         modes = listOf(UniffiOptionChoice("ask", "Ask first", null), UniffiOptionChoice("default", "Default", null)), mode = "ask", modePending = false,
         efforts = listOf(UniffiOptionChoice("high", "High", null)), effort = "high",
+    )
+
+    /** A Qwen Code session on a provider profile's model, planning. */
+    val qwenOptions = SessionOptions(
+        modelName = "qwen3-coder-plus", model = "qwen3-coder-plus",
+        models = listOf(UniffiModelEntry("qwen3-coder-plus", "qwen3-coder-plus", "DashScope", null, emptyList())),
+        modes = listOf(
+            UniffiOptionChoice("default", "Ask", null), UniffiOptionChoice("auto-edit", "Auto edit", null),
+            UniffiOptionChoice("plan", "Plan", null), UniffiOptionChoice("auto", "Auto", null), UniffiOptionChoice("yolo", "YOLO", null),
+        ),
+        mode = "plan", modePending = false,
+        efforts = listOf(UniffiOptionChoice("medium", "Medium", null), UniffiOptionChoice("high", "High", null)), effort = "high",
     )
 }

@@ -224,9 +224,9 @@ export function offeredTools(body, shape) {
     .filter((name) => typeof name === 'string' && name !== '');
 }
 
-/** Names that are a shell tool, in the order Claude Code, OpenCode and the
- *  DeepSeek Harness name theirs. */
-const SHELL_TOOLS = ['Bash', 'bash', 'shell', 'execute', 'run_command'];
+/** Names that are a shell tool, in the order Claude Code, OpenCode, the
+ *  DeepSeek Harness and Qwen Code name theirs. */
+const SHELL_TOOLS = ['Bash', 'bash', 'shell', 'execute', 'run_command', 'run_shell_command'];
 /** Names that ask the user a question. */
 const QUESTION_TOOLS = ['AskUserQuestion', 'ask_user_question', 'question', 'ask_user'];
 /** Names that propose a plan for approval. */

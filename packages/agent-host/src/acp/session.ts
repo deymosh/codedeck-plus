@@ -15,6 +15,7 @@ import type {
   RequestPermissionRequest,
   RequestPermissionResponse,
   SessionConfigOption,
+  SessionModeState,
   SessionNotification,
   SessionUpdate,
 } from '@agentclientprotocol/sdk';
@@ -63,6 +64,9 @@ export abstract class AcpSession<
   protected process?: AcpProcess<H>;
   protected nativeId?: string;
   protected options: SessionConfigOption[] = [];
+  /** The session's modes and the one it is in, as the agent reported them.
+   *  An agent with no modes leaves this undefined. */
+  private modes?: SessionModeState;
   private contextPercentage?: number;
   private contextWindow?: number;
   /** Whether the phone has been told the session is up: until then its model
@@ -152,6 +156,7 @@ export abstract class AcpSession<
       const opened = await this.openSession();
       this.nativeId = opened.sessionId;
       this.options = opened.configOptions;
+      this.modes = opened.modes ?? undefined;
       if (this.ended) {
         this.abandon();
         return;
@@ -159,6 +164,7 @@ export abstract class AcpSession<
       process_.attach(opened.sessionId, {
         update: (notification) => this.onUpdate(notification),
         permission: (request) => this.onPermission(request),
+        extRequest: (method, params) => this.handleExtRequest(method, params),
       });
       this.deps.live.add(opened.sessionId, this);
       await this.applySelection();
@@ -190,7 +196,12 @@ export abstract class AcpSession<
    *  workspace — it checks) falls back to a fresh one with a notice, as the
    *  other drivers do: the transcript is the bridge's, the memory is the
    *  agent's. */
-  private async openSession(): Promise<{ sessionId: string; configOptions: SessionConfigOption[]; resumed: boolean }> {
+  private async openSession(): Promise<{
+    sessionId: string;
+    configOptions: SessionConfigOption[];
+    modes?: SessionModeState | null;
+    resumed: boolean;
+  }> {
     const resume = this.params.resume;
     const resumable = this.process?.capabilities.sessionCapabilities?.resume;
     // ACP spells "not supported" both as an absent field and as `null`;
@@ -198,7 +209,7 @@ export abstract class AcpSession<
     if (resume && resumable != null) {
       try {
         const resumed = await this.client.request('session/resume', { sessionId: resume, cwd: this.cwd, mcpServers: [] });
-        return { sessionId: resume, configOptions: resumed.configOptions ?? [], resumed: true };
+        return { sessionId: resume, configOptions: resumed.configOptions ?? [], modes: resumed.modes, resumed: true };
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         this.ctx.log(`[${this.deps.tag}] could not resume ${resume} (${reason}) — starting a fresh session`);
@@ -213,7 +224,7 @@ export abstract class AcpSession<
       }
     }
     const created = await this.client.request('session/new', { cwd: this.cwd, mcpServers: [] });
-    return { sessionId: created.sessionId, configOptions: created.configOptions ?? [], resumed: false };
+    return { sessionId: created.sessionId, configOptions: created.configOptions ?? [], modes: created.modes, resumed: false };
   }
 
   /** The process this session shares went away, taking the session with it. */
@@ -234,8 +245,56 @@ export abstract class AcpSession<
       this.options = update.configOptions;
       return;
     }
+    if (update.sessionUpdate === 'current_mode_update') {
+      this.onModeChanged(update.currentModeId);
+      return;
+    }
     const entries = this.translate(update, this.calls);
     if (entries.length > 0) this.ctx.emit({ type: 'entries', entries });
+  }
+
+  /** The agent switched its own mode (leaving plan mode after an approval,
+   *  its own `/mode`, a classifier). The phone is told; a driver that keeps
+   *  its own mode state updates it in `modeChanged`. */
+  private onModeChanged(modeId: string): void {
+    if (this.modes) this.modes = { ...this.modes, currentModeId: modeId };
+    this.modeChanged(modeId);
+    if (this.announced) this.ctx.emit({ type: 'info', mode: modeId });
+  }
+
+  /** Called when the agent changes its own mode. The default does nothing. */
+  protected modeChanged(modeId: string): void {
+    void modeId;
+  }
+
+  /** The session's modes, as the agent reported them. */
+  protected modeState(): SessionModeState | undefined {
+    return this.modes;
+  }
+
+  /**
+   * Switch the session's mode with the agent's own `session/set_mode`, the
+   * one call ACP defines for it (an agent that also offers a `mode` config
+   * option takes that, but the method is what every agent with modes has).
+   * The new mode is kept so the next reader sees it.
+   */
+  protected async setMode(modeId: string): Promise<void> {
+    const sessionId = this.nativeId;
+    if (!sessionId) throw new Error('the session has not started');
+    await this.client.request('session/set_mode', { sessionId, modeId });
+    if (this.modes) this.modes = { ...this.modes, currentModeId: modeId };
+  }
+
+  /**
+   * An extension request the agent sent for this session (a method ACP does
+   * not define). The default claims none, so such a request is answered with
+   * `-32601` at once — which is what a driver that does not know the method
+   * wants, and what the agent reads as "not supported".
+   */
+  protected async handleExtRequest(method: string, params: Record<string, unknown>): Promise<unknown> {
+    void method;
+    void params;
+    return undefined;
   }
 
   /** How full the context is, over the window the agent reports. */
@@ -248,12 +307,22 @@ export abstract class AcpSession<
     this.ctx.emit({ type: 'info', contextWindow: size, contextPercentage: percentage });
   }
 
+  /** One permission ask, as `answerPermission` answers it. */
+  private onPermission(request: RequestPermissionRequest): Promise<RequestPermissionResponse> {
+    return this.answerPermission(request);
+  }
+
   /**
    * One permission ask. The choices are the two the agent offers — it may
    * have no "always allow" to choose — and the card is the driver's, since
    * only it knows what the call is.
+   *
+   * A driver whose ask carries more than a yes/no overrides this: Qwen Code
+   * routes its question form and its plan review through the same method,
+   * and each needs a reply shaped like itself (the question's answers beside
+   * the outcome, the plan's own verdict).
    */
-  private async onPermission(request: RequestPermissionRequest): Promise<RequestPermissionResponse> {
+  protected async answerPermission(request: RequestPermissionRequest): Promise<RequestPermissionResponse> {
     const allow = request.options.find((option) => option.kind === 'allow_once');
     const reject = request.options.find((option) => option.kind === 'reject_once');
     const refuse = (): RequestPermissionResponse =>

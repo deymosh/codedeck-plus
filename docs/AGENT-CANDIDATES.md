@@ -6,9 +6,11 @@ whether agents should be installed one at a time instead of all at host
 start. Researched 2026-10-07; versions and licences are as published on that
 date and should be re-checked before an agent is implemented.
 
-Today the host runs three drivers: OpenCode (its server SDK; the default
-agent), Claude Code (Agent SDK) and the DeepSeek Harness (Agent Client
-Protocol, ACP). Other planned work is in [`ROADMAP.md`](ROADMAP.md).
+Today the host runs four drivers: OpenCode (its server SDK; the default
+agent), Claude Code (Agent SDK), the DeepSeek Harness and Qwen Code — the
+last two over the Agent Client Protocol (ACP), Qwen Code on the base
+extracted from the harness's driver. Other planned work is in
+[`ROADMAP.md`](ROADMAP.md).
 
 ## How agents can be integrated
 
@@ -206,8 +208,11 @@ module list names a driver.
 1. Driver SDK layout and `DriverModule` registry (above), then install on
    demand on top of it (done, in the v1.3.0 cycle).
 2. Extract the generic ACP driver from the DeepSeek driver into `acp/` (done),
-   then the first other ACP agent on it: Qwen Code. It is free to test — it
-   runs against a local OpenAI-compatible fake model — so the base gets a
-   second user without spending an account.
+   then the first other ACP agent on it: Qwen Code (done — it needed modes,
+   the extension requests its mid-turn queue and question form arrive as, and
+   a permission reply that carries more than an option; its provider profiles
+   reach it as the OpenAI providers in its own `settings.json`). It is free to
+   test — it runs against a local OpenAI-compatible fake model — so the base
+   got a second user without spending an account.
 3. Codex (native), Pi (RPC, with the permission gate).
 4. Tier 2 on the ACP driver, as users ask for them.

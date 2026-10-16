@@ -60,8 +60,14 @@ export class FakeAgent {
   readonly resumed: Array<Record<string, unknown>> = [];
   readonly closed: string[] = [];
   readonly setOptions: Array<{ sessionId: string; configId: string; value: string }> = [];
+  /** Every `session/set_mode` the driver asked for. */
+  readonly setModes: Array<{ sessionId: string; modeId: string }> = [];
   /** The option state session/new and session/resume answer with. */
   options: unknown[] = [];
+  /** The mode state those answers carry, for an agent that has modes. */
+  modes: unknown = null;
+  /** What `initialize` answers as the agent's own name and version. */
+  agentInfo: unknown = { name: 'fake-agent', version: '0.0.1' };
   /** Make `session/resume` fail the way a missing conversation does. */
   resumeError: string | undefined;
   /** Whether the agent accepts the values `set_config_option` is given. */
@@ -122,7 +128,7 @@ export class FakeAgent {
       case 'initialize':
         this.reply(id, {
           protocolVersion: 1,
-          agentInfo: { name: 'fake-agent', version: '0.0.1' },
+          agentInfo: this.agentInfo,
           agentCapabilities: {
             mcpCapabilities: { http: true },
             promptCapabilities: { image: false, audio: false, embeddedContext: false },
@@ -142,7 +148,7 @@ export class FakeAgent {
         }
         this.newSessions.push(params);
         const sessionId = `s${this.newSessions.length}`;
-        this.reply(id, { sessionId, configOptions: this.options });
+        this.reply(id, { sessionId, configOptions: this.options, modes: this.modes });
         return;
       }
       case 'session/resume': {
@@ -156,7 +162,21 @@ export class FakeAgent {
           this.errorReply(id, -32601, 'Method not found: session/resume');
           return;
         }
-        this.reply(id, { configOptions: this.options });
+        this.reply(id, { configOptions: this.options, modes: this.modes });
+        return;
+      }
+      case 'session/set_mode': {
+        const sessionId = String(params.sessionId);
+        const modeId = String(params.modeId);
+        this.setModes.push({ sessionId, modeId });
+        // An agent that has modes refuses one it does not offer.
+        const state = this.modes as { currentModeId?: string; availableModes?: Array<{ id?: string }> } | null;
+        if (state?.availableModes !== undefined && !state.availableModes.some((mode) => mode.id === modeId)) {
+          this.errorReply(id, -32602, `Invalid params: Unknown approval mode: ${modeId}`);
+          return;
+        }
+        if (state) this.modes = { ...state, currentModeId: modeId };
+        this.reply(id, {});
         return;
       }
       case 'session/set_config_option': {
@@ -295,6 +315,26 @@ export class FakeAgent {
       )?.outcome;
       return outcome === undefined ? undefined : { outcome: outcome.outcome ?? '', ...(outcome.optionId ? { optionId: outcome.optionId } : {}) };
     });
+  }
+
+  /** Ask the client to allow a tool call, as an agent does, with the whole
+   *  request spelled out (the tool call's arguments, its content, its
+   *  `_meta`), and answer with the client's whole reply — so a test can see
+   *  what travelled beside the outcome. */
+  requestPermission(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const id = 9000 + this.nextId++;
+    const message = new Promise<Sent>((resolve) => this.pending.set(id, resolve));
+    this.child.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id, method: 'session/request_permission', params })}\n`);
+    return message.then((answer) => (answer.result ?? {}) as Record<string, unknown>);
+  }
+
+  /** Send one extension request (a method ACP does not define) and answer
+   *  with what the client replied. */
+  extRequest(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const id = 9500 + this.nextId++;
+    const message = new Promise<Sent>((resolve) => this.pending.set(id, resolve));
+    this.child.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
+    return message.then((answer) => answer as Record<string, unknown>);
   }
 
   /** Erase stdout/stderr support for a line that is not JSON-RPC at all. */

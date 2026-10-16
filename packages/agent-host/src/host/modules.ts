@@ -7,9 +7,10 @@ import { claudeModule } from '../drivers/claude/module';
 import { deepSeekModule } from '../drivers/deepseek/module';
 import { fakeModule } from '../drivers/fake/module';
 import { openCodeModule } from '../drivers/opencode/module';
+import { qwenModule } from '../drivers/qwen/module';
 import type { DriverModule } from '../sdk/module';
 
-export const DRIVER_MODULES: readonly DriverModule[] = [openCodeModule, claudeModule, deepSeekModule, fakeModule];
+export const DRIVER_MODULES: readonly DriverModule[] = [openCodeModule, claudeModule, deepSeekModule, qwenModule, fakeModule];
 
 /**
  * The modules `CODEDECK_AGENT_HOST_DRIVERS` (comma-separated ids) asks for,

@@ -92,13 +92,20 @@ function splitKey(key: string): { name: string; spec: string } {
 
 /** Read the pins out of a pnpm-lock.yaml (lockfile format 9): exactly the
  *  entries that declare `os` or `cpu`. Two versions of one name is an error
- *  — a driver could not tell them apart. */
-export function platformPackages(lockfile: string): Record<string, PackagePin> {
+ *  — a driver could not tell them apart.
+ *
+ *  `exclude` names packages a pure-JS agent tree installs for itself
+ *  (`packageTree`): a tree's own native dependencies may legitimately sit at
+ *  another version beside a single-binary agent's, and the tree installer —
+ *  not this map — lays them down. Leaving them out is also what keeps the
+ *  two-versions rule meaningful for the packages a driver actually names. */
+export function platformPackages(lockfile: string, exclude: ReadonlySet<string> = new Set()): Record<string, PackagePin> {
   const packages = parseLockfile(lockfile).packages ?? {};
   const pins: Record<string, PackagePin> = {};
   for (const [key, entry] of Object.entries(packages)) {
     if (!entry.os && !entry.cpu) continue;
     const { name, spec } = splitKey(stripPeerSuffix(key));
+    if (exclude.has(name)) continue;
     const integrity = typeof entry.resolution?.integrity === 'string' ? entry.resolution.integrity : undefined;
     if (!integrity) continue;
     const version = entry.version ?? spec;
@@ -265,8 +272,8 @@ export function renderPlatformPackages(pins: Record<string, PackagePin>): string
   ].join('\n');
 }
 
-/** The generated module's source for the DeepSeek Harness runtime tree. */
-export function renderDshPackages(entries: TreePackageEntry[]): string {
+/** The generated module's source for one installable runtime tree. */
+function renderTree(entries: TreePackageEntry[], exported: string): string {
   const rows = entries.map((entry) => {
     const fields = [
       `name: ${JSON.stringify(entry.name)}`,
@@ -285,9 +292,19 @@ export function renderDshPackages(entries: TreePackageEntry[]): string {
     "// Regenerate with this package's `gen:platform-packages` script.",
     "import type { TreePackageEntry } from '../install/lockfilePins';",
     '',
-    'export const DSH_PACKAGES: readonly TreePackageEntry[] = [',
+    `export const ${exported}: readonly TreePackageEntry[] = [`,
     ...rows,
     '];',
     '',
   ].join('\n');
+}
+
+/** The generated module's source for the DeepSeek Harness runtime tree. */
+export function renderDshPackages(entries: TreePackageEntry[]): string {
+  return renderTree(entries, 'DSH_PACKAGES');
+}
+
+/** The generated module's source for the Qwen Code runtime tree. */
+export function renderQwenPackages(entries: TreePackageEntry[]): string {
+  return renderTree(entries, 'QWEN_PACKAGES');
 }

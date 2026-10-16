@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { packageTree, platformPackages, renderDshPackages, renderPlatformPackages } from '../lockfilePins';
+import { packageTree, platformPackages, renderDshPackages, renderPlatformPackages, renderQwenPackages } from '../lockfilePins';
 
 const LOCKFILE = `lockfileVersion: '9.0'
 
@@ -57,12 +57,28 @@ describe('platformPackages', () => {
   });
 });
 
+/** The lockfile this repository pins its agent runtimes in. */
+const LOCKFILE_PATH = path.resolve(__dirname, '../../../../../pnpm-lock.yaml');
+
+/** The package names the pure-JS agent runtimes' own trees install
+ *  (`packageTree`): their native dependencies are the tree installer's to
+ *  lay down, so the single-binary map leaves them out. */
+function runtimeTreeNames(lockfile: string): Set<string> {
+  const names = new Set<string>();
+  for (const root of ['@deepseek-ai/dsh', '@qwen-code/qwen-code']) {
+    for (const entry of packageTree(lockfile, 'packages/agent-host', root)) names.add(entry.name);
+  }
+  return names;
+}
+
 describe('src/generated/platformPackages.ts', () => {
   // `vitest run -u` (the gen:platform-packages script) rewrites it; a plain
   // run fails when it no longer matches the lockfile.
   it('matches pnpm-lock.yaml', async () => {
-    const lockfile = fs.readFileSync(path.resolve(__dirname, '../../../../../pnpm-lock.yaml'), 'utf8');
-    await expect(renderPlatformPackages(platformPackages(lockfile))).toMatchFileSnapshot('../../generated/platformPackages.ts');
+    const lockfile = fs.readFileSync(LOCKFILE_PATH, 'utf8');
+    await expect(renderPlatformPackages(platformPackages(lockfile, runtimeTreeNames(lockfile)))).toMatchFileSnapshot(
+      '../../generated/platformPackages.ts',
+    );
   });
 });
 
@@ -167,9 +183,18 @@ describe('packageTree', () => {
 
 describe('src/generated/dshPackages.ts', () => {
   it('matches pnpm-lock.yaml', async () => {
-    const lockfile = fs.readFileSync(path.resolve(__dirname, '../../../../../pnpm-lock.yaml'), 'utf8');
+    const lockfile = fs.readFileSync(LOCKFILE_PATH, 'utf8');
     await expect(renderDshPackages(packageTree(lockfile, 'packages/agent-host', '@deepseek-ai/dsh'))).toMatchFileSnapshot(
       '../../generated/dshPackages.ts',
+    );
+  });
+});
+
+describe('src/generated/qwenPackages.ts', () => {
+  it('matches pnpm-lock.yaml', async () => {
+    const lockfile = fs.readFileSync(LOCKFILE_PATH, 'utf8');
+    await expect(renderQwenPackages(packageTree(lockfile, 'packages/agent-host', '@qwen-code/qwen-code'))).toMatchFileSnapshot(
+      '../../generated/qwenPackages.ts',
     );
   });
 });
