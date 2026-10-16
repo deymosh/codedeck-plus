@@ -564,6 +564,17 @@ pub struct TerminalIdMsg {
     pub term: String,
 }
 
+/// `web-sign-in`: sign in the browser showing `code` on this bridge's web
+/// page. The page shows a short code (and a QR of it) to a browser that asks
+/// to sign in; a paired phone sending it — signed by the identity, like every
+/// command — is what lets that browser in, so the page needs no password.
+/// Reply: `web-sign-in-result`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct WebSignInMsg {
+    pub code: String,
+}
+
 /// The phone→bridge message union.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(tag = "type", rename_all = "kebab-case")]
@@ -624,6 +635,7 @@ pub enum PhoneToBridge {
     TerminalTakeover(TerminalIdMsg),
     /// Hang up a terminal.
     TerminalClose(TerminalIdMsg),
+    WebSignIn(WebSignInMsg),
 }
 
 #[cfg(test)]
@@ -696,6 +708,7 @@ mod tests {
         rt(&json!({"v":12,"type":"pair-request","npub":"npub1","pubkeyHex":"aa","label":"phone","token":"t"}));
         rt(&json!({"v":12,"type":"pair-request","npub":"npub1","pubkeyHex":"aa","label":"phone","token":"t","sessionKey":{"pubkeyHex":"bb","bridgePubkeyHex":"cc","expiresAt":1800000000}}));
         rt(&json!({"v":12,"type":"provider-profiles-request"}));
+        rt(&json!({"v":12,"type":"web-sign-in","code":"K7QM-4XPA"}));
         rt(&json!({"v":12,"type":"session-key","sessionKey":{"pubkeyHex":"bb","bridgePubkeyHex":"cc","expiresAt":1800000000}}));
         rt(&json!({"v":12,"type":"session-key","sessionKey":{"pubkeyHex":"bb","bridgePubkeyHex":"cc","expiresAt":1800000000,"label":"Pixel 8"}}));
         rt(&json!({"v":12,"type":"presence","watchingTerminal":"t1"}));

@@ -617,6 +617,16 @@ pub struct TerminalEventMsg {
     pub at: u64,
 }
 
+/// The answer to `web-sign-in`, to the client that sent it: whether `code`
+/// was one the web page is showing now (and so a browser is signed in), or
+/// not — mistyped, expired, or already used.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct WebSignInResultMsg {
+    pub code: String,
+    pub signed_in: bool,
+}
+
 /// The bridge→phone message union.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(tag = "type", rename_all = "kebab-case")]
@@ -660,6 +670,7 @@ pub enum BridgeToPhone {
     TerminalExited(TerminalExitedMsg),
     /// To every present client of the identity.
     TerminalEvent(TerminalEventMsg),
+    WebSignInResult(WebSignInResultMsg),
 }
 
 #[cfg(test)]

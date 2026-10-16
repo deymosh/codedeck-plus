@@ -516,6 +516,8 @@ impl<'a> Router<'a> {
                     r.persist(StoreId::Machines);
                 }
             }
+            // Shown by the screen that sent the code, which waits for it.
+            BridgeToPhone::WebSignInResult(_) => {}
             BridgeToPhone::ProviderProfileAck(m) => {
                 self.stores.ui.apply_provider_profile_ack(
                     machine,

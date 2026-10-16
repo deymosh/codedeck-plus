@@ -30,6 +30,7 @@ pub use session_keys::MAX_CLIENTS;
 mod settings;
 mod terminal;
 pub use terminal::{TerminalAllowlist, TerminalAuditRecord, TerminalAuditWhat, TerminalConfig, PendingDevice};
+mod web;
 
 use std::collections::BTreeMap;
 
@@ -173,6 +174,8 @@ pub struct Engine {
     terminals: Terminals,
     pairing: Option<PairingWindow>,
     pairing_epoch: u64,
+    /// The sign-in codes the web page is showing.
+    web_sign_ins: web::WebSignIns,
     nacks: NackBudget,
     started: bool,
     stopped: bool,
@@ -230,6 +233,7 @@ impl Engine {
             sync,
             terminals,
             pairing: None,
+            web_sign_ins: web::WebSignIns::default(),
             pairing_epoch: 0,
             nacks: NackBudget::default(),
             started: false,
@@ -276,6 +280,7 @@ impl Engine {
             Input::TerminalAllowlist(allowlist) => self.on_terminal_allowlist(allowlist),
             Input::Unpaired { identity } => self.unpair(&identity),
             Input::Shutdown => self.shutdown(),
+            Input::WebSignInPending { code, expires_ms } => self.on_web_sign_in_pending(code, expires_ms),
         }
         self.requester = None;
         self.flush();

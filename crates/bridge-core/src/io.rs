@@ -234,6 +234,9 @@ pub enum Input {
     /// Stop: end every session, publish the offline heartbeat, then
     /// [`Effect::Stopped`].
     Shutdown,
+    /// The web page is showing sign-in `code` to a browser until
+    /// `expires_ms`; a paired phone sending it signs that browser in.
+    WebSignInPending { code: String, expires_ms: u64 },
 }
 
 #[derive(Debug)]
@@ -301,6 +304,9 @@ pub enum Effect {
     /// Shutdown is complete: every publish before this one must still go
     /// out, then the runtime may close the host and the relays.
     Stopped,
+    /// A paired phone sent the web page's sign-in `code`: the browser
+    /// showing it is signed in, by identity `by` (its npub).
+    WebSignedIn { code: String, by: String },
 }
 
 /// Well-known [`Store`](crate::ports::Store) keys.
