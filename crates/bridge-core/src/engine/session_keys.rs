@@ -46,6 +46,7 @@ use protocol::commands::{
 };
 use protocol::crypto::npub_from_hex;
 use protocol::events::{BridgeToPhone, PartialMsg};
+use protocol::recipients::device_id;
 
 use super::Engine;
 use crate::io::{store_keys, Addressee, Effect, PhoneClient, WatchState};
@@ -54,11 +55,25 @@ use crate::io::{store_keys, Addressee, Effect, PhoneClient, WatchState};
 /// so a client that keeps granting fresh keys cannot grow that without end.
 pub const MAX_CLIENTS: usize = 16;
 
+/// The longest a device's own name for itself may be. It is display only —
+/// written to the audit, shown on the owner's machine — so a name is trimmed,
+/// stripped of the control characters that would break a log line apart, and
+/// cut short: nothing that long is a name.
+const MAX_LABEL_CHARS: usize = 64;
+
 /// Clock skew allowed on a grant's `expiresAt`.
 const SKEW_SECS: u64 = 300;
 
 fn short(key: &str) -> &str {
     key.get(..8).unwrap_or(key)
+}
+
+/// A device's name for itself, as it may be shown and written down: one line,
+/// trimmed, and short enough that it is not a payload.
+fn clean_label(label: Option<String>) -> Option<String> {
+    let label: String = label?.chars().filter(|c| !c.is_control()).collect();
+    let trimmed = label.trim();
+    (!trimmed.is_empty()).then(|| trimmed.chars().take(MAX_LABEL_CHARS).collect())
 }
 
 impl Engine {
@@ -69,7 +84,7 @@ impl Engine {
     /// Accept `grant` for the paired `identity`, sent encrypted with
     /// `encrypted_with` (a session key, or the identity). Returns whether it
     /// took.
-    pub(super) fn grant_session_key(&mut self, identity: &str, grant: SessionKeyGrant, encrypted_with: &str) -> bool {
+    pub(super) fn grant_session_key(&mut self, identity: &str, mut grant: SessionKeyGrant, encrypted_with: &str) -> bool {
         let now = self.now_secs();
         let refusal = if npub_from_hex(&grant.pubkey_hex).is_err() {
             Some("not a valid public key")
@@ -101,11 +116,20 @@ impl Engine {
         if let Some(i) = renewed {
             let client = &mut phone.clients[i];
             client.key.expires_at = client.key.expires_at.max(grant.expires_at);
+            client.label = clean_label(grant.label.take());
             client.present_until_ms = present_until_ms;
             log::info!("[Engine] Session key {key}... renewed for {}...", short(identity));
         } else if let Some(i) = rotated {
             let client = &mut phone.clients[i];
+            let device = client.device.clone();
+            // The name may change with a grant, the device does not: it is
+            // what the terminal allowlist and the audit know this client by,
+            // and it has to outlive every rotation.
+            let device = if device.is_empty() { device_id(&client.key.pubkey_hex) } else { device };
+            let label = clean_label(grant.label.take());
             client.previous = Some(std::mem::replace(&mut client.key, grant));
+            client.device = device;
+            client.label = label;
             client.present_until_ms = present_until_ms;
             log::info!("[Engine] A client of {}... rotated to session key {key}...", short(identity));
         } else {
@@ -120,7 +144,19 @@ impl Engine {
                 let dropped = phone.clients.remove(quietest);
                 log::info!("[Engine] {}... has too many clients; dropping {}...", short(identity), short(&dropped.key.pubkey_hex));
             }
-            phone.clients.push(PhoneClient { key: grant, previous: None, present_until_ms, watch: WatchState::default() });
+            // The first key this client grants is what names its device for
+            // as long as the client exists (see `protocol::recipients`).
+            let device = device_id(&grant.pubkey_hex);
+            let label = clean_label(grant.label.take());
+            phone.clients.push(PhoneClient {
+                key: grant,
+                previous: None,
+                device,
+                label,
+                present_until_ms,
+                watch: WatchState::default(),
+                watch_terminal: WatchState::default(),
+            });
             log::info!("[Engine] Session key {key}... granted for a new client of {}...", short(identity));
         }
         self.store_paired();
@@ -142,6 +178,24 @@ impl Engine {
                     previous || (p.pubkey_hex != identity && c.key.pubkey_hex == key)
                 })
         })
+    }
+
+    /// Give a device id to every client a state file written before devices
+    /// existed left without one, derived from the key it holds — the only key
+    /// there is to go on. Stored right after, so the name survives the
+    /// rotation that would otherwise change it: a device is the first key its
+    /// client ever granted this bridge.
+    pub(super) fn hydrate_devices(&mut self) {
+        let mut filled = false;
+        for client in self.paired.iter_mut().flat_map(|p| p.clients.iter_mut()) {
+            if client.device.is_empty() {
+                client.device = device_id(&client.key.pubkey_hex);
+                filled = true;
+            }
+        }
+        if filled {
+            self.store_paired();
+        }
     }
 
     /// Drop lapsed keys, and the clients whose newest key lapsed; they would
@@ -189,14 +243,15 @@ impl Engine {
     ///
     /// `msg` is the command that carried it. A `presence` also says which
     /// session the client watches — a client that starts watching one is
-    /// caught up on that session's live parts at once — and `away` means it
-    /// watches nothing. Any other command says the client is running and
-    /// leaves what it watches as it was.
+    /// caught up on that session's live parts at once — and which terminal it
+    /// shows, which is what its output goes to. `away` means it watches
+    /// nothing. Any other command says the client is running and leaves what
+    /// it watches as it was.
     pub(super) fn note_presence(&mut self, identity: &str, key: &str, msg: &PhoneToBridge) -> bool {
         let now = self.now();
-        let (away, watch) = match msg {
-            PhoneToBridge::Presence(m) => (m.away, Some(m.watching.clone())),
-            _ => (false, None),
+        let (away, watch, watch_terminal) = match msg {
+            PhoneToBridge::Presence(m) => (m.away, Some(m.watching.clone()), Some(m.watching_terminal.clone())),
+            _ => (false, None, None),
         };
         let Some(phone) = self.paired.iter_mut().find(|p| p.pubkey_hex == identity) else { return false };
         let holds = |c: &&mut PhoneClient| c.key.pubkey_hex == key || c.previous.as_ref().is_some_and(|k| k.pubkey_hex == key);
@@ -217,6 +272,15 @@ impl Engine {
                     catch_up = Some((client.key.pubkey_hex.clone(), session.clone()));
                 }
                 client.watch = next;
+            }
+        }
+        // A terminal's output is not kept the way a part of live text is: a
+        // client that starts showing one asks for what it missed with
+        // `terminal-replay`, which the runtime serves from its ring.
+        if let Some(watching) = watch_terminal {
+            let next = WatchState::Watching(if away { None } else { watching });
+            if next != client.watch_terminal {
+                client.watch_terminal = next;
             }
         }
         if let Some((client_key, session_id)) = catch_up {

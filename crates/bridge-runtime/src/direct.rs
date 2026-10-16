@@ -203,8 +203,8 @@ impl Hub {
         if !event_is_valid(&event) {
             return Err("invalid: bad signature");
         }
-        let inbound = InboundEvent { id: event.id, pubkey: event.pubkey, created_at: event.created_at, content: event.content };
-        let _ = self.inputs.send(Input::RelayEvent { event: inbound, via: Via::Commands });
+        let inbound = InboundEvent { id: event.id, pubkey: event.pubkey, created_at: event.created_at, content: event.content, kind: event.kind };
+        let _ = self.inputs.send(Input::RelayEvent { event: inbound, via: Via::Direct });
         Ok(())
     }
 }
@@ -566,7 +566,7 @@ mod tests {
         let (bridge, phone) = (generate_keypair(), generate_keypair());
         let hub = Hub::new(bridge.pubkey_hex.clone(), inputs);
         assert!(hub.accept(&phone.pubkey_hex, command(&phone, &bridge.pubkey_hex)).is_ok());
-        assert!(matches!(rx.try_recv(), Ok(Input::RelayEvent { via: Via::Commands, .. })));
+        assert!(matches!(rx.try_recv(), Ok(Input::RelayEvent { via: Via::Direct, .. })));
         assert!(hub.accept(&phone.pubkey_hex, command(&generate_keypair(), &bridge.pubkey_hex)).is_err());
         assert!(hub.accept(&phone.pubkey_hex, command(&phone, &generate_keypair().pubkey_hex)).is_err());
         let mut forged = command(&phone, &bridge.pubkey_hex);

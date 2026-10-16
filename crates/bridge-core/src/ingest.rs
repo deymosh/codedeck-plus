@@ -175,6 +175,7 @@ mod tests {
                 pubkey: from.pubkey_hex.clone(),
                 created_at,
                 content: encrypt_to(&from.secret_key, &self.bridge.pubkey_hex, json).unwrap(),
+                kind: protocol::kinds::COMMAND_KIND,
             }
         }
         fn event(&mut self, json: &str) -> InboundEvent {

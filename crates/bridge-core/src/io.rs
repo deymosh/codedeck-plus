@@ -11,7 +11,7 @@ use protocol::commands::UploadFileMsg;
 use protocol::events::BridgeToPhone;
 use serde::{Deserialize, Serialize};
 
-/// A command event from the relays, signature already verified. `content` is
+/// A command event from a phone, signature already verified. `content` is
 /// still NIP-44 ciphertext.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InboundEvent {
@@ -21,13 +21,30 @@ pub struct InboundEvent {
     /// Seconds since the Unix epoch.
     pub created_at: u64,
     pub content: String,
+    /// The event's kind: [`COMMAND_KIND`](protocol::kinds::COMMAND_KIND) for
+    /// every command, [`LIVE_KIND`](protocol::kinds::LIVE_KIND) for the
+    /// keystrokes a phone types into a terminal. What a command carries is
+    /// remembered by its event id so a relay's replay runs nothing twice;
+    /// live input must not be (a burst of keystrokes would push command ids
+    /// out of the dedup set), so the engine has to tell the two apart before
+    /// it accepts either.
+    pub kind: u16,
 }
 
-/// Which subscription delivered an event.
+/// Which subscription delivered an event, and how it reached the bridge.
+/// The terminal audit and `terminal-event` name it, so a person reading them
+/// can tell a command that came over a relay from one that came over the
+/// bridge's own link — and, of those, one that took the phone through Tor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Via {
-    /// The standing subscription: commands from paired phones.
-    Commands,
+    /// The standing subscription over a relay: commands from paired phones.
+    Relay,
+    /// The standing subscription over the bridge's direct link (LAN, VPN).
+    Direct,
+    /// The standing subscription over the direct link's `.onion` endpoint
+    /// (the phone reached it through Orbot): the same link directly, with Tor
+    /// in front, which the audit keeps apart from a plain one.
+    Onion,
     /// The pairing window's authorless subscription.
     Pairing,
 }
@@ -60,6 +77,18 @@ pub struct PhoneClient {
     /// it, until it lapses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous: Option<protocol::commands::SessionKeyGrant>,
+    /// The device this client is: [`device_id`](protocol::recipients::device_id)
+    /// of the FIRST key it granted this bridge, so its name in the terminal
+    /// allowlist and in the audit survives every rotation. Empty in a state
+    /// file written before devices existed; the engine derives it from the
+    /// key there on load.
+    #[serde(default)]
+    pub device: String,
+    /// The client's own name for its device, from its latest grant (a phone
+    /// sends its model by default). What the machine's owner reads when
+    /// deciding whether to approve a device; never what it trusts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     /// Until when (ms) the client is present: it gets the identity's shared
     /// updates (see `protocol::commands::PresenceMsg`). Not stored: a
     /// restarted bridge counts every client present for a lease, so none
@@ -71,6 +100,12 @@ pub struct PhoneClient {
     /// live text until the client says again.
     #[serde(skip)]
     pub watch: WatchState,
+    /// The terminal whose output the client shows, set the same way `watch`
+    /// is: a `presence` says both. A terminal's output goes only to the
+    /// clients showing it. Not stored, for the same reason as `watch` — and
+    /// because a bridge that has just restarted has no terminals.
+    #[serde(skip)]
+    pub watch_terminal: WatchState,
 }
 
 /// Which session's live text a client wants. Only a `partial` is filtered by

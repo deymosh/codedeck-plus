@@ -505,7 +505,10 @@ impl Relays {
     fn subscribe(&self, filter: Filter, via: Via) -> Box<dyn TransportSub> {
         let inputs = self.inputs.clone();
         let label = match via {
-            Via::Commands => "command",
+            // Both command paths log the same way; an onion endpoint is a
+            // direct link with Tor in front of it, and neither is subscribed
+            // here.
+            Via::Relay | Via::Direct | Via::Onion => "command",
             Via::Pairing => "pairing",
         };
         self.transport.subscribe(
@@ -517,6 +520,7 @@ impl Relays {
                         pubkey: event.pubkey.clone(),
                         created_at: u64::try_from(event.created_at).unwrap_or(0),
                         content: event.content.clone(),
+                        kind: event.kind,
                     };
                     let _ = inputs.send(Input::RelayEvent { event, via });
                 }),
@@ -546,7 +550,7 @@ impl Relays {
             c_tags: vec![],
             since: Some(since as i64),
         };
-        self.commands = Some(self.subscribe(filter, Via::Commands));
+        self.commands = Some(self.subscribe(filter, Via::Relay));
     }
 
     /// The pairing window's subscription: no author filter.

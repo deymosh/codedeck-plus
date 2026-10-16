@@ -81,7 +81,9 @@ impl Engine {
                     self.on_pair_request(req, &event.pubkey);
                 }
             }
-            Via::Commands => {
+            // Every way a command can reach the bridge: over a relay, or over
+            // the bridge's own link (directly, or with Tor in front of it).
+            Via::Relay | Via::Direct | Via::Onion => {
                 if !self.paired.iter().any(|p| p.pubkey_hex == event.pubkey) {
                     log::info!("[Engine] Ignoring event from unknown pubkey: {}...", short(&event.pubkey));
                     return;

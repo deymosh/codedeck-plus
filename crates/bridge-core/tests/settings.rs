@@ -105,7 +105,7 @@ fn unpaired_senders_are_not_heard_on_the_command_path() {
     rig.host_up();
     rig.take();
     let stranger = generate_keypair();
-    rig.phone_event(&stranger, json!({"v":12,"type":"create-session","agent":"alpha"}), Via::Commands);
+    rig.phone_event(&stranger, json!({"v":12,"type":"create-session","agent":"alpha"}), Via::Relay);
     assert!(rig.take().is_empty());
 }
 
@@ -618,7 +618,7 @@ fn an_ack_that_waits_on_a_check_still_goes_to_the_client_that_asked() {
     }
     rig.take();
     let phone = rig.phone.clone();
-    rig.phone_event_via_key(&phone, &asking, json!({"v":12,"type":"set-credentials","agent":"alpha","values":{"alpha_key":"sk"}}), Via::Commands);
+    rig.phone_event_via_key(&phone, &asking, json!({"v":12,"type":"set-credentials","agent":"alpha","values":{"alpha_key":"sk"}}), Via::Relay);
     let (id, _) = rig.host_request(|m| matches!(m, BridgeMessage::CheckCredential { .. }));
     rig.take();
     rig.host_reply(&id, HostMessage::CredentialChecked { valid: Some(true) });

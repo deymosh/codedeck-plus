@@ -121,7 +121,7 @@ async fn a_paired_phone_gets_its_events_and_sends_commands_over_the_pinned_link(
             send(&mut ws, DirectFrame::Event(command.clone())).await;
             assert_eq!(next_frame(&mut ws).await, DirectFrame::Ok { id: command.id.clone(), accepted: true, message: String::new() });
             match engine.recv().await {
-                Some(Input::RelayEvent { event, via: Via::Commands }) => assert_eq!(event.id, command.id),
+                Some(Input::RelayEvent { event, via: Via::Direct }) => assert_eq!(event.id, command.id),
                 _ => panic!("expected the command"),
             }
             // One the phone did not author is refused.

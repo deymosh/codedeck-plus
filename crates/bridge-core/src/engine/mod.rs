@@ -303,6 +303,7 @@ impl Engine {
         self.started = true;
         self.paired = load_or_default(self.store.get(store_keys::PAIRED_PHONES), "paired phones");
         self.presume_present();
+        self.hydrate_devices();
         self.credentials = load_or_default(self.store.get(store_keys::CREDENTIALS), "credentials");
         let profiles: StoredProfiles = load_or_default(self.store.get(store_keys::PROVIDER_PROFILES), "provider profiles");
         self.profiles = profiles.profiles.into_iter().map(|p| (p.id.clone(), p)).collect();
