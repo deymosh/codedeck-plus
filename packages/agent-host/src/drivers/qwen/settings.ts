@@ -20,7 +20,7 @@
  * with `authRequired` or spends its boot checking for a newer release.
  */
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { providerApiRoot } from '../../sdk/providerModels';
 import type { ProviderBinding } from '../../sdk/types';
@@ -164,7 +164,17 @@ export async function writeQwenSettings(
       log(`[qwen] ${file} could not be read (${error instanceof Error ? error.message : String(error)}) — writing a fresh one`);
     }
   }
-  await writeFile(file, `${JSON.stringify(mergeQwenSettings(existing, providers), null, 2)}\n`, 'utf8');
+  // Written beside the file and renamed over it: a Qwen Code process that
+  // boots meanwhile reads the old settings or the new ones, never half of
+  // either.
+  const staged = `${file}.${process.pid}.tmp`;
+  try {
+    await writeFile(staged, `${JSON.stringify(mergeQwenSettings(existing, providers), null, 2)}\n`, 'utf8');
+    await rename(staged, file);
+  } catch (error) {
+    await rm(staged, { force: true });
+    throw error;
+  }
 }
 
 function record(value: unknown): Record<string, unknown> {

@@ -475,6 +475,8 @@ export class QwenDriver implements Driver {
   private providers: ProviderBinding[] = [];
   /** Everything the settings file needs in place before a process starts. */
   private prepared: Promise<unknown>;
+  /** The settings write queued last; the next one starts after it. */
+  private lastWrite: Promise<void> = Promise.resolve();
   /** Why the settings file could not be written, while that is so. A Qwen
    *  Code with no readable settings has no provider to run on, so this is a
    *  session's failure rather than a log line. */
@@ -502,8 +504,20 @@ export class QwenDriver implements Driver {
     this.prepared = this.writeSettings([]);
   }
 
-  /** Write the settings for `providers`, remembering whether it worked. */
-  private async writeSettings(providers: ProviderBinding[]): Promise<void> {
+  /**
+   * Write the settings for `providers`, one write at a time in the order they
+   * were asked for: two overlapping writes of one file interleave into
+   * something that is not JSON, and the last profiles handed over are the
+   * ones that must stay on disk. Never rejects.
+   */
+  private writeSettings(providers: ProviderBinding[]): Promise<void> {
+    const write = this.lastWrite.then(() => this.writeSettingsNow(providers));
+    this.lastWrite = write;
+    return write;
+  }
+
+  /** One write of the settings, remembering whether it worked. */
+  private async writeSettingsNow(providers: ProviderBinding[]): Promise<void> {
     try {
       await writeQwenSettings(this.options.home, providers, this.options.log);
       this.settingsError = undefined;

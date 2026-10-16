@@ -171,6 +171,15 @@ describe('QwenDriver models', () => {
     expect(readFileSync(path.join(home, 'settings.json'), 'utf8')).not.toContain('sk-secret');
   });
 
+  it('keeps the settings whole when profiles arrive faster than they are written', async () => {
+    const { driver, home } = withDriver();
+    const other = { ...PROFILE, id: 'p2', models: [{ id: 'qwen3-coder', label: 'Qwen3 Coder' }], defaultModel: 'qwen3-coder' };
+    await Promise.all([driver.setProviders([PROFILE, other]), driver.setProviders([]), driver.setProviders([other])]);
+    // Valid JSON, holding the last profiles handed over.
+    const settings = JSON.parse(readFileSync(path.join(home, 'settings.json'), 'utf8')) as Record<string, unknown>;
+    expect((settings.modelProviders as { openai: Array<{ id: string }> }).openai.map((entry) => entry.id)).toEqual(['qwen3-coder']);
+  });
+
   it('refuses a session on a machine with no provider profile', () => {
     const { driver } = withDriver();
     void driver.setProviders([]);
