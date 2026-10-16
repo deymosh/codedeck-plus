@@ -760,8 +760,11 @@ mod tests {
                 terms.spawn("t3", &cwd, 80, 24, None).expect("a shell");
 
                 // The shell turns its own echo off, the way a password prompt
-                // does, and says so once it has.
-                terms.write("t3", b"stty -echo; echo READY\n");
+                // does, and says so once it has. The marker is split in the
+                // command (`RE""ADY`), so the shell's echo of the command line
+                // itself — which comes before `stty` has run — does not count
+                // as the shell being ready.
+                terms.write("t3", b"stty -echo; echo RE\"\"ADY\n");
                 collect_until(&mut rx, "READY").await;
                 terms.write("t3", b"hunter2\n");
                 terms.flush_recording("t3");
