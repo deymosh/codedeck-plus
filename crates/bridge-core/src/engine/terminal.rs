@@ -147,7 +147,14 @@ pub struct PendingDevice {
 /// which device, and how that device's command reached the bridge. The engine
 /// holds no file: the runtime chains the line to the one before it and
 /// stores it under the bridge's home.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// The runtime serializes this straight to the audit's JSON line, so the field
+/// names and the `what` values here are the audit's schema: renaming a field
+/// changes the log's shape. Fields that are absent for an event (a refusal has
+/// no `shell`, an open has no `code`) are left out of the line rather than
+/// written as null.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TerminalAuditRecord {
     /// When it happened, ms since the Unix epoch.
     pub at_ms: u64,
@@ -158,31 +165,44 @@ pub struct TerminalAuditRecord {
     /// The identity the terminal belongs to, as its npub.
     pub identity: String,
     /// The device that acted, when one did.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub device: Option<String>,
     /// That device's own name for itself, as its latest grant said.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     /// How its command arrived, when a command is what did it.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub via: Option<TerminalVia>,
     /// Where the shell started, for an open.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
     /// What ran in it, once the runtime said.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub shell: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cols: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub rows: Option<u16>,
     /// Why it ended, and what the shell returned.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<TerminalEndReason>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub code: Option<i32>,
     /// How long it lived, for an end.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
     /// What a refusal refused (input that is not base64, input of a size no
     /// typing has, a seq that never arrived, or one too far ahead to be part
     /// of a run): the reason alone would not say.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub why: Option<String>,
 }
 
 /// What a terminal audit line records. `Refused` is the only one about
-/// something that did not happen, and carries `why`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// something that did not happen, and carries `why`. The variant names are
+/// the `what` values in the audit line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum TerminalAuditWhat {
     /// A shell started.
     Opened,
