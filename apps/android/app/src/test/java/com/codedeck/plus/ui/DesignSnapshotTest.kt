@@ -18,6 +18,11 @@ import com.codedeck.plus.ui.DesignFixtures.workstation
 import com.codedeck.plus.ui.screens.AddView
 import com.codedeck.plus.ui.screens.AppearancePage
 import com.codedeck.plus.ui.screens.SessionsContent
+import com.codedeck.plus.ui.screens.MachineTerminalsGroup
+import com.codedeck.plus.ui.screens.TERMINAL_CAPABILITY
+import com.codedeck.plus.ui.screens.TerminalContent
+import com.codedeck.plus.ui.components.Page
+import androidx.compose.material3.Text
 import com.codedeck.plus.ui.screens.McpContent
 import com.codedeck.plus.ui.screens.PermissionRulesContent
 import com.codedeck.plus.ui.screens.ConnectionPage
@@ -38,6 +43,10 @@ import com.codedeck.plus.ui.screens.AccountPage
 import com.codedeck.plus.ui.screens.BackupPage
 import com.codedeck.plus.ui.screens.RestoreContent
 import uniffi.client_ffi.UniffiAgentPermissionRules
+import uniffi.client_ffi.UniffiAttachedTerminal
+import uniffi.client_ffi.UniffiTerminalEnded
+import uniffi.client_ffi.UniffiTerminalInfo
+import uniffi.client_ffi.UniffiTerminalRefusal
 import uniffi.client_ffi.UniffiUsageData
 import uniffi.client_ffi.UniffiBackupStatus
 import uniffi.client_ffi.UniffiBackupView
@@ -291,6 +300,22 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
             credentialsStatus = null, now = NOW, dispatch = {}, onBack = {}, onOpenAgent = {},
         )
     },
+    "terminal_opening" to { Terminal(attached(term = null)) },
+    "terminal_refused" to {
+        Terminal(attached(term = null, refusal = UniffiTerminalRefusal("not-allowed", "3f9a1c0e7b2d4a58", "Pixel 8a")))
+    },
+    "terminal_ended" to { Terminal(attached(ended = UniffiTerminalEnded("exit", 0))) },
+    "terminal_watching" to { Terminal(attached(writer = false)) },
+    "machine_terminals" to {
+        Page(title = "Workstation", onBack = {}) {
+            MachineTerminalsGroup(
+                workstation.copy(capabilities = listOf(TERMINAL_CAPABILITY)),
+                listOf(UniffiTerminalInfo("t1", "/bin/bash", (NOW - 12 * 60_000).toULong(), "3f9a1c0e", "Pixel 8a", "3f9a1c0e", 80u, 24u)),
+                NOW, onOpen = {}, onAttach = {},
+            )
+            MachineTerminalsGroup(workstation, emptyList(), NOW, onOpen = {}, onAttach = {})
+        }
+    },
     "settings_agent_opencode" to { AgentPage("opencode") },
     "settings_agent_claude" to { AgentPage("claude-code") },
     "settings_agent_not_installed" to { AgentPage("deepseek-harness") },
@@ -392,6 +417,29 @@ private val deepseekLook = AgentLook.of("DeepSeek Harness", DesignFixtures.deeps
 private val qwenLook = AgentLook.of("Qwen Code", DesignFixtures.qwenStyle, "plan")
 
 /** [content] drawn as a session of the agent [look] belongs to. */
+/** The terminal on the workstation, as the core shows it. */
+private fun attached(
+    term: String? = "t1",
+    writer: Boolean = true,
+    refusal: UniffiTerminalRefusal? = null,
+    ended: UniffiTerminalEnded? = null,
+) = UniffiAttachedTerminal(
+    machine = workstation.pubkeyHex, term = term, openId = "o1", shell = "/bin/bash", writer = writer,
+    cols = 80u, rows = 24u, expectedOffset = 0u, waitingInput = ByteArray(0), refusal = refusal, ended = ended,
+)
+
+/** A terminal page, the emulator standing in as a few lines of a shell. */
+@Composable
+private fun Terminal(attached: UniffiAttachedTerminal) = TerminalContent(
+    attached = attached, onBack = {}, onTakeOver = {}, onClose = {},
+    emulator = {
+        Text(
+            "me@workstation:~/codedeck-plus$ git status\nOn branch master\nnothing to commit, working tree clean\nme@workstation:~/codedeck-plus$ ",
+            color = Tokens.Text, fontFamily = Tokens.FontMono, fontSize = Tokens.TextSm,
+        )
+    },
+)
+
 /** One agent's page on the workstation. */
 @Composable
 private fun AgentPage(agent: String) = AgentSettingsContent(
@@ -460,6 +508,11 @@ class DesignSnapshotTest {
     @Test fun pairing() = paparazzi.page("pairing")
     @Test fun settings() = paparazzi.page("settings")
     @Test fun settings_machine_update_needed() = paparazzi.page("settings_machine_update_needed")
+    @Test fun terminal_opening() = paparazzi.page("terminal_opening")
+    @Test fun terminal_refused() = paparazzi.page("terminal_refused")
+    @Test fun terminal_ended() = paparazzi.page("terminal_ended")
+    @Test fun terminal_watching() = paparazzi.page("terminal_watching")
+    @Test fun machine_terminals() = paparazzi.page("machine_terminals")
     @Test fun settings_agent_opencode() = paparazzi.page("settings_agent_opencode")
     @Test fun settings_agent_claude() = paparazzi.page("settings_agent_claude")
     @Test fun settings_agent_not_installed() = paparazzi.page("settings_agent_not_installed")
