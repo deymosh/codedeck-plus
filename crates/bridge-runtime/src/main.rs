@@ -11,6 +11,7 @@ use bridge_runtime::config::{self, Config, Flags};
 use bridge_runtime::runtime::{self, Mode, Options, Outcome};
 use bridge_runtime::state::{acquire_lock, lock_holder, StateFile};
 use bridge_runtime::workspace::FsWorkspace;
+use bridge_runtime::{audit, terminal_allow};
 use clap::{Parser, Subcommand};
 use protocol::capabilities::PROTOCOL_VERSION;
 
@@ -61,6 +62,9 @@ struct Cli {
     /// Agents answer canned test commands instead of running for real (no API key needed) [env: CODEDECK_TEST_MODE]
     #[arg(long, global = true)]
     test_mode: bool,
+    /// Run terminals on this bridge (a shell a paired, approved phone drives). Off unless set; never switched from a phone [env: CODEDECK_TERMINAL]
+    #[arg(long, global = true)]
+    terminal: bool,
     /// Serve phones directly over wss (self-signed, pinned) on this ip:port, e.g. 0.0.0.0:7447 [env: CODEDECK_DIRECT_LISTEN]
     #[arg(long, global = true)]
     direct_listen: Option<String>,
@@ -93,8 +97,34 @@ enum Command {
         #[command(subcommand)]
         action: AgentsCommand,
     },
+    /// Approve or withdraw the devices allowed a terminal on this machine
+    Terminal {
+        #[command(subcommand)]
+        action: TerminalCommand,
+    },
+    /// Inspect the terminal audit
+    Audit {
+        #[command(subcommand)]
+        action: AuditCommand,
+    },
     /// Print the version
     Version,
+}
+
+#[derive(Subcommand)]
+enum TerminalCommand {
+    /// Devices that asked for a terminal and were refused, newest last seen last
+    Pending,
+    /// Approve a device (its id, or an unambiguous prefix of one)
+    Allow { device: String },
+    /// Withdraw a device's approval; a running bridge closes its terminals at once
+    Disallow { device: String },
+}
+
+#[derive(Subcommand)]
+enum AuditCommand {
+    /// Check the terminal audit's hash chain, printing the line count or the first break
+    Verify,
 }
 
 #[derive(Subcommand)]
@@ -139,6 +169,7 @@ fn main() -> ExitCode {
         agent_host: cli.agent_host.clone(),
         service: cli.service,
         test_mode: cli.test_mode,
+        terminal: cli.terminal,
         direct_listen: cli.direct_listen.clone(),
         direct_onion_listen: cli.direct_onion_listen.clone(),
         direct_endpoints: cli.direct_endpoints.clone(),
@@ -167,9 +198,62 @@ fn main() -> ExitCode {
             Ok(ExitCode::SUCCESS)
         }
         Command::Agents { action } => agents(&config, action),
+        Command::Terminal { action } => terminal(&config, action),
+        Command::Audit { action } => audit_cmd(&config, action),
         Command::Version => unreachable!(),
     };
     result.unwrap_or_else(|err| fail(&err))
+}
+
+/// `terminal pending|allow|disallow`: the owner's decision about which devices
+/// may open a shell on this machine. These only edit
+/// `<home>/terminal-allow.json` atomically, so they work while the bridge
+/// runs: it re-reads the file (cached by mtime) on the next terminal message
+/// and within a few seconds otherwise, and a withdrawn device's terminals end
+/// at once.
+fn terminal(config: &Config, action: TerminalCommand) -> Result<ExitCode, String> {
+    let path = terminal_allow::path_in(&config.home);
+    match action {
+        TerminalCommand::Pending => {
+            let list = terminal_allow::read(&path);
+            if list.pending.is_empty() {
+                println!("No device is waiting for terminal approval.");
+            } else {
+                println!("Devices waiting for approval (approve one with `codedeck-bridge terminal allow <id>`):");
+                for line in terminal_allow::pending_lines(&list) {
+                    println!("{line}");
+                }
+            }
+        }
+        TerminalCommand::Allow { device } => println!("{}", terminal_allow::allow(&path, &device)?),
+        TerminalCommand::Disallow { device } => println!("{}", terminal_allow::disallow(&path, &device)?),
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `audit verify`: walk the terminal audit and recompute its hash chain. A
+/// break (an edited or deleted line) is reported with its line number and the
+/// command exits non-zero.
+fn audit_cmd(config: &Config, action: AuditCommand) -> Result<ExitCode, String> {
+    match action {
+        AuditCommand::Verify => {
+            let path = config.home.join(audit::AUDIT_DIR).join(audit::LOG_FILE);
+            match audit::verify(&path) {
+                Ok(0) => {
+                    println!("The terminal audit is empty ({}).", path.display());
+                    Ok(ExitCode::SUCCESS)
+                }
+                Ok(lines) => {
+                    println!("OK: {lines} line(s), the chain is intact ({}).", path.display());
+                    Ok(ExitCode::SUCCESS)
+                }
+                Err(err) => {
+                    eprintln!("audit verify: {err}");
+                    Ok(ExitCode::FAILURE)
+                }
+            }
+        }
+    }
 }
 
 /// Runs the agent host's own command, with the environment the bridge gives

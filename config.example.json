@@ -19,5 +19,17 @@
   "blossomRegisterToken": "admin-token",
   "transcriptKeepLast": 5000,
   "agentHostPath": "/opt/codedeck/agent-host/dist/main.js",
-  "nodePath": "/usr/bin/node"
+  "nodePath": "/usr/bin/node",
+  "terminal": {
+    "enabled": false,
+    "relays": false,
+    "idleMinutes": 60,
+    "maxTerminals": 4,
+    "command": ["/bin/bash", "-l"]
+  },
+  "audit": {
+    "maxDays": 90,
+    "maxBytes": 1073741824,
+    "syslog": false
+  }
 }
