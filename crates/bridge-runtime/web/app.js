@@ -4,8 +4,12 @@
 "use strict";
 
 const views = ["loading", "signed-out", "pending", "dashboard"];
+const tabs = ["overview", "usage"];
 let pollTimer = null;
 let expiresAt = 0;
+// The latest status, so switching tabs renders at once instead of waiting
+// for the next poll.
+let lastStatus = null;
 
 const $ = (id) => document.getElementById(id);
 
@@ -101,10 +105,18 @@ function relative(iso) {
   return new Date(at).toLocaleDateString();
 }
 
+// A session's state as the heartbeat names it, as a word and a colour.
+const STATES = {
+  idle: ["idle", "ok"],
+  running: ["running", "busy"],
+  waiting_permission: ["waiting for a permission", "busy"],
+  waiting_question: ["waiting for an answer", "busy"],
+  offline: ["offline", ""],
+};
+
 function stateOf(session) {
-  const state = session.state || "idle";
-  const tone = { running: "busy", waiting: "busy", idle: "ok", error: "bad", offline: "" }[state] ?? "";
-  return el("span", { class: `state ${tone}` }, state);
+  const [label, tone] = STATES[session.state || "idle"] ?? [session.state, ""];
+  return el("span", { class: `state ${tone}` }, label);
 }
 
 function installOf(agent) {
@@ -128,15 +140,38 @@ function facts(target, rows) {
   target.replaceChildren(...rows.flatMap(([k, v]) => [el("dt", {}, k), el("dd", {}, v)]));
 }
 
+function currentTab() {
+  const tab = location.hash.slice(1);
+  return tabs.includes(tab) ? tab : "overview";
+}
+
 async function dashboard() {
   const { status, body } = await api("/api/status");
   if (status === 401) return refresh();
   if (status !== 200) return schedule(dashboard, 5000);
+  lastStatus = body;
   show("dashboard");
+  render();
+  schedule(dashboard, 5000);
+}
+
+/** The dashboard's frame and the open tab, from the latest status. */
+function render() {
+  const body = lastStatus;
+  if (!body) return;
   $("no-sign-in").hidden = !body.noSignIn;
   const hb = body.heartbeat || {};
   $("machine").textContent = hb.machine || "";
   document.title = `${hb.machine || "Bridge"} · CodeDeck+`;
+  const tab = currentTab();
+  for (const link of document.querySelectorAll("[data-tab]")) link.classList.toggle("on", link.dataset.tab === tab);
+  for (const pane of document.querySelectorAll("[data-pane]")) pane.hidden = pane.dataset.pane !== tab;
+  $("signed-in-as").textContent = `Signed in by ${body.signedInBy.slice(0, 16)}… ${relative(body.signedInSince)}.`;
+  if (tab === "usage") usage(hb);
+  else overview(body, hb);
+}
+
+function overview(body, hb) {
 
   facts($("bridge-facts"), [
     ["Machine", hb.machine || "—"],
@@ -169,9 +204,56 @@ async function dashboard() {
     el("td", { class: "folder", title: s.cwd }, s.project || s.cwd),
     el("td", { class: "when" }, relative(s.lastActivity)),
   )));
-  $("signed-in-as").textContent = `Signed in by ${body.signedInBy.slice(0, 16)}… ${relative(body.signedInSince)}.`;
-  schedule(dashboard, 5000);
 }
+
+/** How many of `values` there are of each, most first. */
+function tally(values) {
+  const counts = new Map();
+  for (const v of values) if (v) counts.set(v, (counts.get(v) || 0) + 1);
+  return [...counts].sort((a, b) => b[1] - a[1]);
+}
+
+function usage(hb) {
+  const sessions = hb.sessions || [];
+  const agentName = Object.fromEntries((hb.agents || []).map((a) => [a.id, a.displayName]));
+  const byAgent = tally(sessions.map((s) => s.agent));
+  $("usage-empty").hidden = byAgent.length > 0;
+  $("usage-agents").replaceChildren(...byAgent.map(([agent, count]) => {
+    const own = sessions.filter((s) => s.agent === agent);
+    const running = own.filter((s) => s.state === "running").length;
+    const waiting = own.filter((s) => s.state === "waiting_permission" || s.state === "waiting_question").length;
+    const lines = own.reduce((sum, s) => sum + (s.lineCount || 0), 0);
+    const models = tally(own.map((s) => s.model));
+    return el("div", { class: "agent" },
+      el("div", { class: "agent-head" }, el("span", { class: "agent-name" }, agentName[agent] || agent), el("span", { class: "dim small" }, `${count} session${count === 1 ? "" : "s"}`)),
+      el("dl", { class: "facts small" },
+        el("dt", {}, "Now"), el("dd", {}, running || waiting ? [running && `${running} running`, waiting && `${waiting} waiting`].filter(Boolean).join(" · ") : "idle"),
+        el("dt", {}, "Transcripts"), el("dd", {}, `${lines.toLocaleString()} lines`),
+        ...(models.length ? [el("dt", {}, "Models"), el("dd", {}, el("span", { class: "chips" }, ...models.map(([m, n]) => el("span", { class: "chip" }, n > 1 ? `${m} ×${n}` : m))))] : []),
+      ),
+    );
+  }));
+
+  const measured = sessions.filter((s) => typeof s.contextPercentage === "number")
+    .sort((a, b) => b.contextPercentage - a.contextPercentage);
+  $("usage-context-empty").hidden = measured.length > 0;
+  $("usage-context").replaceChildren(...measured.map((s) => {
+    const pct = Math.max(0, Math.min(100, s.contextPercentage));
+    const tone = pct >= 90 ? "bad" : pct >= 70 ? "busy" : "";
+    const size = s.contextWindow ? ` of ${Math.round(s.contextWindow / 1000)}k` : "";
+    // Through the CSSOM: the page's CSP refuses a style attribute.
+    const fill = el("div", { class: `meter-fill ${tone}` });
+    fill.style.width = `${pct}%`;
+    return el("div", { class: "meter" },
+      el("div", { class: "meter-head" },
+        el("span", { class: "meter-title", title: s.title || s.slug }, s.title || s.slug),
+        el("span", { class: "dim small" }, `${agentName[s.agent] || s.agent} · ${Math.round(pct)}%${window}`)),
+      el("div", { class: "meter-track" }, fill),
+    );
+  }));
+}
+
+window.addEventListener("hashchange", render);
 
 $("start").addEventListener("click", start);
 $("sign-out").addEventListener("click", async () => {

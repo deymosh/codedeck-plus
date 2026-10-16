@@ -42,6 +42,12 @@
 </main>
 
 <main id="dashboard" hidden>
+  <nav class="tabs" aria-label="Pages">
+    <a href="#overview" data-tab="overview">Overview</a>
+    <a href="#usage" data-tab="usage">Usage</a>
+  </nav>
+
+  <div class="pane" data-pane="overview">
   <section class="grid">
     <article class="card">
       <h2>Bridge</h2>
@@ -66,6 +72,22 @@
     </div>
     <p class="dim" id="no-sessions" hidden>No sessions yet.</p>
   </section>
+  </div>
+
+  <div class="pane" data-pane="usage" hidden>
+    <section class="card">
+      <h2>By agent</h2>
+      <div class="agents" id="usage-agents"></div>
+      <p class="dim" id="usage-empty" hidden>No sessions yet.</p>
+    </section>
+    <section class="card">
+      <h2>Context in use</h2>
+      <div class="meters" id="usage-context"></div>
+      <p class="dim" id="usage-context-empty" hidden>No session has reported its context yet.</p>
+    </section>
+    <p class="dim small">What the bridge reports about each session. An agent's plan limits are on the phone, in a session's usage.</p>
+  </div>
+
   <p class="dim small foot" id="signed-in-as"></p>
 </main>
 </body>
