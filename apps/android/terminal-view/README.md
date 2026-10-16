@@ -19,4 +19,35 @@ below; never merge upstream mechanically.
 
 ## Local changes
 
-(To be listed.)
+- **No native code.** Upstream built the emulator with the NDK
+  (`src/main/jni/`, `Android.mk`, an `externalNativeBuild` block) around a
+  local pseudoterminal. None of it is copied, and the `JNI` class is deleted.
+- **`TerminalSession` is remote, not process-backed.** The class keeps its
+  name and package so `TerminalView` needs no change, but its constructor is
+  `(Integer transcriptRows, TerminalSessionClient client,
+  TerminalSessionCallbacks callbacks)` and it spawns nothing. `feed(byte[])`
+  appends bytes from the bridge to the emulator on the main thread and asks the
+  view's client to redraw; `updateSize(...)` resizes the emulator and reports
+  the new size; `isAlternateBufferActive()` exposes the alternate-screen flag
+  so a host can batch input differently there. The `write(...)` paths the view
+  uses (keys, IME text, paste, code points) now call
+  `TerminalSessionCallbacks.onInput` instead of writing to a file descriptor.
+  The pid, exit-status, `finishIfRunning`, cwd and process-cleanup machinery is
+  gone.
+- **`TerminalSessionCallbacks` added** (`onInput`, `onResize`) — the small
+  interface the bridge-facing host implements; upstream had no equivalent
+  because its input and resize went straight to the pty.
+- **`TerminalSession`'s `TerminalOutput` callbacks null-check `mClient`.** The
+  emulator calls `onColorsChanged` from its own constructor's `reset()`, so a
+  session built without a client (as the unit test builds one) would otherwise
+  throw.
+- **Manifests emptied.** The upstream `package` attribute moved to the Gradle
+  `namespace` (`com.termux.terminal`, `com.termux.view`), which AGP 9 requires.
+- **Gradle files written fresh** in `apps/android/app/build.gradle.kts`'s
+  style (the catalog's AGP, compileSdk and minSdk, Java 17), and the app
+  depends on both modules.
+- **`terminal-emulator/src/test/.../TerminalSessionTest.java` added** — a JVM
+  test of the three directions above.
+
+The upstream `proguard-rules.pro` files are not copied: they were empty
+templates and neither module minifies.
