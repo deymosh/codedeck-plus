@@ -142,17 +142,17 @@ All carry `v` like every message. `term` is a terminal id the bridge assigns.
 
 | Message | Direction | Fields |
 | --- | --- | --- |
-| `terminal-open` | phone → bridge | `cols`, `rows`, `session?` (start in its directory) |
-| `terminal-opened` | bridge → phone | `term`, `shell` (what runs, e.g. `/bin/bash`) |
-| `terminal-input` | phone → bridge | `term`, `seq`, `data` (UTF-8 bytes, base64) |
+| `terminal-open` | phone → bridge | `openId` (the phone's own, echoed back), `cols`, `rows`, `session?` (start in its directory) |
+| `terminal-opened` | bridge → phone | `openId`, `term`, `shell` (what runs, e.g. `/bin/bash`) |
+| `terminal-input` | phone → bridge | `term`, `seq`, `data` (base64 of the bytes — a key press need not be valid UTF-8) |
 | `terminal-input-from` | bridge → phone | `term`, `seq` (resend from here) |
 | `terminal-output` | bridge → phone | `term`, `offset`, `data` (base64) |
 | `terminal-resize` | phone → bridge | `term`, `cols`, `rows` (writer only) |
 | `terminal-replay` | phone → bridge | `term`, `from` (byte offset; attaches read-only) |
 | `terminal-takeover` | phone → bridge | `term` (become the writer) |
 | `terminal-close` | phone → bridge | `term` (hang up: SIGHUP, then kill after 5 s) |
-| `terminal-exited` | bridge → phone | `term?`, `code?`, `reason` (exit, killed, closed, idle, limit, not-allowed, disabled, transport), `device?` |
-| `terminal-event` | bridge → every present client | `term`, `what` (opened, attached, takeover, closed, exited), `device`, `name`, `via`, `at` |
+| `terminal-exited` | bridge → phone | `term?`, `openId?` (instead of `term` for a refused open), `code?`, `reason` (exit, killed, closed, idle, limit, not-allowed, disabled, transport, restart; open — an unknown one reads as ended), `device?` |
+| `terminal-event` | bridge → every present client | `term`, `what` (opened, attached, takeover, closed, exited), `device`, `name?`, `via`, `at` |
 
 The open terminals ride the session list the bridge already publishes
 (`term`, `shell`, `opened`, `device`, `name`, `writer`, `cols`, `rows`), so a
