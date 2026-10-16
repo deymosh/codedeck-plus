@@ -16,11 +16,12 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use client_core::bridge_api::{BridgeApi, EgressError, IncomingEvent, Ingested};
 use client_core::stores::machines::Incompatible;
 use client_core::stores::session_key::{Recipient, SessionKeyRing};
+use client_core::stores::terminals::InputTransport;
 use protocol::capabilities::PROTOCOL_VERSION;
 use nostr_transport::direct::{DirectConfig as LinkConfig, DirectHandlers, DirectLink};
 use nostr_transport::{PublishResult, PublishVerdict};
@@ -90,6 +91,16 @@ const ACK_BATCH_WINDOW: Duration = Duration::from_millis(500);
 /// How long a command sent over a direct link waits for the bridge's `OK`
 /// before it goes to the relays instead.
 const DIRECT_PUBLISH_WAIT: Duration = Duration::from_secs(5);
+
+/// What one `presence` tells a machine this client is showing: the session
+/// whose live text it draws, and the terminal whose output it draws. Both are
+/// `None` for a machine it shows neither of, which is how a bridge is told to
+/// stop sending them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Watch {
+    session: Option<String>,
+    terminal: Option<String>,
+}
 
 /// Where a machine's direct link goes: its endpoints, the certificate pin,
 /// and the proxy (Orbot) in force.
@@ -219,6 +230,12 @@ pub enum CoreEvent {
     /// landed, or the session stopped running). Shown after the transcript's
     /// rows; never stored.
     LiveText { machine: String, session_id: String, key: String, text: Option<String> },
+    /// Output a terminal on screen produced: `bytes` (already base64-decoded)
+    /// start at `offset`, a byte offset into everything that terminal has
+    /// written. On its own event, never a view: a shell can produce megabytes
+    /// a second, and a view snapshot per frame would slow every other slice
+    /// down. The consumer draws the bytes and advances its own cursor.
+    TerminalOutput { machine: String, term: String, offset: u64, bytes: Vec<u8> },
     /// The correlated response to `Intent::CreateFolder` — matched by
     /// `request_id` off this stream (no store, no view: nothing to persist or
     /// re-fetch for a one-shot RPC-style exchange).
@@ -236,6 +253,16 @@ pub enum CoreEvent {
 }
 
 // --- config ---------------------------------------------------------------
+
+/// What an input step asks the loop's flush timer to do — the timer twin of
+/// `client_core::stores::terminals::InputStep::flush_at_ms`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalFlush {
+    /// Arm (or re-arm) the flush at this absolute ms deadline.
+    Arm { at_ms: u64 },
+    /// Nothing is waiting: stop the timer.
+    Clear,
+}
 
 /// The relays are not part of the configuration: the transport dials the
 /// paired machines' own (see [`CoreStores::relay_set`]).
@@ -417,6 +444,12 @@ impl Core {
         );
         let (signer_jobs, jobs_rx) = mpsc::unbounded_channel::<SignerJob>();
         tokio::task::spawn_local(run_signer(Rc::clone(&config.identity), jobs_rx, tx.clone()));
+        let mut stores = hydrated.stores;
+        // The device this install is, as a bridge names it in a terminal's
+        // `writer` and in every `terminal-event`: a hash of the first session
+        // key it ever made, so a terminal can tell this phone's input from
+        // another client's.
+        stores.terminals.set_device_id(session.device_id());
         let event_loop = Loop {
             reconnect: config.reconnect,
             signer: config.identity,
@@ -445,7 +478,8 @@ impl Core {
             pair_timer: None,
             unanswered_timer: None,
             watch_timer: None,
-            watch_sent: None,
+            watch_sent: BTreeMap::new(),
+            terminal_flush_timer: None,
             undo_timer: None,
             backup_timer: None,
             backup_busy: false,
@@ -474,7 +508,7 @@ impl Core {
             links_on: false,
             link_ping: PING_EVERY,
             self_tx: tx.clone(),
-            stores: hydrated.stores,
+            stores,
             kv: ports.kv,
             transcript_store: ports.transcript_store,
             notifier: ports.notifier,
@@ -660,6 +694,7 @@ impl Core {
             credentials_status: Default::default(),
             provider_profile_status: Default::default(),
             undo_toast: None,
+            terminals: Default::default(),
         })
     }
 
@@ -688,6 +723,9 @@ enum Msg {
     VisibilitySettled,
     /// The coalescing window for a change of what this client watches closed.
     WatchSettle,
+    /// The terminal input batching window closed, or the relay rate cap
+    /// lifted: send whatever is still waiting.
+    TerminalFlush,
     StaleWatchdog,
     /// The host woke the device to check the connection.
     Keepalive(oneshot::Sender<()>),
@@ -990,9 +1028,12 @@ struct Loop {
     /// The coalescing window for a change of what this client watches (see
     /// [`Loop::watch_changed`]).
     watch_timer: Option<AbortHandle>,
-    /// The machine last told what this client watches, and which session:
-    /// what a change is measured against.
-    watch_sent: Option<(String, Option<String>)>,
+    /// The machine last told what this client watches, and what: what a
+    /// change is measured against.
+    watch_sent: BTreeMap<String, Watch>,
+    /// The terminal input batching window, or the relay rate cap lifting
+    /// (see `client_core::stores::terminals`).
+    terminal_flush_timer: Option<AbortHandle>,
     /// The delete-controller's 4 s undo window.
     undo_timer: Option<AbortHandle>,
     /// The pending config backup save (see `runtime::backup`).
@@ -1175,6 +1216,7 @@ impl Loop {
                     abort(&mut self.watch_timer);
                     self.settle_watch();
                 }
+                Msg::TerminalFlush => self.on_terminal_flush(),
                 Msg::SocketOpen => {
                     let at = self.clock.now_ms();
                     self.dispatch(ConnectionEvent::SocketOpen { at });
@@ -1338,7 +1380,7 @@ impl Loop {
             ConnectionEffect::RefreshAndReconcile => {
                 // A fresh connection: the bridge may have restarted and
                 // forgotten what this client watches, so say it again.
-                self.watch_sent = None;
+                self.watch_sent.clear();
                 self.watch_changed();
                 let _ = self.self_tx.send(Msg::RefreshReconcile { reconnected: true });
             }
@@ -1673,6 +1715,20 @@ impl Loop {
         if let Some((machine, session_id)) = r.transcript_appended {
             self.emit(CoreEvent::TranscriptAppended { machine, session_id });
         }
+        // Raw bytes on their own event: a terminal's output never goes
+        // through a view, so a busy shell costs the UI nothing it is not
+        // drawing.
+        for frame in r.terminal_output {
+            self.emit(CoreEvent::TerminalOutput {
+                machine: frame.machine,
+                term: frame.term,
+                offset: frame.offset,
+                bytes: frame.data,
+            });
+        }
+        if let Some(flush) = r.terminal_flush {
+            self.apply_terminal_flush(flush);
+        }
         // After the transcript event, so a completed row's entry is there to
         // take its place when the row goes.
         for (machine, session_id, change) in r.live_text {
@@ -1847,6 +1903,7 @@ impl Loop {
         let ctx = IntentCtx {
             now: self.clock.now_ms(),
             visible: self.conn.visible,
+            terminal_transport: self.transport_for_intent(&intent),
         };
         let result = apply_intent(&mut self.stores, intent, &self.keys, ctx);
         let session_file_send = result.session_file_send.clone();
@@ -1861,6 +1918,65 @@ impl Loop {
             self.spawn_session_file(send, reply.take());
         }
         reply
+    }
+
+    /// Where `machine` is reached right now: its direct link when one is up,
+    /// else the relays. Terminal input is paced differently for each.
+    fn terminal_transport(&self, machine: &str) -> InputTransport {
+        if self.links_up.contains_key(machine) {
+            InputTransport::Direct
+        } else {
+            InputTransport::Relay
+        }
+    }
+
+    /// The transport an intent's terminal input would ride — the machine the
+    /// intent names, for the two intents that carry typed bytes. Every other
+    /// intent ignores it.
+    fn transport_for_intent(&self, intent: &Intent) -> InputTransport {
+        match intent {
+            Intent::TerminalInput { machine, .. } | Intent::TerminalPaste { machine, .. } => {
+                self.terminal_transport(machine)
+            }
+            _ => InputTransport::Direct,
+        }
+    }
+
+    /// Arm, re-arm or clear the terminal input flush timer from what a store
+    /// step asked for.
+    fn apply_terminal_flush(&mut self, flush: TerminalFlush) {
+        match flush {
+            TerminalFlush::Arm { at_ms } => {
+                let delay = at_ms.saturating_sub(self.clock.now_ms());
+                abort(&mut self.terminal_flush_timer);
+                self.terminal_flush_timer = Some(self.arm(delay, Msg::TerminalFlush));
+            }
+            TerminalFlush::Clear => abort(&mut self.terminal_flush_timer),
+        }
+    }
+
+    /// The batching window closed: send what the terminal still holds.
+    fn on_terminal_flush(&mut self) {
+        self.terminal_flush_timer = None;
+        let transport = self
+            .stores
+            .terminals
+            .watching_machine()
+            .map(|m| self.terminal_transport(m))
+            .unwrap_or(InputTransport::Direct);
+        let step = self.stores.terminals.flush_due(transport, self.clock.now_ms());
+        let Some(machine) = step.machine.clone() else { return };
+        for msg in step.sends {
+            self.on_send(machine.clone(), PhoneToBridge::TerminalInput(msg), None);
+        }
+        if let Some(at_ms) = step.flush_at_ms {
+            let delay = at_ms.saturating_sub(self.clock.now_ms());
+            // A deadline the store says is already past, with nothing sent,
+            // would arm a timer that fires at once and never advances.
+            if delay > 0 {
+                self.terminal_flush_timer = Some(self.arm(delay, Msg::TerminalFlush));
+            }
+        }
     }
 
     /// The ports an image send needs, cloned out of the loop so the send can
@@ -1940,6 +2056,9 @@ impl Loop {
         }
         if r.ui_changed {
             self.state_changed(SliceId::Ui);
+        }
+        if let Some(flush) = r.terminal_flush {
+            self.apply_terminal_flush(flush);
         }
         if !r.transcript_removed.is_empty() {
             self.state_changed(SliceId::Transcript);
@@ -2214,73 +2333,82 @@ impl Loop {
         for machine in due {
             // The renewal also carries what this client watches now, so a
             // bridge that missed a change catches up within one period.
-            let watching = self.watching_for(&machine);
-            self.sign_and_publish(machine, PhoneToBridge::Presence(PresenceMsg { away: false, watching, watching_terminal: None }), None, None, true);
+            let watch = self.watch_for(&machine);
+            self.sign_and_publish(machine, PhoneToBridge::Presence(PresenceMsg { away: false, watching: watch.session, watching_terminal: watch.terminal }), None, None, true);
         }
     }
 
-    /// What this client shows live text for right now: the session on screen
-    /// while the app is in the foreground, nothing otherwise.
-    fn watch_now(&self) -> Option<(String, String)> {
+    /// What this client shows live text and terminal output for right now:
+    /// the session on screen and the terminal on screen, while the app is in
+    /// the foreground, nothing otherwise. A machine with neither is absent —
+    /// it is told nothing is watched there, if it was ever told otherwise.
+    fn watch_now(&self) -> BTreeMap<String, Watch> {
+        let mut out: BTreeMap<String, Watch> = BTreeMap::new();
         if !self.conn.visible {
-            return None;
+            return out;
         }
-        match (&self.stores.ui.selected_machine, &self.stores.ui.selected_session) {
-            (Some(machine), Some(session)) => Some((machine.clone(), session.clone())),
-            _ => None,
+        if let (Some(machine), Some(session)) =
+            (&self.stores.ui.selected_machine, &self.stores.ui.selected_session)
+        {
+            out.entry(machine.clone()).or_default().session = Some(session.clone());
         }
+        if let Some(machine) = self.stores.terminals.watching_machine() {
+            let term = self.stores.terminals.attached().and_then(|a| a.term.clone());
+            if let Some(term) = term {
+                out.entry(machine.to_string()).or_default().terminal = Some(term);
+            }
+        }
+        out
     }
 
-    /// The `watching` a `presence` to `machine` carries: the session it is
-    /// showing, or `None` for any other machine.
-    fn watching_for(&self, machine: &str) -> Option<String> {
-        match self.watch_now() {
-            Some((shown, session)) if shown == machine => Some(session),
-            _ => None,
-        }
+    /// What a `presence` to `machine` carries right now.
+    fn watch_for(&self, machine: &str) -> Watch {
+        self.watch_now().remove(machine).unwrap_or_default()
     }
 
-    /// What this client watches may have changed — another session on
-    /// screen, or the app hidden. Say it once the choice has settled.
+    /// What this client watches may have changed — another session or
+    /// terminal on screen, or the app hidden. Say it once the choice has
+    /// settled.
     fn watch_changed(&mut self) {
         if self.watch_timer.is_none() {
             self.watch_timer = Some(self.arm(WATCH_SETTLE_MS, Msg::WatchSettle));
         }
     }
 
-    /// The settle window closed: tell each machine whose `watching` differs
-    /// from what it was last told. Leaving a machine for another also tells
-    /// the one left behind that nothing is watched there any more.
+    /// The settle window closed: tell each machine whose `watching` /
+    /// `watching_terminal` differs from what it was last told. Leaving a
+    /// machine for another also tells the one left behind that nothing is
+    /// watched there any more.
     fn settle_watch(&mut self) {
-        let desired = self.watch_now().map(|(machine, session)| (machine, Some(session)));
-        let previous = self.watch_sent.clone();
-        if previous == desired {
-            return;
-        }
-        if let Some((machine, _)) = &previous {
-            if !desired.as_ref().is_some_and(|(next, _)| next == machine) {
-                self.send_watching(machine, None);
-            }
-        }
+        let desired = self.watch_now();
+        let previous = std::mem::take(&mut self.watch_sent);
         // Only what a machine was told counts as sent: one that could not be
         // (no session key to use right now) is tried again at the next
         // settle, instead of being taken for told and never retried.
-        let told = match &desired {
-            Some((machine, session)) => self.send_watching(machine, session.clone()),
-            None => true,
-        };
-        self.watch_sent = if told { desired } else { None };
+        let mut told: BTreeMap<String, Watch> = BTreeMap::new();
+        for (machine, watch) in &desired {
+            if previous.get(machine) == Some(watch) || self.send_watching(machine, watch.clone()) {
+                told.insert(machine.clone(), watch.clone());
+            }
+        }
+        for (machine, watch) in previous {
+            if desired.contains_key(&machine) || watch == Watch::default() {
+                continue;
+            }
+            self.send_watching(&machine, Watch::default());
+        }
+        self.watch_sent = told;
     }
 
     /// One `presence` saying what this client watches, to one machine. Only
     /// a machine that knows this client by its session key is told: a copy
     /// addressed to the identity reaches no client, and so no live text.
     /// Returns whether it went out.
-    fn send_watching(&mut self, machine: &str, watching: Option<String>) -> bool {
+    fn send_watching(&mut self, machine: &str, watch: Watch) -> bool {
         if !matches!(self.cipher_for(machine), Cipher::SessionKey(_)) {
             return false;
         }
-        self.sign_and_publish(machine.to_string(), PhoneToBridge::Presence(PresenceMsg { away: false, watching, watching_terminal: None }), None, None, true);
+        self.sign_and_publish(machine.to_string(), PhoneToBridge::Presence(PresenceMsg { away: false, watching: watch.session, watching_terminal: watch.terminal }), None, None, true);
         true
     }
 

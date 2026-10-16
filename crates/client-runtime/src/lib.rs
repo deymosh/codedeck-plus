@@ -45,9 +45,9 @@ pub use intent::{Intent, IntentCtx, SessionFileSend};
 pub use ports::{Kv, MemoryKv, MemoryTranscriptStore, Notifier, NullNotifier, SessionKeyStore, TranscriptStore};
 pub use stores::{CoreStores, HydratedCore};
 pub use view::{
-    BackupView, ConnectionView, MachinesView, OutboxView, PairingView,
-    PendingSessionsView, QuickPromptsView, SettingsView, TranscriptRowsView, TranscriptRowView,
-    TranscriptSyncView, UiView,
+    AttachedTerminalView, BackupView, ConnectionView, MachinesView, OutboxView, PairingView,
+    PendingSessionsView, QuickPromptsView, SettingsView, TerminalEndedView, TerminalRefusalView,
+    TerminalsView, TranscriptRowsView, TranscriptRowView, TranscriptSyncView, UiView,
 };
 
 /// Re-export the pure core and the wire contract so hosts have one
