@@ -3,6 +3,7 @@
 //! token, and the pair-request that echoes it.
 
 use protocol::commands::PairRequestMsg;
+use protocol::common::TerminalEndReason;
 use protocol::crypto::npub_from_hex;
 use protocol::events::{BridgeToPhone, PairAckMsg, PairAckReason};
 
@@ -122,6 +123,25 @@ impl Engine {
         );
         self.out.push(Effect::Notify { level: NotifyLevel::Info, text: format!("Phone \"{label}\" paired") });
         self.out.push(Effect::RegisterPhone { pubkey_hex: from.to_string(), label });
+    }
+
+    /// The owner unpaired an identity on the machine. Everything it could
+    /// send stops being heard, and the shells its devices hold end: a
+    /// machine's terminals are not left running for a phone that is no longer
+    /// paired.
+    pub(super) fn unpair(&mut self, identity: &str) {
+        let before = self.paired.len();
+        self.paired.retain(|p| p.pubkey_hex != identity);
+        if self.paired.len() == before {
+            return;
+        }
+        log::info!("[Engine] Unpaired {}...", identity.get(..8).unwrap_or(identity));
+        self.close_identity_terminals(identity, TerminalEndReason::Killed);
+        self.store_paired();
+        // Nothing from that author is heard any more, and every other phone's
+        // list changed.
+        self.out.push(Effect::Resubscribe);
+        self.list_dirty = true;
     }
 }
 

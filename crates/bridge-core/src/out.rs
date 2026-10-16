@@ -19,6 +19,11 @@ pub(crate) enum TimerKind {
     SyncAck(String),
     SyncIdle(String),
     PairingExpiry { epoch: u64 },
+    /// A terminal's input arrived ahead of the one before it: the wait is over
+    /// and the phone is asked to resend from the gap.
+    TerminalGap { term: String },
+    /// A terminal has had no client attached to it for the idle limit.
+    TerminalIdle { term: String },
 }
 
 #[derive(Default)]

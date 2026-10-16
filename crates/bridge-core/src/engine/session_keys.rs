@@ -352,6 +352,19 @@ impl Engine {
     /// with no client at all is unchanged — its one copy is the identity's
     /// own, and nothing on that side renders live text.
     fn copy_keys_watching(&self, identity: &str, now_ms: u64, session: &str) -> Vec<String> {
+        self.copy_keys_where(identity, now_ms, |c| c.watch.wants(session))
+    }
+
+    /// [`Self::copy_keys`], for the output of `term`: only the clients that
+    /// show that terminal get a copy — a terminal nobody shows costs nothing
+    /// to run out to.
+    fn copy_keys_watching_terminal(&self, identity: &str, now_ms: u64, term: &str) -> Vec<String> {
+        self.copy_keys_where(identity, now_ms, |c| c.watch_terminal.shows(term))
+    }
+
+    /// The keys a message goes to: [`Self::copy_keys`], narrowed to the
+    /// clients a live stream is for.
+    fn copy_keys_where(&self, identity: &str, now_ms: u64, wanted: impl Fn(&PhoneClient) -> bool) -> Vec<String> {
         let now_secs = now_ms / 1000;
         let Some(phone) = self.paired.iter().find(|p| p.pubkey_hex == identity) else { return vec![identity.to_string()] };
         let live: Vec<&PhoneClient> = phone.clients.iter().filter(|c| c.key.expires_at > now_secs).collect();
@@ -360,29 +373,32 @@ impl Engine {
         }
         live.into_iter()
             .filter(|c| c.present_until_ms > now_ms)
-            .filter(|c| c.watch.wants(session))
+            .filter(|c| wanted(c))
             .map(|c| c.key.pubkey_hex.clone())
             .collect()
     }
 
     /// Turn every publish in `effects` to an identity into a copy for each
     /// of its present clients; one already for a client stays as it is.
-    /// Live text is narrowed further, to the clients watching that session.
+    /// Live text is narrowed further, to the clients watching that session,
+    /// and a terminal's output to the clients showing that terminal.
     pub(super) fn address_publishes(&self, effects: &mut [Effect]) {
         let now = self.now();
         for effect in effects {
             if let Effect::Publish { to, message } = effect {
-                let live_session = match message {
-                    BridgeToPhone::Partial(m) => Some(m.session_id.clone()),
-                    _ => None,
+                let stream = match message {
+                    BridgeToPhone::Partial(m) => Stream::Session(m.session_id.clone()),
+                    BridgeToPhone::TerminalOutput(m) => Stream::Terminal(m.term.clone()),
+                    _ => Stream::Everyone,
                 };
                 *to = to
                     .iter()
                     .flat_map(|a| {
                         if a.key.is_empty() {
-                            let keys = match &live_session {
-                                Some(session) => self.copy_keys_watching(&a.phone, now, session),
-                                None => self.copy_keys(&a.phone, now),
+                            let keys = match &stream {
+                                Stream::Session(session) => self.copy_keys_watching(&a.phone, now, session),
+                                Stream::Terminal(term) => self.copy_keys_watching_terminal(&a.phone, now, term),
+                                Stream::Everyone => self.copy_keys(&a.phone, now),
                             };
                             keys.into_iter().map(|key| Addressee { phone: a.phone.clone(), key }).collect()
                         } else {
@@ -393,4 +409,12 @@ impl Engine {
             }
         }
     }
+}
+
+/// What a publish to an identity is narrowed to: one session's live text, one
+/// terminal's output, or every present client.
+enum Stream {
+    Everyone,
+    Session(String),
+    Terminal(String),
 }

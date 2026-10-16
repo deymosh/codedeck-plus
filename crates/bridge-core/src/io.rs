@@ -8,8 +8,11 @@
 
 use agent_protocol::{BridgeFrame, HostFrame};
 use protocol::commands::UploadFileMsg;
+use protocol::common::TerminalEndReason;
 use protocol::events::BridgeToPhone;
 use serde::{Deserialize, Serialize};
+
+use crate::engine::{PendingDevice, TerminalAllowlist, TerminalAuditRecord};
 
 /// A command event from a phone, signature already verified. `content` is
 /// still NIP-44 ciphertext.
@@ -129,6 +132,16 @@ impl WatchState {
             WatchState::Watching(watching) => watching.as_deref() == Some(session),
         }
     }
+
+    /// Whether this client shows `term`. Only one that said so does: a
+    /// terminal's output is not the completing entry of a row already on
+    /// screen, so an unasked client loses nothing by not being sent it — it
+    /// draws what it missed with `terminal-replay` from the runtime's ring
+    /// when it does attach, and a terminal nobody attached to is one the idle
+    /// limit is meant to close.
+    pub(crate) fn shows(&self, term: &str) -> bool {
+        matches!(self, WatchState::Watching(Some(watching)) if watching == term)
+    }
 }
 
 /// One copy of a message: for one client of an identity.
@@ -199,6 +212,25 @@ pub enum Input {
     ClosePairing,
     /// The workspace roots or folders changed on disk: republish them.
     WorkspaceChanged,
+    /// A shell for [`Effect::TerminalSpawn`] is running; `shell` is what
+    /// runs in it. Answer to a `terminal-open`.
+    TerminalSpawned { term: String, shell: String },
+    /// The shell could not be started (no PTY, no usable program): the open
+    /// is answered as a refusal, and `note` is what the audit records.
+    TerminalSpawnFailed { term: String, note: String },
+    /// A terminal wrote output: `data`, base64, from byte `offset` of
+    /// everything it has ever written. Goes to the clients showing it.
+    TerminalOutput { term: String, offset: u64, data: String },
+    /// A terminal's shell is gone: `code` when it exited on its own, else the
+    /// `reason` the runtime saw (its pipe broke, the bridge is going down).
+    TerminalExited { term: String, code: Option<i32>, reason: TerminalEndReason },
+    /// The terminal allowlist changed on disk — the owner ran
+    /// `codedeck-bridge terminal allow|disallow` on the machine: replace what
+    /// the engine holds and close the terminals of a device withdrawn.
+    TerminalAllowlist(TerminalAllowlist),
+    /// The owner unpaired an identity on the machine: it is heard from no
+    /// more, and the terminals its devices hold end.
+    Unpaired { identity: String },
     /// Stop: end every session, publish the offline heartbeat, then
     /// [`Effect::Stopped`].
     Shutdown,
@@ -238,6 +270,34 @@ pub enum Effect {
     /// Fetch / reassemble an uploaded image into the workspace; answer with
     /// [`Input::FileReady`] once it is on disk.
     HandleFileUpload(UploadFileMsg),
+    /// Start a shell for `term` in `cwd`, at `cols`×`rows`; answer with
+    /// [`Input::TerminalSpawned`] once it runs, or
+    /// [`Input::TerminalSpawnFailed`]. The runtime starts it with a built
+    /// environment, never the bridge's own: the bridge's may hold the
+    /// agents' provider keys.
+    TerminalSpawn { term: String, cwd: String, cols: u16, rows: u16 },
+    /// Type `bytes` into a terminal, in the order the engine emitted them.
+    /// The engine has already checked the sender is the writer and that no
+    /// earlier input is missing.
+    TerminalWrite { term: String, bytes: Vec<u8> },
+    /// The writer's window changed.
+    TerminalResize { term: String, cols: u16, rows: u16 },
+    /// Send `client` this terminal's output from byte `from`, and what
+    /// follows: it attached to a terminal it was not showing.
+    TerminalReplay { term: String, from: u64, client: Addressee },
+    /// Hang up a terminal: SIGHUP, then kill once it does not go. The engine
+    /// has already ended it; this is the shell's part.
+    TerminalClose { term: String },
+    /// The devices waiting for the owner's approval changed: write them where
+    /// the owner lists them (`codedeck-bridge terminal pending`). Sent whole,
+    /// so the file always says what the engine knows.
+    TerminalPending(Vec<PendingDevice>),
+    /// One line for the terminal audit, in the order the engine decided it.
+    /// The engine holds no file: the runtime chains the line to the one
+    /// before it and stores it, and denies the audit to no one running as
+    /// the bridge's user — the chain catches tampering that is not that
+    /// thorough.
+    Audit(TerminalAuditRecord),
     /// Shutdown is complete: every publish before this one must still go
     /// out, then the runtime may close the host and the relays.
     Stopped,

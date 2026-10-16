@@ -295,6 +295,22 @@ impl Runtime {
                 });
             }
             Effect::Stopped => return true,
+            // The engine decides terminals and the runtime serves them: the
+            // ptys, the per-terminal ring of output, the allowlist file and
+            // the audit. None of that is here, and with terminals switched off
+            // — the only state a configuration leaves them in — the engine
+            // emits none of these effects.
+            Effect::TerminalSpawn { .. }
+            | Effect::TerminalWrite { .. }
+            | Effect::TerminalResize { .. }
+            | Effect::TerminalReplay { .. }
+            | Effect::TerminalClose { .. } => {}
+            Effect::TerminalPending(pending) => {
+                log::debug!("[Runtime] {} device(s) are waiting for terminal approval", pending.len());
+            }
+            Effect::Audit(record) => {
+                log::debug!("[Runtime] terminal audit line: {:?} {}", record.what, record.term);
+            }
         }
         false
     }

@@ -28,10 +28,12 @@ mod phone;
 mod session_keys;
 pub use session_keys::MAX_CLIENTS;
 mod settings;
+mod terminal;
+pub use terminal::{TerminalAllowlist, TerminalAuditRecord, TerminalAuditWhat, TerminalConfig, PendingDevice};
 
 use std::collections::BTreeMap;
 
-use protocol::capabilities::{BridgeHostKind, ALL_BRIDGE_CAPABILITIES};
+use protocol::capabilities::{BridgeHostKind, ALL_BRIDGE_CAPABILITIES, TERMINAL};
 use protocol::common::{OutputEntry, RemoteSessionInfo, SessionState};
 use protocol::crypto::Keypair;
 use protocol::events::{BridgeToPhone, OutputMsg, SessionListMsg};
@@ -49,6 +51,7 @@ use crate::sync::{SyncConfig, SyncServer, SyncTimer};
 use crate::time::iso;
 
 use host::{ConversationDelete, HostCall};
+use terminal::Terminals;
 
 pub const DEFAULT_HEARTBEAT_INTERVAL_MS: u64 = 60_000;
 /// How often a session's `committed` flag is checked against git (catches
@@ -84,6 +87,9 @@ pub struct Config {
     pub card_timeout_ms: u64,
     pub pairing_window_ms: u64,
     pub sync: SyncConfig,
+    /// Whether this machine runs terminals, who may have one, and how many.
+    /// Off unless the owner turns it on; never switched from a phone.
+    pub terminal: TerminalConfig,
 }
 
 impl Config {
@@ -102,6 +108,7 @@ impl Config {
             card_timeout_ms: DEFAULT_CARD_TIMEOUT_MS,
             pairing_window_ms: DEFAULT_PAIRING_WINDOW_MS,
             sync: SyncConfig::default(),
+            terminal: TerminalConfig::default(),
         }
     }
 }
@@ -162,6 +169,8 @@ pub struct Engine {
     profile_refusals: BTreeMap<String, String>,
     next_ticket: u64,
     sync: SyncServer,
+    /// The shells this bridge runs for phones, and who may have one.
+    terminals: Terminals,
     pairing: Option<PairingWindow>,
     pairing_epoch: u64,
     nacks: NackBudget,
@@ -194,6 +203,7 @@ pub struct Engine {
 impl Engine {
     pub fn new(config: Config, ports: Ports) -> Self {
         let sync = SyncServer::new(config.sync);
+        let terminals = Terminals::new(config.terminal.clone());
         Self {
             config,
             system: ports.system,
@@ -218,6 +228,7 @@ impl Engine {
             profile_refusals: BTreeMap::new(),
             next_ticket: 0,
             sync,
+            terminals,
             pairing: None,
             pairing_epoch: 0,
             nacks: NackBudget::default(),
@@ -258,6 +269,12 @@ impl Engine {
             Input::OpenPairing { duration_ms } => self.open_pairing(duration_ms),
             Input::ClosePairing => self.close_pairing(crate::io::PairingCloseReason::Closed, None),
             Input::WorkspaceChanged => self.list_dirty = true,
+            Input::TerminalSpawned { term, shell } => self.on_terminal_spawned(term, shell),
+            Input::TerminalSpawnFailed { term, note } => self.on_terminal_spawn_failed(term, note),
+            Input::TerminalOutput { term, offset, data } => self.on_terminal_output(term, offset, data),
+            Input::TerminalExited { term, code, reason } => self.on_terminal_exited(term, code, reason),
+            Input::TerminalAllowlist(allowlist) => self.on_terminal_allowlist(allowlist),
+            Input::Unpaired { identity } => self.unpair(&identity),
             Input::Shutdown => self.shutdown(),
         }
         self.requester = None;
@@ -346,6 +363,12 @@ impl Engine {
         for id in ids {
             self.close_runner(&id, "Session closed");
         }
+        // The runtime takes the ptys down with it: every shell ends, and each
+        // one's end is audited.
+        let identities: Vec<String> = self.paired.iter().map(|p| p.pubkey_hex.clone()).collect();
+        for identity in identities {
+            self.close_identity_terminals(&identity, protocol::common::TerminalEndReason::Restart);
+        }
         let timers: Vec<_> = self.out.timers.keys().copied().collect();
         for timer in timers {
             self.out.cancel_timer(timer);
@@ -396,6 +419,8 @@ impl Engine {
                     self.close_pairing(crate::io::PairingCloseReason::Expired, None);
                 }
             }
+            TimerKind::TerminalGap { term } => self.on_terminal_gap(&term),
+            TimerKind::TerminalIdle { term } => self.on_terminal_idle(&term),
         }
     }
 
@@ -602,19 +627,28 @@ impl Engine {
         let credentials = self.bridge_credentials();
         let removed = self.tombstones.ids();
         let rev = self.next_list_rev();
+        // The terminal capability is the owner's decision, so unlike the rest
+        // it is advertised only when this machine runs terminals: a phone that
+        // sent a `terminal-open` to a bridge without it would wait on a
+        // terminal that never opens.
+        let mut capabilities: Vec<String> = ALL_BRIDGE_CAPABILITIES.iter().map(|c| c.to_string()).collect();
+        if self.terminals_enabled() {
+            capabilities.push(TERMINAL.to_string());
+        }
+        let terminals = self.terminal_infos();
         let message = BridgeToPhone::Sessions(SessionListMsg {
             machine: self.config.machine.clone(),
             host: self.config.host_kind,
             sessions,
             agents,
             credentials,
-            capabilities: Some(ALL_BRIDGE_CAPABILITIES.iter().map(|c| c.to_string()).collect()),
+            capabilities: Some(capabilities),
             folders: Some(self.workspace.folders()),
             roots: Some(self.workspace.roots()),
             removed_sessions: (!removed.is_empty()).then_some(removed),
             machine_offline: offline.then_some(true),
             direct: self.config.direct.clone(),
-            terminals: None,
+            terminals: (!terminals.is_empty()).then_some(terminals),
             rev: Some(rev),
         });
         match to {

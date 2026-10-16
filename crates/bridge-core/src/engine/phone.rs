@@ -18,7 +18,6 @@ use crate::catalog::{is_effort, is_mode};
 use crate::io::{Addressee, Effect, InboundEvent, Via};
 use crate::registry::{project_of, SessionRecord};
 use crate::session::{option_answer, permission_summary, CardKind, Phase, Runner, Session, StartKind};
-
 /// The wire name of a command, for logs. (Commands can carry secrets, so
 /// they are never logged whole.)
 fn type_name(msg: &PhoneToBridge) -> &'static str {
@@ -93,8 +92,8 @@ impl Engine {
                 log::info!("[Engine] Received {} from {}...", type_name(&msg), short(&event.pubkey));
                 let client = Addressee { phone: event.pubkey.clone(), key: key.clone() };
                 // Any command says its client is running; a `presence` also
-                // says whether it still wants the shared updates and which
-                // session it watches.
+                // says whether it still wants the shared updates, which
+                // session it watches and which terminal it shows.
                 if self.note_presence(&event.pubkey, &key, &msg) {
                     self.want_list(client.clone());
                 }
@@ -104,14 +103,14 @@ impl Engine {
                         self.grant_session_key(&event.pubkey, m.session_key, &key);
                     }
                     PhoneToBridge::Presence(_) => {}
-                    msg => self.dispatch(msg, &event.pubkey),
+                    msg => self.dispatch(msg, &event.pubkey, via),
                 }
                 self.requester = None;
             }
         }
     }
 
-    fn dispatch(&mut self, msg: PhoneToBridge, phone: &str) {
+    fn dispatch(&mut self, msg: PhoneToBridge, phone: &str, via: Via) {
         match msg {
             PhoneToBridge::Input(m) => self.on_input(m),
             PhoneToBridge::PermissionResponse(m) => self.on_permission_response(m),
@@ -171,15 +170,14 @@ impl Engine {
                 let msg = self.provider_profiles_msg();
                 self.publish_to(phone, msg);
             }
-            // The engine runs no terminals: the bridge advertises the
-            // `terminal` capability only once one exists here, and until then
-            // a phone has no reason to send these.
-            PhoneToBridge::TerminalOpen(_)
-            | PhoneToBridge::TerminalInput(_)
-            | PhoneToBridge::TerminalResize(_)
-            | PhoneToBridge::TerminalReplay(_)
-            | PhoneToBridge::TerminalTakeover(_)
-            | PhoneToBridge::TerminalClose(_) => {}
+            // Terminals: the engine decides, the runtime runs their shells
+            // (see the `terminal` module).
+            PhoneToBridge::TerminalOpen(m) => self.on_terminal_open(m, super::terminal::via_of(via)),
+            PhoneToBridge::TerminalInput(m) => self.on_terminal_input(m, super::terminal::via_of(via)),
+            PhoneToBridge::TerminalResize(m) => self.on_terminal_resize(m, super::terminal::via_of(via)),
+            PhoneToBridge::TerminalReplay(m) => self.on_terminal_replay(m, super::terminal::via_of(via)),
+            PhoneToBridge::TerminalTakeover(m) => self.on_terminal_takeover(m, super::terminal::via_of(via)),
+            PhoneToBridge::TerminalClose(m) => self.on_terminal_close(m, super::terminal::via_of(via)),
         }
     }
 
