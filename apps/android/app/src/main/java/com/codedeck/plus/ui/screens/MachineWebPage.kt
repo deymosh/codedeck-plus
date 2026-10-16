@@ -168,7 +168,7 @@ fun WebSignInContent(
             EmptyState(
                 icon = Icons.Outlined.Check,
                 title = "Browser signed in",
-                body = "It opens the dashboard now, and stays signed in for 30 days, until it signs out or the bridge restarts.",
+                body = "It opens the dashboard now, and stays signed in for 30 days or until it is signed out.",
                 action = "Done",
                 onAction = onBack,
                 modifier = Modifier.fillMaxWidth().padding(top = Tokens.Space7),
