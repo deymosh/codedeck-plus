@@ -308,6 +308,72 @@ group of one finished call adds a line under it after the mark, saying what
 the call came to (the lines a read returned, what a search found, what an
 edit changed, a command's first line of output).
 
+### Terminal
+
+A terminal is a real shell on the bridge's machine, drawn by the app's
+emulator (`docs/TERMINAL.md` is the design). The core keeps its state and
+paces its input; the app draws and collects keys.
+
+**State** (`stores::terminals`, never persisted). Each machine's heartbeat
+lists the terminals that belong to this identity — the only way a second
+phone, or this one after a restart, learns one exists. On top of that sits
+**the attached terminal**, at most one, the one on screen: the bridge's
+`term` (absent while an open is pending, which the phone's own `openId`
+names), whether this device is the writer, the next output byte offset
+expected, the last refusal (its reason, and the device the bridge refused
+with the name that device was ever seen under) and the reason it ended. A
+device is named by `protocol::recipients::device_id` of the first session
+key this install ever made, which the session-key ring now keeps so the
+heartbeat's `writer` and every `terminal-event`'s `device` can be read as
+"us" or "another phone".
+
+**Presence.** `watchingTerminal` is set, per machine, while a terminal of
+that machine is on screen and the app is visible — the same rule `watching`
+follows for live text, and what makes the bridge send output only to the
+devices showing it. Detaching (or backgrounding the app) clears it. A
+terminal costs a backgrounded phone nothing.
+
+**Input.** Typing is not sent per keystroke. On the normal screen printable
+bytes wait and go in one event when a key a program could act on is pressed
+(Enter, Tab, Esc, an arrow or any escape sequence, Backspace/Delete, any
+Ctrl chord, an Alt prefix), when typing pauses (150 ms over the direct link,
+400 ms over relays), or past 256 bytes; a paste is always one event. On the
+alternate screen — vim, htop, less — every key is a command, so there is no
+prediction and bytes go after at most 20 ms / 60 ms, coalescing a held key's
+repeats. Over relays a terminal sends at most 5 input events a second; the
+rest stays buffered and merges into the next. The bytes still waiting are in
+the view, for the app's predicted echo (dimmed, at the cursor, replaced by
+the real output). The core arms its own timer for the flush — a change of
+transport is picked up on the next keystroke, not by a re-armed window.
+
+**Seq.** One counter per (machine, term), from 1, +1 per input event. The
+last 256 events (at most 1 MiB) are kept; a `terminal-input-from {term,
+seq}` resends from `seq` if it is still held, and otherwise the count simply
+continues from the number the bridge named — which is also how a takeover
+tells this device where to resume. Nothing older than what is held can be
+resent.
+
+**Output.** `terminal-output {term, offset, data}` is base64-decoded in the
+core and handed to the app as its own event,
+`CoreEvent::TerminalOutput { machine, term, offset, bytes }` — never through
+a view, since a shell can write megabytes a second and a view snapshot per
+frame would slow every other slice down. A frame at the expected offset is
+passed on and the offset advances. A frame beyond it means one was lost: the
+core asks for `terminal-replay` from the expected offset **once per gap** and
+drops frames until the replay arrives. A frame that starts before the
+expected offset is trimmed to the part not yet drawn, or dropped when it is
+entirely behind.
+
+**What the app gets.** `UiView.terminals` (`UniffiUiView.terminals`) is the
+low-frequency half: every machine's list, and the attached terminal's term,
+writer flag, size, expected offset, waiting bytes, refusal and end. The
+intents are `OpenTerminal`, `AttachTerminal`, `DetachTerminal`,
+`TerminalInput`, `TerminalPaste`, `ResizeTerminal`, `TakeOverTerminal` and
+`CloseTerminal`; `OpenTerminal` is ignored unless the machine's heartbeat
+advertises the `terminal` capability. `terminal-input` is the one phone
+command that does not ride `COMMAND_KIND`: keystrokes ride `LIVE_KIND` and
+are never stored on a relay.
+
 ### Direct link
 
 A bridge can also be reached without the relays (the wire is in
