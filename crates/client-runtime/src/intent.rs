@@ -21,7 +21,7 @@ use protocol::commands::{
     AccountActionMsg, AccountsRequestMsg, AgentActionMsg, BareMsg, CreateFolderMsg, CreateSessionMsg, InputMsg, McpActionMsg, McpRequestMsg, ModelsRequestMsg, PermissionResponseMsg, PermissionRulesRemoveMsg, PermissionRulesRequestMsg, PersonasRequestMsg,
     PhoneToBridge, PlanResponseMsg, PluginActionMsg, PluginsRequestMsg, ProviderProfileWrite, QuestionAnswer,
     QuestionResponseMsg, SessionIdMsg, SessionMcpToggleMsg, SetCredentialsMsg, SetOptionMsg, SetProviderProfileMsg,
-    StopTaskMsg, TerminalIdMsg, TerminalResizeMsg,
+    StopTaskMsg, TerminalIdMsg, TerminalResizeMsg, WebSignInMsg,
 };
 use protocol::common::{AccountAction, AgentAction, CredentialValues, McpAction, McpServerSpec, PluginAction, SessionOption};
 use protocol::events::McpAckMsg;
@@ -432,6 +432,20 @@ pub enum Intent {
     /// Ask for the provider profiles — sent only when this connection has
     /// not had them yet (the bridge pushes every change).
     RequestProviderProfiles {
+        machine: String,
+    },
+    /// Sign in the browser showing `code` on this machine's web page: the
+    /// signature on the command is what lets it in, so the code alone is
+    /// worthless to anyone else. Answered with
+    /// `BridgeToPhone::WebSignInResult`, taken only when it answers the code
+    /// the ui store recorded for this attempt.
+    WebSignIn {
+        machine: String,
+        code: String,
+    },
+    /// The sign-in screen closed: forget this machine's code, so a late
+    /// answer cannot move an entry nothing is showing any more.
+    ClearWebSignIn {
         machine: String,
     },
     /// Create a new project folder under a workspace root (and `git init` it,
@@ -964,6 +978,16 @@ pub fn apply(
         Intent::RequestProviderProfiles { machine } => {
             if stores.machines.fetches.should_request(&machine, Fetch::ProviderProfiles, ctx.now) {
                 r.send(&machine, PhoneToBridge::ProviderProfilesRequest(BareMsg {}))
+            }
+        }
+        Intent::WebSignIn { machine, code } => {
+            stores.ui.note_web_sign_in_sent(&machine, &code);
+            r.ui_changed = true;
+            r.send(&machine, PhoneToBridge::WebSignIn(WebSignInMsg { code }));
+        }
+        Intent::ClearWebSignIn { machine } => {
+            if stores.ui.clear_web_sign_in(&machine) {
+                r.ui_changed = true;
             }
         }
         Intent::CreateFolder {
@@ -1700,6 +1724,55 @@ mod tests {
             out.sends.as_slice(),
             [Send { machine, msg: PhoneToBridge::ProviderProfilesRequest(_) }] if machine == "m"
         ));
+    }
+
+    #[tokio::test]
+    async fn web_sign_in_sends_the_code_and_records_it_until_answered() {
+        let (mut s, kp) = stores().await;
+        let out = apply(
+            &mut s,
+            Intent::WebSignIn {
+                machine: "m".into(),
+                code: "K7QM-4XPA".into(),
+            },
+            &kp,
+            ctx(),
+        );
+        assert!(matches!(
+            out.sends.as_slice(),
+            [Send { machine, msg: PhoneToBridge::WebSignIn(m) }]
+                if machine == "m" && m.code == "K7QM-4XPA"
+        ));
+        assert!(out.ui_changed, "the sign-in screen reads the entry back");
+        assert_eq!(s.ui.web_sign_in["m"].code, "K7QM-4XPA");
+        assert_eq!(
+            s.ui.web_sign_in["m"].state,
+            client_core::stores::ui::WebSignInState::Sending,
+            "silence is not a verdict; the screen times itself out"
+        );
+    }
+
+    #[tokio::test]
+    async fn clearing_a_web_sign_in_sends_nothing_and_reports_its_own_change() {
+        let (mut s, kp) = stores().await;
+        apply(
+            &mut s,
+            Intent::WebSignIn {
+                machine: "m".into(),
+                code: "K7QM-4XPA".into(),
+            },
+            &kp,
+            ctx(),
+        );
+
+        let out = apply(&mut s, Intent::ClearWebSignIn { machine: "m".into() }, &kp, ctx());
+        assert!(out.sends.is_empty());
+        assert!(out.ui_changed);
+        assert!(!s.ui.web_sign_in.contains_key("m"));
+
+        // Nothing left to forget: no re-fetch for a screen that is gone.
+        let out = apply(&mut s, Intent::ClearWebSignIn { machine: "m".into() }, &kp, ctx());
+        assert!(!out.ui_changed);
     }
 
     /// Screens ask each time they open; the profiles, which the bridge

@@ -22,7 +22,7 @@ use client_core::stores::pending_sessions::PendingSessionView;
 use client_core::stores::quick_prompts::QuickPrompt;
 use client_core::stores::settings::SettingsData;
 use client_core::stores::transcript::{SyncState, TranscriptState};
-use client_core::stores::ui::{CredentialsAck, ProviderProfileAck, UndoToast};
+use client_core::stores::ui::{CredentialsAck, ProviderProfileAck, UndoToast, WebSignIn};
 use protocol::common::{AgentStyle, TerminalEndReason};
 use protocol::events::TerminalInfo;
 use serde::Serialize;
@@ -202,6 +202,9 @@ pub struct UiView {
     pub plan_approval_choices: BTreeMap<String, String>,
     pub credentials_status: BTreeMap<String, CredentialsAck>,
     pub provider_profile_status: BTreeMap<String, ProviderProfileAck>,
+    /// machine pubkey → the code the phone sent to sign a browser in to that
+    /// machine's web page, and where the round trip stands.
+    pub web_sign_in: BTreeMap<String, WebSignIn>,
     pub undo_toast: Option<UndoToast>,
     /// The terminals, low-frequency state only: the frames themselves go to
     /// the host on `CoreEvent::TerminalOutput`, never through a view.
@@ -292,6 +295,7 @@ impl UiView {
             plan_approval_choices: ui.plan_approval_choices.clone(),
             credentials_status: ui.credentials_status.clone(),
             provider_profile_status: ui.provider_profile_status.clone(),
+            web_sign_in: ui.web_sign_in.clone(),
             undo_toast: ui.undo_toast.clone(),
             terminals: TerminalsView::from_stores(s),
         }
@@ -558,11 +562,17 @@ mod tests {
         s.ui.select_machine(Some("m1"));
         s.ui.mark_session_unread("m1", "s1");
         s.ui.set_plan_approval_choice("card1", "2");
+        s.ui.note_web_sign_in_sent("m1", "K7QM-4XPA");
 
         let uv = UiView::from_stores(&s);
         assert_eq!(uv.selected_machine.as_deref(), Some("m1"));
         assert!(uv.unread_sessions.contains(&client_core::notifications::session_key_of("m1", "s1")));
         assert_eq!(uv.plan_approval_choices.get("card1").map(String::as_str), Some("2"));
+        assert_eq!(uv.web_sign_in["m1"].code, "K7QM-4XPA");
+        assert_eq!(
+            uv.web_sign_in["m1"].state,
+            client_core::stores::ui::WebSignInState::Sending
+        );
         let json = serde_json::to_string(&uv).unwrap();
         assert!(json.contains(r#""selectedMachine":"m1""#));
     }

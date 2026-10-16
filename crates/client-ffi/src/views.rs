@@ -37,6 +37,7 @@ use client_runtime::client_core::presentation::activity::build_activity;
 use client_runtime::client_core::presentation::display_entries::{
     build_display_entries, find_pending_permission, DisplayEntry, SeqEntry,
 };
+use client_runtime::client_core::stores::ui::WebSignInState;
 use client_runtime::{
     MachinesView, OutboxView, PairingView, PendingSessionsView, QuickPromptsView, SettingsView,
     TranscriptRowsView, UiView,
@@ -1242,6 +1243,35 @@ pub struct UniffiProviderProfileAck {
     pub error: Option<String>,
 }
 
+/// Where a `web-sign-in` round trip for one machine stands — mirrors
+/// `client_core::stores::ui::WebSignInState`. `Sending` that is never answered
+/// stays `Sending`: the screen showing the code is the one that times itself
+/// out, so silence is never reported here as a refusal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum UniffiWebSignInState {
+    Sending,
+    SignedIn,
+    NotMatched,
+}
+
+/// The code a phone sent to sign a browser in to a machine's web page, and
+/// where that round trip stands — mirrors `client_core::stores::ui::WebSignIn`
+/// field for field. `code` is the one the phone sent, which is what the
+/// bridge's answer has to name for this entry to move.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct UniffiWebSignIn {
+    pub code: String,
+    pub state: UniffiWebSignInState,
+}
+
+fn to_uniffi_web_sign_in_state(state: WebSignInState) -> UniffiWebSignInState {
+    match state {
+        WebSignInState::Sending => UniffiWebSignInState::Sending,
+        WebSignInState::SignedIn => UniffiWebSignInState::SignedIn,
+        WebSignInState::NotMatched => UniffiWebSignInState::NotMatched,
+    }
+}
+
 /// The bottom "Deleted X — Undo" toast after an optimistic session delete —
 /// mirrors `client_core::stores::ui::UndoToast` field for field. Present
 /// only while the 4 s undo window is open; the hide lands as the next
@@ -1268,6 +1298,10 @@ pub struct UniffiUiView {
     pub credentials_status: HashMap<String, UniffiCredentialsAck>,
     /// Keyed by machine pubkey.
     pub provider_profile_status: HashMap<String, UniffiProviderProfileAck>,
+    /// Keyed by machine pubkey: the code this phone sent to sign a browser in
+    /// to that machine's web page, and where the round trip stands. Absent
+    /// until a sign-in screen asks, and again once it closes.
+    pub web_sign_in: HashMap<String, UniffiWebSignIn>,
     /// Present while a delete's undo window is open.
     pub undo_toast: Option<UniffiUndoToast>,
     /// The terminals, low-frequency state only — output frames arrive on
@@ -1390,6 +1424,19 @@ pub fn build_uniffi_ui_view(v: &UiView) -> UniffiUiView {
                         profile_id: a.profile_id.clone(),
                         token_valid: a.token_valid,
                         error: a.error.clone(),
+                    },
+                )
+            })
+            .collect(),
+        web_sign_in: v
+            .web_sign_in
+            .iter()
+            .map(|(k, w)| {
+                (
+                    k.clone(),
+                    UniffiWebSignIn {
+                        code: w.code.clone(),
+                        state: to_uniffi_web_sign_in_state(w.state),
                     },
                 )
             })

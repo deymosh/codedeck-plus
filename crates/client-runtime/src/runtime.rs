@@ -710,6 +710,7 @@ impl Core {
             plan_approval_choices: Default::default(),
             credentials_status: Default::default(),
             provider_profile_status: Default::default(),
+            web_sign_in: Default::default(),
             undo_toast: None,
             terminals: Default::default(),
         })
