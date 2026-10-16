@@ -88,8 +88,8 @@ timing alone leaks what was typed; the direct link shows nobody either.
 When relays are allowed, a terminal falls back to them like any message.
 
 - Both directions use `LIVE_KIND` (24515, ephemeral): **keystrokes are never
-  stored on a relay**. Phone→bridge input on the live kind is new: the direct
-  link accepts it besides commands (today it accepts only 4515), and, with
+  stored on a relay**. Phone→bridge input on the live kind goes beside
+  commands: the direct link accepts it besides commands (4515), and, with
   relays allowed, the bridge subscribes to it from its paired phones.
 - **Every input carries `seq`**, per terminal **and per device**, counting up
   by one from 1. The bridge applies input in order, drops a `seq` it has
@@ -107,9 +107,11 @@ When relays are allowed, a terminal falls back to them like any message.
   a burst of keystrokes would push command ids out of it and reopen a replay
   window for commands. The per-terminal, per-device `seq` is its dedup, and
   the 300-second age limit still applies.
-- **Output is coalesced**: the bridge flushes at most every 16 ms on the
-  direct link and every 100 ms on relays, or sooner past 16 KiB pending.
-  Larger flushes split by the existing `chunk` fragmentation.
+- **Output is coalesced and paced**: the bridge flushes a terminal's output at
+  most every 16 ms on the direct link, each frame at most 16 KiB; over a relay
+  it merges the frames for a terminal and sends one merged frame per 100 ms —
+  at most 10 a second, whatever the shell does. Larger flushes split by the
+  existing `chunk` fragmentation.
 - **Input is sent when a program can react to it, not per keystroke.** On
   the normal screen (a shell prompt), printable characters wait on the phone
   and go in one event when a key a program acts on is pressed — Enter, Tab
@@ -135,10 +137,19 @@ When relays are allowed, a terminal falls back to them like any message.
   input goes into a bounded queue and is dropped, with a warning, when the
   program has stopped reading it. Output is paced rather than passed
   through — the reader thread is throttled by a small queue, and the bridge
-  emits at most one frame per 16 ms — so a shell writing faster than the
-  phones can be sent it runs at that pace, its pty filling and its write
-  blocking, like a terminal on a slow line. What a terminal costs the
-  bridge's thread is therefore bounded, whatever runs in it.
+  emits at most one frame per 16 ms — and it goes out on a lane of its own:
+  each direct connection keeps a small bounded lane for terminal output (64
+  frames) beside its normal one, and the serve loop drains the normal lane
+  first and the terminal lane only when that is empty, so a terminal can
+  never delay a command, a card or a heartbeat. When the terminal lane is
+  full the oldest frame is dropped, which the phone sees as a gap in the
+  terminal's byte offsets and answers with a replay from the ring. Over the
+  relays the same idea is the pacing above: output is merged per terminal
+  and sent on a schedule rather than passed through, so a terminal cannot
+  spend the bridge's relay rate limit on a session's messages. A shell
+  writing faster than the phones can be sent it therefore runs at that pace,
+  its pty filling and its write blocking, like a terminal on a slow line.
+  What a terminal costs the bridge's thread is bounded, whatever runs in it.
 - **Privacy of size and timing.** NIP-44 already pads every payload to a
   size bucket, so a relay sees bucketed sizes, not byte counts. Batching on
   the keys above, rather than sending each keystroke, also hides the typing
@@ -237,8 +248,9 @@ PTYs die with it), and each one's end is audited.
   close, audit. It holds no PTY and no file.
 - `crates/bridge-runtime` owns the PTYs through the `portable-pty` crate
   (ConPTY on Windows, so the Windows bridge gets a real terminal too), the
-  per-terminal output ring and offset, the flush timer per transport, the
-  allowlist file and the audit files.
+  per-terminal output ring and offset, the coalescing that turns a shell's
+  writes into at most one frame per 16 ms, the relay pacing, the allowlist
+  file and the audit files.
 
 ## Phone
 

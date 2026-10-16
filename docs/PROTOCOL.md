@@ -56,7 +56,10 @@ The stored cursor moves at command/response cadence, not at output cadence —
 that is what keeps a burst of output from starving a response.
 
 The bridge subscribes to 4515 from paired authors with
-`since = lastSeen − 5s` (crash-gap grace). The relay therefore REPLAYS
+`since = lastSeen − 5s` (crash-gap grace). When the owner allows a terminal
+over relays it subscribes to the live kind (24515) from the same authors
+too, so a phone's keystrokes reach it there; off, the live kind is not
+subscribed and a relay sees none. The relay therefore REPLAYS
 recently processed commands after a restart — the bridge persists its dedup
 event-id set alongside the cursor so the replay is a no-op.
 
@@ -757,8 +760,9 @@ spec.
 - After `READY` the bridge sends what it published for that identity since
   `since` (seconds; it keeps an hour of it), then everything new — only the
   copies tagged with one of the `recipients`, never another client's. It
-  takes only command events (4515) authored by the identity that said
-  `HELLO`.
+  takes command events (4515) and terminal input on the live kind (24515),
+  each authored by the identity that said `HELLO`; the engine accepts only
+  `terminal-input` on the live kind, so nothing else can ride it in.
 
 ### Version and capabilities
 
