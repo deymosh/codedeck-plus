@@ -345,7 +345,17 @@ impl Runtime {
     /// shell is started.
     async fn execute(&mut self, effect: Effect) -> bool {
         match effect {
-            Effect::Publish { to, message } => self.relays.publish(to, message),
+            Effect::Publish { to, message } => {
+                if let (protocol::events::BridgeToPhone::Sessions(list), Some(direct)) = (&message, &self.direct) {
+                    direct.web.set_heartbeat(list);
+                }
+                self.relays.publish(to, message)
+            }
+            Effect::WebSignedIn { code, by } => {
+                if let Some(direct) = &self.direct {
+                    direct.web.signed_in(&code, &by);
+                }
+            }
             Effect::Host(frame) => self.host.send(&frame),
             Effect::SetTimer { id, after_ms } => {
                 let inputs = self.inputs.clone();

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>CodeDeck+ bridge</title>
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<header class="bar">
+  <div class="brand"><span class="mark">CodeDeck+</span><span class="machine" id="machine"></span></div>
+  <button class="quiet" id="sign-out" hidden>Sign out</button>
+</header>
+
+<main id="loading" class="center"><p class="dim">Loading…</p></main>
+
+<main id="signed-out" class="center" hidden>
+  <section class="card narrow">
+    <h1>Sign in with your phone</h1>
+    <p class="dim">This page shows what your bridge is doing. Only a phone paired with it can let a browser in — there is no password.</p>
+    <button class="primary" id="start">Show a sign-in code</button>
+    <p class="error" id="start-error" hidden></p>
+  </section>
+</main>
+
+<main id="pending" class="center" hidden>
+  <section class="card narrow">
+    <h1>Sign in with your phone</h1>
+    <img class="qr" id="qr" alt="QR code of the sign-in code">
+    <p class="code" id="code"></p>
+    <ol class="steps dim">
+      <li>Open CodeDeck+ on a phone paired with this bridge.</li>
+      <li>On the machine's page, choose <b>Sign in to the web page</b>.</li>
+      <li>Scan this code, or type it.</li>
+    </ol>
+    <p class="dim small" id="expires"></p>
+  </section>
+</main>
+
+<main id="dashboard" hidden>
+  <section class="grid">
+    <article class="card">
+      <h2>Bridge</h2>
+      <dl class="facts" id="bridge-facts"></dl>
+    </article>
+    <article class="card">
+      <h2>Direct link</h2>
+      <dl class="facts" id="direct-facts"></dl>
+    </article>
+  </section>
+  <section class="card">
+    <h2>Agents</h2>
+    <div class="agents" id="agents"></div>
+  </section>
+  <section class="card">
+    <h2>Sessions <span class="count" id="session-count"></span></h2>
+    <div class="table-wrap">
+      <table class="sessions">
+        <thead><tr><th>Session</th><th>Agent</th><th>State</th><th>Folder</th><th>Last activity</th></tr></thead>
+        <tbody id="sessions"></tbody>
+      </table>
+    </div>
+    <p class="dim" id="no-sessions" hidden>No sessions yet.</p>
+  </section>
+  <p class="dim small foot" id="signed-in-as"></p>
+</main>
+</body>
+</html>

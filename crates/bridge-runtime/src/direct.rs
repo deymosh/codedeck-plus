@@ -7,6 +7,10 @@
 //! - `ws://` on [`DirectConfig::onion_listen`], loopback only, for an onion
 //!   service to forward to.
 //!
+//! The `wss://` listener also serves the bridge's web page (`crate::web`): a
+//! request that is not a WebSocket upgrade is a page request. The onion
+//! listener serves no page.
+//!
 //! A connection must finish its TLS and WebSocket handshakes within
 //! `HANDSHAKE_TIMEOUT`, then answer the challenge with a paired identity's
 //! HELLO within `HELLO_TIMEOUT`. Then it gets every event the bridge publishes
@@ -31,7 +35,7 @@ use protocol::direct::{
 use protocol::kinds::{COMMAND_KIND, LIVE_KIND};
 use protocol::nostr_event::SignedEvent;
 use sha2::{Digest, Sha256};
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadBuf};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -72,6 +76,8 @@ fn short(key: &str) -> &str {
 /// What the runtime needs of a running direct link.
 pub struct Direct {
     pub hub: Rc<Hub>,
+    /// The web page served on the `wss://` listener.
+    pub web: Rc<crate::web::Web>,
     /// What the heartbeat advertises.
     pub info: DirectInfo,
     tasks: Vec<JoinHandle<()>>,
@@ -273,6 +279,8 @@ pub async fn start(
         log::info!("[Direct] Off (no direct listener configured)");
         return Ok(None);
     }
+    let npub = protocol::crypto::npub_from_hex(&bridge_pubkey).unwrap_or_else(|_| bridge_pubkey.clone());
+    let web = crate::web::Web::new(npub, &config.endpoints, inputs.clone());
     let hub = Hub::new(bridge_pubkey, inputs);
     let mut tasks = Vec::new();
     let mut bound_wss = None;
@@ -286,9 +294,11 @@ pub async fn start(
         let bound = listener.local_addr().map_err(|e| e.to_string())?;
         bound_wss = Some(bound);
         log::info!("[Direct] Listening on wss://{bound} (certificate sha256 {})", cert.sha256_hex());
+        log::info!("[Web] The bridge's web page is at https://{}/ (same certificate)", advertised(bound));
         let hub = Rc::clone(&hub);
+        let web = Rc::clone(&web);
         tasks.push(tokio::task::spawn_local(async move {
-            accept_loop(listener, hub, move |stream| {
+            accept_loop(listener, hub, Some(web), move |stream| {
                 let acceptor = acceptor.clone();
                 async move { acceptor.accept(stream).await.ok() }
             })
@@ -300,7 +310,7 @@ pub async fn start(
         log::info!("[Direct] Listening on ws://{addr} for an onion service");
         let hub = Rc::clone(&hub);
         tasks.push(tokio::task::spawn_local(async move {
-            accept_loop(listener, hub, |stream| async move { Some(stream) }).await
+            accept_loop(listener, hub, None, |stream| async move { Some(stream) }).await
         }));
     }
     let endpoints = advertised_endpoints(config, bound_wss, in_container());
@@ -313,7 +323,7 @@ pub async fn start(
              Add the host's address to direct.endpoints, or on the phone (the machine's page)."
         );
     }
-    Ok(Some(Direct { hub, info: DirectInfo { endpoints, cert_sha256 }, tasks }))
+    Ok(Some(Direct { hub, web, info: DirectInfo { endpoints, cert_sha256 }, tasks }))
 }
 
 /// The endpoints the heartbeat advertises: the configured ones, led by the
@@ -372,7 +382,7 @@ fn lan_ip() -> Option<IpAddr> {
     socket.local_addr().ok().map(|a| a.ip()).filter(|ip| !ip.is_unspecified() && !ip.is_loopback())
 }
 
-async fn accept_loop<S, F, Fut>(listener: TcpListener, hub: Rc<Hub>, secure: F)
+async fn accept_loop<S, F, Fut>(listener: TcpListener, hub: Rc<Hub>, web: Option<Rc<crate::web::Web>>, secure: F)
 where
     S: AsyncRead + AsyncWrite + Unpin + 'static,
     F: Fn(tokio::net::TcpStream) -> Fut + 'static,
@@ -393,13 +403,81 @@ where
         }
         hub.open.set(hub.open.get() + 1);
         let hub = Rc::clone(&hub);
+        let web = web.clone();
         let secured = secure(stream);
         tokio::task::spawn_local(async move {
             if let Ok(Some(stream)) = tokio::time::timeout(HANDSHAKE_TIMEOUT, secured).await {
-                serve(stream, &hub).await;
+                match web {
+                    Some(web) => route(stream, peer.ip(), &hub, &web).await,
+                    None => serve(stream, &hub).await,
+                }
             }
             hub.open.set(hub.open.get() - 1);
         });
+    }
+}
+
+/// A connection on the listener that also serves the web page: read the
+/// request head, then hand a WebSocket upgrade to the direct link (with the
+/// bytes already read put back in front) and anything else to the page.
+async fn route<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, peer: IpAddr, hub: &Hub, web: &crate::web::Web) {
+    let Ok(Some(head)) = tokio::time::timeout(HANDSHAKE_TIMEOUT, read_head(&mut stream)).await else { return };
+    if crate::web::is_websocket(&head) {
+        serve(Replay { prefix: head, at: 0, inner: stream }, hub).await;
+    } else {
+        crate::web::serve(&head, stream, peer, web).await;
+    }
+}
+
+/// Read until the request head is complete (with whatever followed it in the
+/// same reads), or `None` past [`crate::web::MAX_HEAD_BYTES`] or at the end.
+async fn read_head<S: AsyncRead + Unpin>(stream: &mut S) -> Option<Vec<u8>> {
+    let mut buf = Vec::with_capacity(1024);
+    let mut chunk = [0u8; 2048];
+    while crate::web::head_len(&buf).is_none() {
+        if buf.len() >= crate::web::MAX_HEAD_BYTES {
+            return None;
+        }
+        let read = stream.read(&mut chunk).await.ok()?;
+        if read == 0 {
+            return None;
+        }
+        buf.extend_from_slice(&chunk[..read]);
+    }
+    Some(buf)
+}
+
+/// A stream that yields `prefix` before reading on from `inner`: the request
+/// head [`route`] read to tell a WebSocket from a page, given back to the
+/// WebSocket handshake that needs it.
+struct Replay<S> {
+    prefix: Vec<u8>,
+    at: usize,
+    inner: S,
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for Replay<S> {
+    fn poll_read(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>, buf: &mut ReadBuf<'_>) -> std::task::Poll<std::io::Result<()>> {
+        if self.at < self.prefix.len() {
+            let n = (self.prefix.len() - self.at).min(buf.remaining());
+            let at = self.at;
+            buf.put_slice(&self.prefix[at..at + n]);
+            self.at += n;
+            return std::task::Poll::Ready(Ok(()));
+        }
+        std::pin::Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for Replay<S> {
+    fn poll_write(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>, buf: &[u8]) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+    fn poll_flush(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+    }
+    fn poll_shutdown(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
     }
 }
 
