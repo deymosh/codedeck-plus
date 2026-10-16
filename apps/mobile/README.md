@@ -1,6 +1,6 @@
 # The former Tauri app (frozen)
 
-> **Frozen.** This app stays on protocol v10: it does not talk to a v11
+> **Frozen.** This app stays on protocol v10: it does not talk to a v12
 > bridge, and it is outside the pnpm workspace, CI and releases. The phone
 > client is the native app in [`apps/android`](../android). These sources are
 > kept as the starting point for a future desktop client.

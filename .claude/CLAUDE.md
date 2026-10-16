@@ -5,7 +5,7 @@ Guidance for Claude Code (claude.ai/code) when working in this repository.
 ## Project identity
 
 CodeDeck+ is a community-maintained continuation of CodeDeck Next: run coding
-agents (Claude Code, OpenCode, DeepSeek Harness) on a laptop/VPS ("the bridge") and drive them
+agents (Claude Code, OpenCode, DeepSeek Harness, Qwen Code) on a laptop/VPS ("the bridge") and drive them
 from an Android phone over end-to-end-encrypted Nostr. It started as a merge of
 the two upstream projects (`codedeck-next-bridge`, `codedeck-next-mobile`) and
 has since been rebuilt: the protocol, the bridge and the phone's core are Rust;
@@ -27,7 +27,7 @@ upstream did not design for:
 - **`crates/protocol` is the single source of truth for the phone wire**, and
   **`crates/agent-protocol` for the driver protocol** (bridge ⇄ agent host).
   Decoders are **total** (they return a result, never panic or throw).
-  Protocol v11 is a **clean break** — no compatibility with earlier peers, no
+  Protocol v12 is a **clean break** — no compatibility with earlier peers, no
   version-ladder logic; gate new features on capability strings or on the
   agent catalog's `supports` flags. `crates/protocol` depends on nothing else in
   the workspace, so any client can treat it as the spec.
@@ -121,7 +121,7 @@ credentials (`--env` is for the agent's own paths, not its keys).
 1. **`live fake`** — the scripted test agent: the driver protocol's own
    plumbing, with no SDK and no model at all.
 2. **`live <agent> --fake-model`** — a real agent (claude-code, opencode,
-   deepseek-harness) against a local model server
+   deepseek-harness, qwen-code) against a local model server
    (`packages/agent-host/tools/fake-model.mjs`). The session is real, the
    model is not: each prompt is a scenario — `/tool` (a tool call; OpenCode
    asks permission for it), `/question` (a question form), `/plan-approval`
@@ -132,7 +132,8 @@ credentials (`--env` is for the agent's own paths, not its keys).
 3. **A real model** — OpenCode on its free Zen models
    (`--model opencode/cat-jam-free`) for fidelity, since only a real model
    chooses its own tool arguments and writes prose. Everything else on
-   claude-code or deepseek-harness spends the account.
+   claude-code, deepseek-harness or qwen-code spends the account. The
+   commands for each tier are in the verify-changes skill.
 
 ### CI and releases
 
@@ -210,8 +211,8 @@ crates/protocol          the phone wire: messages, total codec, kinds, ranges,
     │                            workspace, uploads, direct link, CLI.
     │                                 │ stdio (driver protocol)
     │                            packages/agent-host   Node: one driver per agent
-    │                            (opencode, claude, deepseek, fake) around its
-    │                            SDK.
+    │                            (opencode, claude, deepseek, qwen, fake) around
+    │                            its SDK.
     │
     └── crates/client-core       the phone's pure core: stores, connection FSM,
              │                   sync/merge, presentation.
@@ -234,7 +235,7 @@ crates/protocol          the phone wire: messages, total codec, kinds, ranges,
 
 ## Absolute constraints (do not suggest workarounds)
 
-- Never introduce pre-v11 protocol compatibility.
+- Never introduce pre-v12 protocol compatibility.
 - Every phone-wire change starts in `crates/protocol` (with a corpus fixture);
   every driver-protocol change in `crates/agent-protocol` (then regenerate the
   host's types). Keep the decoders total.
@@ -266,9 +267,7 @@ crates/protocol          the phone wire: messages, total codec, kinds, ranges,
 
 ## History note
 
-Commit `c0d8676` restructured the two upstream repos into this monorepo as a
-pure `git mv`. Everything since is this fork's own work: NIP-42, Tor/SOCKS5,
-Orbot, event fragmentation, the native Android app, protocol v11 and the Rust
-bridge. `docs/PROTOCOL.md` is the contributor contract; `crates/protocol` and
+Commit `c0d8676` merged the two upstream repos into this monorepo as a pure
+`git mv`; everything since is this fork's own. `docs/PROTOCOL.md` is the contributor contract; `crates/protocol` and
 `crates/agent-protocol` are authoritative where they disagree. `docs/BRIDGE.md`
 and `docs/CLIENT.md` describe each half as it is today.

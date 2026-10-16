@@ -6,7 +6,7 @@ description: Add or change a message, field or feature that crosses phone ⇄ br
 # A change across the wire
 
 Contract: `docs/PROTOCOL.md` (Part 1 phone wire, Part 2 driver protocol,
-"Adding an agent"). Read only the section for your message. Protocol v11 is a
+"Adding an agent"). Read only the section for your message. Protocol v12 is a
 clean break: no compatibility code; gate on a capability string only if an
 older peer would otherwise hard-fail (`crates/protocol/src/capabilities.rs`
 header), otherwise on the agent catalog's `supports` flags.

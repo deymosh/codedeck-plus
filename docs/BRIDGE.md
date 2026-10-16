@@ -1,7 +1,7 @@
 # The bridge
 
-The bridge runs coding agents (OpenCode, Claude Code and the DeepSeek
-Harness) on your laptop or VPS and serves them to the CodeDeck+ Android app
+The bridge runs coding agents (OpenCode, Claude Code, the DeepSeek
+Harness and Qwen Code) on your laptop or VPS and serves them to the CodeDeck+ Android app
 over end-to-end encrypted Nostr (NIP-44). No accounts and no central server: the phone and the
 bridge pair by scanning a QR code.
 
@@ -78,6 +78,8 @@ asked for:
 - **The DeepSeek Harness**: not one binary but a package tree — some 600
   packages, a few hundred MB, a couple of minutes on a normal connection.
   `CODEDECK_DEEPSEEK_PATH` names a CLI to use instead.
+- **Qwen Code**: a package tree too (`@qwen-code/qwen-code`);
+  `CODEDECK_QWEN_PATH` names a CLI to use instead.
 
 Every download comes from the npm registry and is checked against the sha512
 in this build's `pnpm-lock.yaml`; a mismatch is refused. Binaries live in
@@ -94,7 +96,8 @@ for it.
 - Ahead of time: `codedeck-bridge agents install <agent>…` installs from the
   terminal, into the same cache, before any phone asks.
 - Offline machines: install `claude` (or `opencode`) yourself and it is used
-  as is, point `CODEDECK_DEEPSEEK_PATH` at a harness you installed, or copy an
+  as is, point `CODEDECK_DEEPSEEK_PATH` (or `CODEDECK_QWEN_PATH`) at one you
+  installed, or copy an
   `agents/` directory from another machine.
 - A mirror: `CODEDECK_NPM_REGISTRY=https://…` (the sha512 still applies).
 - An HTTP(S) proxy for the download: Node reads `HTTPS_PROXY` only with
@@ -112,8 +115,8 @@ DeepSeek Harness boots in about a second from the volume and in about 25 from
 `./data`). `/data/agents/bin` holds each one under a stable name and is on
 the container's `PATH`, so `docker compose exec codedeck-bridge claude …` (or
 `opencode …`) works once it is installed. For a host without internet access,
-build with `CODEDECK_BUNDLE_AGENTS=1` in `.env`: the image then carries all
-three agents, and they reach the volume when it is first created; a volume
+build with `CODEDECK_BUNDLE_AGENTS=1` in `.env`: the image then carries
+Claude Code, OpenCode and the DeepSeek Harness (not Qwen Code), and they reach the volume when it is first created; a volume
 that already exists keeps the agents already in it.
 
 The links in `<home>/agents/bin` are for people. The agent host never uses

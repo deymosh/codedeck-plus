@@ -192,7 +192,7 @@ async function main() {
   if (args['fake-model'] && args.agent === 'fake') {
     // Nothing to point and no model to name: the fake agent answers from the
     // prompt itself, and a server behind it would be decoration.
-    say('model: the fake agent runs no model, so --fake-model has nothing to do (it is for claude-code, opencode and deepseek-harness)');
+    say('model: the fake agent runs no model, so --fake-model has nothing to do (it is for claude-code, opencode, deepseek-harness and qwen-code)');
   } else if (args['fake-model']) {
     fakeModel = await startFakeModel({ log: (line) => say(`model: ${line}`), dump: args.dump ?? null });
     fakeSession = fakeModelSession(args.agent, fakeModel.url);
