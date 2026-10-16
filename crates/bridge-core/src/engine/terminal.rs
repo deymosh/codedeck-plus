@@ -26,9 +26,12 @@
 //!   (audited, and told to every present client) — a message naming a
 //!   terminal that is gone, or is another identity's, is answered as one that
 //!   is over, so no client can probe for terminals that are not its own;
-//! - `seq` counts up by one within one writer's run: a takeover hands the pen
-//!   over with the number the new writer starts at, and a seq already applied
-//!   types nothing twice, which is what makes a replayed keystroke harmless;
+//! - a device's `seq` on a terminal only ever grows: it counts what that
+//!   device has typed there and is kept per device, so a takeover hands the
+//!   pen over with the number the new writer resumes at and nothing a device
+//!   sent before can be typed again whoever wrote in between — which is what
+//!   makes a replayed keystroke harmless. A phone keeps one counter per
+//!   terminal and resumes from the seq `terminal-input-from` names;
 //! - output goes only to the clients showing that terminal (`presence`
 //!   `watching_terminal`), which is also what keeps it from sitting idle.
 
@@ -63,6 +66,14 @@ pub const INPUT_GAP_WAIT_MS: u64 = 2_000;
 /// event well below this, so it is a backstop against a future way in (a
 /// chunked or unencrypted path) rather than a limit typing can meet.
 pub const MAX_INPUT_BYTES: usize = 64 * 1024;
+/// The most inputs one terminal holds waiting for a gap, by count. A writer
+/// whose input is this far out of order is not one whose missing event is
+/// still in flight: holding the rest would only be a way to spend the
+/// bridge's memory, so it is asked to resend instead.
+pub const MAX_HELD_INPUTS: usize = 256;
+/// The most bytes those held inputs may add up to, for the same reason: a
+/// keystroke run is a few bytes, and 1 MiB of them is a flood, not typing.
+pub const MAX_HELD_INPUT_BYTES: usize = 1 << 20;
 /// How many devices are kept waiting for the owner's approval. The least
 /// recently seen beyond this are dropped: a phone that keeps trying is not a
 /// reason for the list to grow without end.
@@ -164,7 +175,8 @@ pub struct TerminalAuditRecord {
     /// How long it lived, for an end.
     pub duration_ms: Option<u64>,
     /// What a refusal refused (input that is not base64, input of a size no
-    /// typing has, a seq that never arrived): the reason alone would not say.
+    /// typing has, a seq that never arrived, or one too far ahead to be part
+    /// of a run): the reason alone would not say.
     pub why: Option<String>,
 }
 
@@ -249,8 +261,12 @@ struct Terminal {
     opened_ms: u64,
     /// How the opener's command arrived, for later audit lines about it.
     via: TerminalVia,
-    /// The last `seq` applied: input at or below it types nothing twice.
-    last_seq: u64,
+    /// The last `seq` applied, by the device that sent it: a device's own
+    /// count of what it has typed here, which only ever grows. Keeping it per
+    /// device — and never resetting it, not even for a takeover — is what
+    /// stops a device's earlier keystrokes from being typed a second time
+    /// when it takes the pen back. A device that never typed is at 0.
+    last_seq: BTreeMap<String, u64>,
     /// Input that arrived ahead of the one before it, by seq: held, not
     /// typed, until the gap fills or the wait runs out.
     pending: BTreeMap<u64, Vec<u8>>,
@@ -258,6 +274,19 @@ struct Terminal {
     gap_timer: Option<TimerId>,
     /// The timer that closes it once no client is attached any more.
     idle_timer: Option<TimerId>,
+}
+
+impl Terminal {
+    /// The last `seq` `device` got typed here, and so the seq its next one
+    /// must be. A device that never typed is at 0: its first input is seq 1.
+    fn last_seq_of(&self, device: &str) -> u64 {
+        self.last_seq.get(device).copied().unwrap_or(0)
+    }
+
+    /// The same for the device writing now.
+    fn last_seq(&self) -> u64 {
+        self.last_seq_of(&self.writer)
+    }
 }
 
 /// A `terminal-open` the runtime has been asked to start and has yet to
@@ -377,10 +406,13 @@ impl Terminals {
         }
     }
 
-    /// Type `bytes` as `seq`, the one after the last applied.
+    /// Type `bytes` as `seq`, the one after the last applied, and remember
+    /// that the writer got this far: the count is the writer's own, and it
+    /// never goes back.
     fn apply(&mut self, term: &str, seq: u64, bytes: Vec<u8>, out: &mut Out) {
         let Some(t) = self.open.get_mut(term) else { return };
-        t.last_seq = seq;
+        let writer = t.writer.clone();
+        t.last_seq.insert(writer, seq);
         out.push(Effect::TerminalWrite { term: term.to_string(), bytes });
     }
 
@@ -388,13 +420,34 @@ impl Terminals {
     /// missing seq may still be in flight (a relay reordering two events, a
     /// phone's event arriving late), and typing the later one first would put
     /// its characters in the wrong order. The first hold arms the wait.
-    fn hold(&mut self, term: &str, seq: u64, bytes: Vec<u8>, out: &mut Out) {
-        let Some(t) = self.open.get_mut(term) else { return };
+    ///
+    /// What is held is bounded, because a writer can send any seq it likes: a
+    /// seq too far ahead to be a run with a hole in it, or more held inputs
+    /// or bytes than a run of typing could be, is not held at all. `Some` is
+    /// the reason, which the caller turns into asking the writer to resend —
+    /// holding it would only be a way to spend the bridge's memory.
+    fn hold(&mut self, term: &str, seq: u64, bytes: Vec<u8>, out: &mut Out) -> Option<String> {
+        let t = self.open.get_mut(term)?;
+        let last = t.last_seq();
+        if seq > last.saturating_add(MAX_HELD_INPUTS as u64) {
+            return Some(format!("input at seq {seq} is more than {MAX_HELD_INPUTS} ahead of seq {last}"));
+        }
         t.pending.insert(seq, bytes);
+        // The ahead-of rule above already keeps the count under this — one
+        // window holds one fewer than its width — so this is the backstop for
+        // a writer that gets past it some other way, not the limit.
+        if t.pending.len() > MAX_HELD_INPUTS {
+            return Some(format!("more than {MAX_HELD_INPUTS} inputs held"));
+        }
+        let held: usize = t.pending.values().map(Vec::len).sum();
+        if held > MAX_HELD_INPUT_BYTES {
+            return Some(format!("more than {MAX_HELD_INPUT_BYTES} bytes of input held"));
+        }
         if t.gap_timer.is_none() {
             let id = out.set_timer(INPUT_GAP_WAIT_MS, TimerKind::TerminalGap { term: term.to_string() });
             t.gap_timer = Some(id);
         }
+        None
     }
 
     /// Type everything held behind the gap that just filled, in order, up to
@@ -402,12 +455,13 @@ impl Terminals {
     fn flush_pending(&mut self, term: &str, out: &mut Out) {
         loop {
             let next = match self.open.get(term) {
-                Some(t) if !t.pending.is_empty() => t.last_seq + 1,
+                Some(t) if !t.pending.is_empty() => t.last_seq() + 1,
                 _ => return,
             };
             let Some(t) = self.open.get_mut(term) else { return };
             let Some(bytes) = t.pending.remove(&next) else { break };
-            t.last_seq = next;
+            let writer = t.writer.clone();
+            t.last_seq.insert(writer, next);
             out.push(Effect::TerminalWrite { term: term.to_string(), bytes });
         }
         let Some(t) = self.open.get_mut(term) else { return };
@@ -708,7 +762,7 @@ impl Engine {
                 cwd: open.cwd.clone(),
                 opened_ms: now,
                 via: open.via,
-                last_seq: 0,
+                last_seq: BTreeMap::new(),
                 pending: BTreeMap::new(),
                 gap_timer: None,
                 idle_timer,
@@ -789,10 +843,12 @@ impl Engine {
             log::info!("[Engine] terminal-input for {} from a device that is not its writer — dropped", m.term);
             return;
         }
-        // A seq already applied types nothing twice: a signed keystroke event
-        // a relay replays must not re-type, and a phone resending what it was
+        // A seq already applied by this device types nothing twice: a signed
+        // keystroke event a relay replays must not re-type — not even after
+        // another device has written in between, which is why the count is
+        // kept per device and never reset — and a phone resending what it was
         // asked for overlaps what did arrive.
-        if m.seq <= t.last_seq {
+        if m.seq <= t.last_seq() {
             return;
         }
         let bytes = match STANDARD.decode(&m.data) {
@@ -800,14 +856,15 @@ impl Engine {
             Ok(bytes) => return self.refuse_input(&m.term, &actor, m.seq, &format!("input of {} bytes", bytes.len())),
             Err(_) => return self.refuse_input(&m.term, &actor, m.seq, "input that is not base64"),
         };
-        let expected = self.terminals.open.get(&m.term).map(|t| t.last_seq + 1).unwrap_or(0);
+        let expected = self.terminals.open.get(&m.term).map(|t| t.last_seq() + 1).unwrap_or(0);
         if m.seq == expected {
             self.terminals.apply(&m.term, m.seq, bytes, &mut self.out);
             self.terminals.flush_pending(&m.term, &mut self.out);
-        } else {
-            // Ahead of the one before it: held for the wait, then the phone is
-            // asked for what is missing.
-            self.terminals.hold(&m.term, m.seq, bytes, &mut self.out);
+        } else if let Some(why) = self.terminals.hold(&m.term, m.seq, bytes, &mut self.out) {
+            // Held input past its cap, or a seq no run with a hole in it could
+            // reach: what is held is dropped and the writer is asked for the
+            // run it is missing, which covers every held seq.
+            self.resend_from(&m.term, why);
         }
     }
 
@@ -825,15 +882,32 @@ impl Engine {
     /// the gap, and what was held behind it is dropped — the phone resends
     /// everything from the gap, which covers every held seq.
     pub(super) fn on_terminal_gap(&mut self, term: &str) {
+        let seq = {
+            let Some(t) = self.terminals.open.get_mut(term) else { return };
+            t.gap_timer = None;
+            if t.pending.is_empty() {
+                return;
+            }
+            t.last_seq() + 1
+        };
+        self.resend_from(term, format!("seq {seq} never arrived"));
+    }
+
+    /// Drop what a terminal holds and ask its writer to resend from its own
+    /// next seq: the seq the terminal is waiting on, which is the writer's
+    /// last applied plus one — the numbering is that device's own, so a
+    /// device that has just taken the pen resumes from where it left off.
+    /// `why` is what the audit records: a gap that never filled, or input
+    /// held past what a run of typing could be.
+    fn resend_from(&mut self, term: &str, why: String) {
         let Some(t) = self.terminals.open.get_mut(term) else { return };
-        t.gap_timer = None;
-        if t.pending.is_empty() {
-            return;
-        }
         t.pending.clear();
-        let seq = t.last_seq + 1;
+        if let Some(id) = t.gap_timer.take() {
+            self.out.cancel_timer(id);
+        }
+        let seq = t.last_seq() + 1;
         let (identity, writer) = (t.identity.clone(), t.writer.clone());
-        log::info!("[Engine] terminal {term} is missing input from seq {seq}; asking its writer to resend");
+        log::info!("[Engine] terminal {term} asks its writer to resend from seq {seq}: {why}");
         if let Some(key) = self.terminal_key_of(&identity, &writer) {
             self.out.publish_addressed(
                 vec![Addressee { phone: identity.clone(), key }],
@@ -844,7 +918,7 @@ impl Engine {
         let mut rec = TerminalAuditRecord::new(self.now(), term.to_string(), TerminalAuditWhat::Refused, identity);
         rec.device = Some(writer);
         rec.label = label;
-        rec.why = Some(format!("seq {seq} never arrived"));
+        rec.why = Some(why);
         self.audit(rec);
     }
 
@@ -940,25 +1014,31 @@ impl Engine {
         self.end_terminal(&m.term, TerminalEndReason::Closed, None, Some(&actor));
     }
 
-    /// Hand the pen to `device`: its `seq` starts over.
+    /// Hand the pen to `device`, and tell it the seq its own count resumes
+    /// at.
     ///
-    /// A `seq` is one writer's own count of what it has typed, so a new writer
-    /// must not have its first keystrokes dropped as ones already applied. It
-    /// is told where its numbering starts (`terminal-input-from`), the same
-    /// message a writer gets when the bridge is waiting on a gap.
+    /// A `seq` is one device's own count of what it has typed on this
+    /// terminal, so it only ever grows: nothing is reset here, because a
+    /// device that wrote before — then lost the pen and got it back — must
+    /// not have what it already sent typed again, and its numbering must not
+    /// make the bridge drop its next keystrokes as ones already applied.
+    /// Which is why it is told where to resume (`terminal-input-from`), the
+    /// same message a writer gets when the bridge is waiting on a gap. What
+    /// does not survive the hand-over is the input held for the old writer's
+    /// gap: that writer is not the one who will resend it.
     fn hand_writer(&mut self, term: &str, device: &str) -> bool {
         let Some(t) = self.terminals.open.get_mut(term) else { return false };
         t.writer = device.to_string();
-        t.last_seq = 0;
         t.pending.clear();
         if let Some(id) = t.gap_timer.take() {
             self.out.cancel_timer(id);
         }
         let identity = t.identity.clone();
+        let seq = t.last_seq_of(device) + 1;
         if let Some(key) = self.terminal_key_of(&identity, device) {
             self.out.publish_addressed(
                 vec![Addressee { phone: identity, key }],
-                BridgeToPhone::TerminalInputFrom(TerminalInputFromMsg { term: term.to_string(), seq: 1 }),
+                BridgeToPhone::TerminalInputFrom(TerminalInputFromMsg { term: term.to_string(), seq }),
             );
         }
         true

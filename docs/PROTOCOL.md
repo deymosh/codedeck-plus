@@ -298,13 +298,16 @@ opens a real shell on the bridge's machine:
   shell}`, or `terminal-exited` with `openId` and a refusal `reason`
   (`limit`, `not-allowed`, `disabled`).
 - `terminal-input {term, seq, data}` types into it, writer only. `seq` counts
-  up by one from 1 per terminal: the bridge applies input in that order and
-  drops a `seq` it has already applied, so a relay replaying a signed event
-  types nothing twice. `data` is base64 of the bytes (a key press need not be
-  valid UTF-8). It rides **LIVE_KIND (24515)**, ephemeral like the output —
-  a keystroke is never stored on a relay. A gap the bridge waited for and did
-  not get comes back as `terminal-input-from {term, seq}`: resend from
-  `seq`, the first one that never arrived.
+  up by one from 1 **per terminal and per device**: the bridge applies input
+  in that order and drops a `seq` it has already applied, and a device's
+  count only ever grows — a takeover does not start it over — so a relay
+  replaying a signed event types nothing twice however many writers came in
+  between. `data` is base64 of the bytes (a key press need not be valid
+  UTF-8). It rides **LIVE_KIND (24515)**, ephemeral like the output — a
+  keystroke is never stored on a relay. `terminal-input-from {term, seq}`
+  says resend from `seq`: the first one that never arrived, or — to a device
+  that has just taken the pen — the seq its own count resumes at, which the
+  phone adopts.
 - `terminal-output {term, offset, data}` is what the shell wrote, `data`
   base64 and `offset` the byte offset of its first byte in everything this
   terminal has output. Also LIVE_KIND, and like `partial` it goes ONLY to the

@@ -68,7 +68,9 @@ needs a name that survives rotation, for the allowlist and the audit:
   on Windows `pwsh`, else `powershell`, else `cmd`.
 - **One writer.** Only the device that opened a terminal types into it.
   Another device attaches read-only and can take over explicitly
-  (`terminal-takeover`), which is audited and moves the writer.
+  (`terminal-takeover`), which is audited and moves the writer. The new
+  writer's `seq` resumes where its own last one ended — a takeover never
+  restarts a device's count.
 
 ## Capability
 
@@ -89,15 +91,22 @@ When relays are allowed, a terminal falls back to them like any message.
   stored on a relay**. Phone→bridge input on the live kind is new: the direct
   link accepts it besides commands (today it accepts only 4515), and, with
   relays allowed, the bridge subscribes to it from its paired phones.
-- **Every input carries `seq`**, per terminal, counting up by one from 1. The
-  bridge applies input in order, drops a `seq` it has already applied (a
-  relay's replay of a signed keystroke event re-types nothing), and holds a
-  later one for up to 2 s waiting for the gap, then asks the phone to resend
-  from the gap (`terminal-input-from`). Terminal input does **not** go
+- **Every input carries `seq`**, per terminal **and per device**, counting up
+  by one from 1. The bridge applies input in order, drops a `seq` it has
+  already applied (a relay's replay of a signed keystroke event re-types
+  nothing), and holds a later one for up to 2 s waiting for the gap, then
+  asks the phone to resend from the gap (`terminal-input-from`). A device's
+  `seq` on a terminal only ever grows: a takeover does not start it over, so
+  nothing that device sent before can be typed again whoever wrote in
+  between. The `terminal-input-from` a takeover sends names the seq that
+  device resumes at — the phone keeps one counter per terminal and takes the
+  number it is given. Held input is capped at 256 inputs / 1 MiB; past
+  either, or past a seq no run with a hole in it could reach, what is held is
+  dropped and the writer is asked to resend. Terminal input does **not** go
   through the command dedup set (the 1000 most recent ids, `ingest.rs`):
   a burst of keystrokes would push command ids out of it and reopen a replay
-  window for commands. The per-terminal `seq` is its dedup, and the
-  300-second age limit still applies.
+  window for commands. The per-terminal, per-device `seq` is its dedup, and
+  the 300-second age limit still applies.
 - **Output is coalesced**: the bridge flushes at most every 16 ms on the
   direct link and every 100 ms on relays, or sooner past 16 KiB pending.
   Larger flushes split by the existing `chunk` fragmentation.
@@ -145,7 +154,7 @@ All carry `v` like every message. `term` is a terminal id the bridge assigns.
 | `terminal-open` | phone → bridge | `openId` (the phone's own, echoed back), `cols`, `rows`, `session?` (start in its directory) |
 | `terminal-opened` | bridge → phone | `openId`, `term`, `shell` (what runs, e.g. `/bin/bash`) |
 | `terminal-input` | phone → bridge | `term`, `seq`, `data` (base64 of the bytes — a key press need not be valid UTF-8) |
-| `terminal-input-from` | bridge → phone | `term`, `seq` (resend from here) |
+| `terminal-input-from` | bridge → phone | `term`, `seq` (resend from here; on a takeover, the seq this device's own count resumes at) |
 | `terminal-output` | bridge → phone | `term`, `offset`, `data` (base64) |
 | `terminal-resize` | phone → bridge | `term`, `cols`, `rows` (writer only) |
 | `terminal-replay` | phone → bridge | `term`, `from` (byte offset; attaches read-only) |

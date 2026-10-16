@@ -621,8 +621,9 @@ fn a_takeover_moves_the_pen_and_starts_the_new_writer_at_one() {
     let rec = &audits_of(&acts, TerminalAuditWhat::Takeover)[0];
     assert_eq!(rec.device.as_deref(), Some(other_device.as_str()));
     assert_eq!(rec.label.as_deref(), Some("Tablet"));
-    // The new writer is told where its numbering starts, so its first
-    // keystrokes are not dropped as ones already applied.
+    // The new writer is told where its own numbering resumes, so its first
+    // keystrokes are not dropped as ones already applied. This device has
+    // never typed into this terminal, so it resumes at 1.
     assert_eq!(input_from(&msgs), vec![(term.clone(), 1)]);
 
     world.input_from(&other, &term, 1, "yours\n");
@@ -643,6 +644,170 @@ fn a_takeover_moves_the_pen_and_starts_the_new_writer_at_one() {
     let listed = heartbeat_terminals(&world.messages());
     assert_eq!(listed[0].writer, other_device);
     assert_eq!(listed[0].device, world.device, "the opener is still the opener");
+}
+
+#[test]
+fn a_devices_seq_never_starts_over_so_its_earlier_keystrokes_cannot_be_replayed() {
+    let mut world = World::new();
+    let (other, _) = world.other_device();
+    let term = world.open();
+
+    // A types its run, 1 to 3.
+    for (seq, text) in [(1, "one"), (2, "two"), (3, "three")] {
+        world.input(&term, seq, text);
+    }
+    assert_eq!(typed(&world.acts()).len(), 3);
+    world.rig.take();
+
+    // B takes the pen and types a run of its own, from 1.
+    world.command_from(&other, json!({"v":12,"type":"terminal-takeover","term": term}));
+    let (_, msgs) = world.take();
+    assert_eq!(input_from(&msgs), vec![(term.clone(), 1)], "B has typed nothing here yet");
+    world.input_from(&other, &term, 1, "b-one");
+    world.input_from(&other, &term, 2, "b-two");
+    assert_eq!(typed(&world.acts()).len(), 2);
+    world.rig.take();
+
+    // A takes it back: its own count resumes where it left off, not at 1.
+    world.command(json!({"v":12,"type":"terminal-takeover","term": term}));
+    let (_, msgs) = world.take();
+    assert_eq!(input_from(&msgs), vec![(term.clone(), 4)]);
+
+    // A relay replaying A's earlier signed keystrokes now types nothing —
+    // the seq it applies is A's own, so a device's run cannot be typed twice
+    // whoever wrote in between...
+    world.input(&term, 1, "one");
+    world.input(&term, 2, "two");
+    world.input(&term, 3, "three");
+    assert!(typed(&world.acts()).is_empty(), "a device's seq never starts over");
+    // ...and what A sends next does.
+    world.input(&term, 4, "four");
+    assert_eq!(typed(&world.acts()), vec![(term.clone(), "four".to_string())]);
+}
+
+#[test]
+fn a_device_taking_the_pen_back_resumes_from_its_own_last_seq() {
+    let mut world = World::new();
+    let (other, _) = world.other_device();
+    let term = world.open();
+
+    // B's first takeover of a terminal it has never typed in: seq 1.
+    world.command_from(&other, json!({"v":12,"type":"terminal-takeover","term": term}));
+    assert_eq!(input_from(&world.messages()), vec![(term.clone(), 1)]);
+    world.input_from(&other, &term, 1, "b1");
+    world.input_from(&other, &term, 2, "b2");
+    assert_eq!(typed(&world.acts()).len(), 2);
+
+    // A takes the pen and types a run of its own, and B gets it back: B
+    // resumes from its own 3, not from 1 again.
+    world.command(json!({"v":12,"type":"terminal-takeover","term": term}));
+    assert_eq!(input_from(&world.messages()), vec![(term.clone(), 1)], "A has typed nothing here yet");
+    world.input(&term, 1, "a1");
+    assert_eq!(typed(&world.acts()).len(), 1);
+    world.command_from(&other, json!({"v":12,"type":"terminal-takeover","term": term}));
+    assert_eq!(input_from(&world.messages()), vec![(term.clone(), 3)]);
+    world.input_from(&other, &term, 3, "b3");
+    assert_eq!(typed(&world.acts()), vec![(term.clone(), "b3".to_string())]);
+}
+
+#[test]
+fn a_seq_too_far_ahead_to_be_a_gap_is_not_held() {
+    let mut world = World::new();
+    let term = world.open();
+    world.input(&term, 1, "one");
+    world.rig.take();
+
+    // One behind a gap of one: held, and the wait armed.
+    world.input(&term, 3, "three");
+    assert!(typed(&world.acts()).is_empty(), "3 waits for 2");
+
+    // A seq no run with a hole in it could reach: not held at all — holding
+    // it, and everything a writer could pile up behind it, would only be a
+    // way to spend the bridge's memory.
+    world.input(&term, 1_000_000, "far ahead");
+    let (acts, msgs) = world.take();
+    assert!(typed(&acts).is_empty());
+    assert_eq!(input_from(&msgs), vec![(term.clone(), 2)], "resend from the one it is missing");
+    let rec = &audits_of(&acts, TerminalAuditWhat::Refused)[0];
+    assert!(rec.why.as_deref().unwrap().contains("ahead"), "{:?}", rec.why);
+    assert_eq!(rec.device.as_deref(), Some(world.device.as_str()), "and who sent it");
+    assert_eq!(rec.reason, None, "the terminal is not over, only its input");
+
+    // What was held went with it, and the wait is over: the timer that would
+    // have asked for the gap sends nothing.
+    world.rig.advance(2_000);
+    let (acts, msgs) = world.take();
+    assert!(input_from(&msgs).is_empty(), "the gap timer was cancelled with what was held");
+    assert!(audits_of(&acts, TerminalAuditWhat::Refused).is_empty());
+
+    // The writer resends what it was asked for, and typing goes on from there.
+    world.input(&term, 2, "two");
+    assert_eq!(typed(&world.acts()), vec![(term.clone(), "two".to_string())]);
+}
+
+#[test]
+fn held_input_past_its_byte_cap_is_dropped_and_the_writer_is_asked_to_resend() {
+    let mut world = World::new();
+    let term = world.open();
+    world.input(&term, 1, "one");
+    world.rig.take();
+
+    // Each of these is a valid input on its own — 40 KiB of typing in one
+    // event, as large as the encrypted wire carries at all — and 25 of them
+    // are just under the 1 MiB a terminal holds, which is still held.
+    let big = "x".repeat(40 * 1024);
+    for seq in 3..=27u64 {
+        world.input(&term, seq, &big);
+    }
+    let acts = world.acts();
+    assert!(typed(&acts).is_empty(), "none of it is typed out of order");
+    assert!(audits_of(&acts, TerminalAuditWhat::Refused).is_empty(), "just under 1 MiB is still held");
+
+    // The 26th is past it: nothing more is held, and the writer is asked for
+    // the run it is missing.
+    world.input(&term, 28, &big);
+    let (acts, msgs) = world.take();
+    assert!(typed(&acts).is_empty());
+    assert_eq!(input_from(&msgs), vec![(term.clone(), 2)]);
+    let rec = &audits_of(&acts, TerminalAuditWhat::Refused)[0];
+    assert!(rec.why.as_deref().unwrap().contains("bytes"), "{:?}", rec.why);
+    assert_eq!(rec.device.as_deref(), Some(world.device.as_str()));
+
+    // Nothing is left held and no wait is running: the timer that would have
+    // asked for the gap sends nothing.
+    world.rig.advance(2_000);
+    assert!(input_from(&world.messages()).is_empty());
+    world.input(&term, 2, "two");
+    assert_eq!(typed(&world.acts()), vec![(term.clone(), "two".to_string())]);
+}
+
+#[test]
+fn a_full_window_of_held_input_is_kept_and_one_past_it_is_not() {
+    let mut world = World::new();
+    let term = world.open();
+    world.rig.take();
+
+    // Every seq the ahead-of rule lets in, and no more: 2..=256 is a window
+    // of 256, so the count cap is never met before that rule is — it is the
+    // backstop, not the limit.
+    for seq in 2..=256u64 {
+        world.input(&term, seq, &seq.to_string());
+    }
+    let acts = world.acts();
+    assert!(typed(&acts).is_empty(), "they all wait for 1");
+    assert!(audits_of(&acts, TerminalAuditWhat::Refused).is_empty(), "a full window is still held");
+
+    // One past the window is refused like any other seq too far ahead.
+    world.input(&term, 257, "past the window");
+    let (acts, msgs) = world.take();
+    assert!(typed(&acts).is_empty());
+    assert_eq!(input_from(&msgs), vec![(term.clone(), 1)], "the terminal is still waiting on 1");
+    assert!(audits_of(&acts, TerminalAuditWhat::Refused)[0].why.as_deref().unwrap().contains("ahead"));
+
+    // And the window that was in flight went with the refusal: the writer is
+    // asked for it again and types from where it was told to.
+    world.input(&term, 1, "one");
+    assert_eq!(typed(&world.acts()), vec![(term.clone(), "one".to_string())]);
 }
 
 // --- who is told what ---
@@ -851,8 +1016,8 @@ fn a_device_withdrawn_from_the_allowlist_loses_its_terminals_at_once() {
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].term, mine);
     assert_eq!(listed[0].writer, world.device);
-    // And its input types again, without the new writer being told to
-    // renumber... it was: the pen moved, so its numbering starts at 1.
+    // And its input types again: the pen moved back, and this device has
+    // never typed into that terminal, so its numbering starts at 1.
     world.input(&mine, 1, "back\n");
     assert_eq!(typed(&world.acts()), vec![(mine.clone(), "back\n".to_string())]);
 
