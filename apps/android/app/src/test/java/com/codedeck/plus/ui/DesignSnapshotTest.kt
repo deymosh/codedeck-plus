@@ -3,6 +3,7 @@ package com.codedeck.plus.ui
 import androidx.activity.compose.LocalActivityResultRegistryOwner
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
@@ -21,6 +22,8 @@ import com.codedeck.plus.ui.screens.SessionsContent
 import com.codedeck.plus.ui.screens.MachineTerminalsGroup
 import com.codedeck.plus.ui.screens.TERMINAL_CAPABILITY
 import com.codedeck.plus.ui.screens.TerminalContent
+import com.codedeck.plus.ui.screens.ExtraKeysRow
+import com.codedeck.plus.ui.screens.TerminalLockedContent
 import com.codedeck.plus.ui.components.Page
 import androidx.compose.material3.Text
 import com.codedeck.plus.ui.screens.McpContent
@@ -153,32 +156,32 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
     },
     "session_options" to {
         Box(Modifier.background(Tokens.SurfaceRaised)) {
-            SessionOptionsList(DesignFixtures.claudeOptions, OptionsPage.Main, {}, {}, {}, {}, {}, { _, _ -> }, {})
+            SessionOptionsList(DesignFixtures.claudeOptions, OptionsPage.Main, {}, {}, {}, {}, {}, { _, _ -> }, {}, {})
         }
     },
     "session_options_more" to {
         Box(Modifier.background(Tokens.SurfaceRaised)) {
-            SessionOptionsList(DesignFixtures.opencodeOptions, OptionsPage.Main, {}, {}, {}, {}, {}, { _, _ -> }, {})
+            SessionOptionsList(DesignFixtures.opencodeOptions, OptionsPage.Main, {}, {}, {}, {}, {}, { _, _ -> }, {}, {})
         }
     },
     "session_options_models" to {
         Box(Modifier.background(Tokens.SurfaceRaised)) {
-            SessionOptionsList(DesignFixtures.opencodeOptions, OptionsPage.Models, {}, {}, {}, {}, {}, { _, _ -> }, {})
+            SessionOptionsList(DesignFixtures.opencodeOptions, OptionsPage.Models, {}, {}, {}, {}, {}, { _, _ -> }, {}, {})
         }
     },
     "session_options_persona" to {
         Box(Modifier.background(Tokens.SurfaceRaised)) {
-            SessionOptionsList(DesignFixtures.opencodeOptions, OptionsPage.Persona, {}, {}, {}, {}, {}, { _, _ -> }, {})
+            SessionOptionsList(DesignFixtures.opencodeOptions, OptionsPage.Persona, {}, {}, {}, {}, {}, { _, _ -> }, {}, {})
         }
     },
     "session_options_mcp" to {
         Box(Modifier.background(Tokens.SurfaceRaised)) {
-            SessionOptionsList(DesignFixtures.claudeOptions, OptionsPage.Mcp, {}, {}, {}, {}, {}, { _, _ -> }, {})
+            SessionOptionsList(DesignFixtures.claudeOptions, OptionsPage.Mcp, {}, {}, {}, {}, {}, { _, _ -> }, {}, {})
         }
     },
     "session_options_effort" to {
         Box(Modifier.background(Tokens.SurfaceRaised)) {
-            SessionOptionsList(DesignFixtures.claudeOptions, OptionsPage.Effort, {}, {}, {}, {}, {}, { _, _ -> }, {})
+            SessionOptionsList(DesignFixtures.claudeOptions, OptionsPage.Effort, {}, {}, {}, {}, {}, { _, _ -> }, {}, {})
         }
     },
     "session_context" to {
@@ -290,14 +293,16 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
     },
     "settings_machine" to {
         MachineSettingsContent(
-            machine = workstation, connectedRelays = setOf("wss://relay.example.org"), credentialsStatus = null,
-            now = NOW, dispatch = {}, onBack = {}, onOpenAgent = {},
+            machine = workstation.copy(capabilities = listOf(TERMINAL_CAPABILITY)), connectedRelays = setOf("wss://relay.example.org"),
+            credentialsStatus = null, now = NOW, dispatch = {}, onBack = {}, onOpenAgent = {},
+            terminals = listOf(bashTerminal), onOpenTerminal = {},
         )
     },
     "settings_machine_update_needed" to {
         MachineSettingsContent(
             machine = workstation.copy(updateNeeded = "bridge"), connectedRelays = setOf("wss://relay.example.org"),
             credentialsStatus = null, now = NOW, dispatch = {}, onBack = {}, onOpenAgent = {},
+            terminals = emptyList(), onOpenTerminal = {},
         )
     },
     "terminal_opening" to { Terminal(attached(term = null)) },
@@ -306,11 +311,19 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
     },
     "terminal_ended" to { Terminal(attached(ended = UniffiTerminalEnded("exit", 0))) },
     "terminal_watching" to { Terminal(attached(writer = false)) },
+    "terminal_running_ctrl" to { Terminal(attached(), ctrl = true) },
+    "terminal_locked" to { TerminalLockedContent(available = true, onUnlock = {}, onBack = {}) },
+    "terminal_locked_unavailable" to { TerminalLockedContent(available = false, onUnlock = {}, onBack = {}) },
+    "session_options_terminal" to {
+        Box(Modifier.background(Tokens.SurfaceRaised)) {
+            SessionOptionsList(DesignFixtures.claudeOptions.copy(terminal = true), OptionsPage.Main, {}, {}, {}, {}, {}, { _, _ -> }, {}, {})
+        }
+    },
     "machine_terminals" to {
         Page(title = "Workstation", onBack = {}) {
             MachineTerminalsGroup(
                 workstation.copy(capabilities = listOf(TERMINAL_CAPABILITY)),
-                listOf(UniffiTerminalInfo("t1", "/bin/bash", (NOW - 12 * 60_000).toULong(), "3f9a1c0e", "Pixel 8a", "3f9a1c0e", 80u, 24u)),
+                listOf(bashTerminal),
                 NOW, onOpen = {}, onAttach = {},
             )
             MachineTerminalsGroup(workstation, emptyList(), NOW, onOpen = {}, onAttach = {})
@@ -387,7 +400,7 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
             torOn = false, now = NOW, dispatch = {}, onBack = {},
         )
     },
-    "settings_account_key" to { AccountPage(workstation.npub, signerLabel = null, onLogOut = {}, onBack = {}, revealKey = { null }) },
+    "settings_account_key" to { AccountPage(workstation.npub, signerLabel = null, onLogOut = {}, onBack = {}, requireUnlock = true, unlockAvailable = true, onRequireUnlock = {}, revealKey = { null }) },
     "restore" to { RestoreContent(settings.backup, torOn = false, dispatch = {}, onDone = {}, now = NOW) },
     "restore_on" to {
         RestoreContent(
@@ -428,15 +441,25 @@ private fun attached(
     cols = 80u, rows = 24u, expectedOffset = 0u, waitingInput = ByteArray(0), refusal = refusal, ended = ended,
 )
 
-/** A terminal page, the emulator standing in as a few lines of a shell. */
+/** A bash the Pixel 8a opened twelve minutes ago. */
+private val bashTerminal = UniffiTerminalInfo("t1", "/bin/bash", (NOW - 12 * 60_000).toULong(), "3f9a1c0e", "Pixel 8a", "3f9a1c0e", 80u, 24u)
+
+/**
+ * A terminal page, the emulator standing in as a few lines of a shell, laid
+ * out as the real host lays it out: the extra-keys row under it for the writer.
+ */
 @Composable
-private fun Terminal(attached: UniffiAttachedTerminal) = TerminalContent(
+private fun Terminal(attached: UniffiAttachedTerminal, ctrl: Boolean = false) = TerminalContent(
     attached = attached, onBack = {}, onTakeOver = {}, onClose = {},
-    emulator = {
-        Text(
-            "me@workstation:~/codedeck-plus$ git status\nOn branch master\nnothing to commit, working tree clean\nme@workstation:~/codedeck-plus$ ",
-            color = Tokens.Text, fontFamily = Tokens.FontMono, fontSize = Tokens.TextSm,
-        )
+    emulator = { a ->
+        Column(Modifier.fillMaxSize()) {
+            Text(
+                "me@workstation:~/codedeck-plus$ git status\nOn branch master\nnothing to commit, working tree clean\nme@workstation:~/codedeck-plus$ ",
+                color = Tokens.Text, fontFamily = Tokens.FontMono, fontSize = Tokens.TextSm,
+                modifier = Modifier.weight(1f),
+            )
+            if (a.writer) ExtraKeysRow(ctrl = ctrl, alt = false, onKey = {})
+        }
     },
 )
 
@@ -512,6 +535,10 @@ class DesignSnapshotTest {
     @Test fun terminal_refused() = paparazzi.page("terminal_refused")
     @Test fun terminal_ended() = paparazzi.page("terminal_ended")
     @Test fun terminal_watching() = paparazzi.page("terminal_watching")
+    @Test fun terminal_running_ctrl() = paparazzi.page("terminal_running_ctrl")
+    @Test fun terminal_locked() = paparazzi.page("terminal_locked")
+    @Test fun terminal_locked_unavailable() = paparazzi.page("terminal_locked_unavailable")
+    @Test fun session_options_terminal() = paparazzi.page("session_options_terminal")
     @Test fun machine_terminals() = paparazzi.page("machine_terminals")
     @Test fun settings_agent_opencode() = paparazzi.page("settings_agent_opencode")
     @Test fun settings_agent_claude() = paparazzi.page("settings_agent_claude")

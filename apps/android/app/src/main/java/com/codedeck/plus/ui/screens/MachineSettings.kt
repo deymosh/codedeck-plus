@@ -57,6 +57,7 @@ import kotlinx.coroutines.launch
 import uniffi.client_ffi.UniffiCredentialsAck
 import uniffi.client_ffi.UniffiIntent
 import uniffi.client_ffi.UniffiMachineSummary
+import uniffi.client_ffi.UniffiTerminalInfo
 import uniffi.client_ffi.isRelayUrl
 
 /** Whether the machine is heard from, as a word and its colour. */
@@ -115,7 +116,8 @@ internal fun shortKey(key: String): String = if (key.length <= 20) key else "${k
  * One machine's page: who it is and whether it is up, its agents — the one
  * new sessions start on, and a row each that opens everything about that
  * agent ([onOpenAgent]: its new-session defaults, keys, AI providers,
- * plugins, MCP servers, saved permissions) or installs one it lacks — then
+ * plugins, MCP servers, saved permissions) or installs one it lacks — its
+ * terminals ([onOpenTerminal]: a new one, or one of [terminals]), then
  * what is the machine's own: the relays it is reached over, its direct link,
  * the bridge's credentials, and forgetting it. Pure — the caller supplies
  * the machine and a dispatcher — so it renders the same in a snapshot.
@@ -129,12 +131,15 @@ fun MachineSettingsContent(
     dispatch: (UniffiIntent) -> Unit,
     onBack: () -> Unit,
     onOpenAgent: (agent: String) -> Unit,
+    terminals: List<UniffiTerminalInfo>,
+    onOpenTerminal: (term: String?) -> Unit,
 ) {
     var confirmRemove by remember(machine.pubkeyHex) { mutableStateOf(false) }
 
     Page(title = machineLabel(machine.name), onBack = onBack) {
         MachineHeader(machine, now)
         MachineAgents(machine, dispatch, onOpenAgent)
+        MachineTerminalsGroup(machine, terminals, now, onOpen = { onOpenTerminal(null) }, onAttach = onOpenTerminal)
         MachineRelays(machine, connectedRelays, dispatch)
         Group(
             title = "Direct link",
@@ -323,6 +328,7 @@ fun MachineSettingsScreen(
     pubkey: String,
     onBack: () -> Unit,
     onOpenAgent: (agent: String) -> Unit,
+    onOpenTerminal: (term: String?) -> Unit,
 ) {
     val connection by core.connection.collectAsState()
     val ui by core.ui.collectAsState()
@@ -336,5 +342,7 @@ fun MachineSettingsScreen(
         dispatch = { intent -> scope.launch { core.dispatch(intent) } },
         onBack = onBack,
         onOpenAgent = onOpenAgent,
+        terminals = ui?.terminals?.byMachine?.get(pubkey).orEmpty(),
+        onOpenTerminal = onOpenTerminal,
     )
 }

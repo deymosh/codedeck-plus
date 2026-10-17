@@ -11,6 +11,8 @@
     <!-- Camera is only for the pairing-QR scan (ui/screens/PairingScanView.kt);
          requested on the first scan tap, never at launch. -->
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- The fingerprint or screen-lock prompt before a terminal opens, when the user asks for it. -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
     <!-- Camera-less devices can still install and run: a scan tap on one
          falls into the denied/unavailable no-scan path instead of the app

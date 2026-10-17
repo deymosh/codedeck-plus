@@ -80,9 +80,11 @@ internal data class SessionOptions(
     /** The persona the session runs as, and the one it runs as by default. */
     val persona: String? = null,
     val defaultPersona: String? = null,
+    /** Whether the machine runs terminals, so the sheet offers one in the session's directory. */
+    val terminal: Boolean = false,
 ) {
-    /** Whether the sheet has anything to change. */
-    val changeable: Boolean get() = models.isNotEmpty() || modes.size >= 2 || efforts.isNotEmpty() || mcp != null || personas.size >= 2
+    /** Whether the sheet has anything to offer. */
+    val changeable: Boolean get() = models.isNotEmpty() || modes.size >= 2 || efforts.isNotEmpty() || mcp != null || personas.size >= 2 || terminal
     val modeLabel: String? get() = modes.firstOrNull { it.id == mode }?.label ?: mode
     val effortLabel: String? get() = efforts.firstOrNull { it.id == effort }?.label ?: effort
     val personaLabel: String? get() = personas.firstOrNull { it.id == persona }?.label ?: persona
@@ -198,6 +200,7 @@ internal fun SessionOptionsSheet(
     /** The MCP page opened: the servers' state is asked for again. */
     onMcpOpen: () -> Unit,
     onMcpToggle: (name: String, enabled: Boolean) -> Unit,
+    onTerminal: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     DeckSheet(onDismiss) {
@@ -215,6 +218,7 @@ internal fun SessionOptionsSheet(
             onModel,
             onPersona,
             onMcpToggle,
+            onTerminal,
             onClose = onDismiss,
             modifier = if (pageHeight != null) Modifier.height(pageHeight) else Modifier.onSizeChanged { mainHeight = it.height },
         )
@@ -229,7 +233,7 @@ private const val SHORT_MODEL_LIST = 5
  * first few, the one in use always among them, and "More models" for the
  * rest), then a row each for the persona (who runs it), effort, mode and
  * the session's MCP servers,
- * showing the current value. A row opens its own page; a pick there goes
+ * showing the current value, and a terminal in the session's directory. A row opens its own page; a pick there goes
  * back to the main page. Apart from the sheet so a snapshot can show it.
  */
 @Composable
@@ -242,6 +246,7 @@ internal fun SessionOptionsList(
     onModel: (String) -> Unit,
     onPersona: (String) -> Unit,
     onMcpToggle: (name: String, enabled: Boolean) -> Unit,
+    onTerminal: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -273,6 +278,7 @@ internal fun SessionOptionsList(
                     if (options.efforts.isNotEmpty()) add { NavigationRow("Effort", options.effortLabel) { onPage(OptionsPage.Effort) } }
                     if (options.modes.size >= 2) add { NavigationRow("Mode", options.modeLabel) { onPage(OptionsPage.Mode) } }
                     options.mcp?.let { mcp -> add { McpRow(mcp) { onPage(OptionsPage.Mcp) } } }
+                    if (options.terminal) add { NavigationRow("Terminal here", null, onTerminal) }
                 }
                 if (rows.isNotEmpty()) {
                     Column(

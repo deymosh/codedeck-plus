@@ -44,9 +44,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.codedeck.plus.BuildConfig
 import com.codedeck.plus.core.CoreHost
+import com.codedeck.plus.platform.DeviceUnlock
 import com.codedeck.plus.platform.KeyVault
 import com.codedeck.plus.platform.Login
 import com.codedeck.plus.platform.StayConnectedService
+import com.codedeck.plus.platform.TerminalPrefs
 import com.codedeck.plus.ui.components.ActionRow
 import com.codedeck.plus.ui.components.ConfirmDialog
 import com.codedeck.plus.ui.components.DeckIcons
@@ -95,6 +97,8 @@ internal sealed interface SettingsPage {
     data class PermissionRules(val pubkey: String, val agent: String) : SettingsPage
     /** One agent's AI providers on a machine, opened from the agent's page. */
     data class Providers(val pubkey: String, val agent: String) : SettingsPage
+    /** A terminal on a machine, opened from the machine's page: [term] attaches, null opens one. */
+    data class Terminal(val pubkey: String, val term: String?) : SettingsPage
     data object Appearance : SettingsPage
     data object Notifications : SettingsPage
     data object Connection : SettingsPage
@@ -111,6 +115,7 @@ internal sealed interface SettingsPage {
         is Mcp -> "mcp:$pubkey:$agent"
         is PermissionRules -> "permission-rules:$pubkey:$agent"
         is Providers -> "providers:$pubkey:$agent"
+        is Terminal -> "terminal:$pubkey:${term.orEmpty()}"
         Appearance -> "appearance"
         Notifications -> "notifications"
         Connection -> "connection"
@@ -124,7 +129,7 @@ internal sealed interface SettingsPage {
     val depth: Int
         get() = when (this) {
             Hub -> 0
-            is Agent -> 2
+            is Agent, is Terminal -> 2
             is Plugins, is Mcp, is PermissionRules, is Providers -> 3
             else -> 1
         }
@@ -137,6 +142,7 @@ internal sealed interface SettingsPage {
             saved.startsWith("mcp:") -> saved.split(':').let { Mcp(it[1], it.drop(2).joinToString(":")) }
             saved.startsWith("permission-rules:") -> saved.split(':').let { PermissionRules(it[1], it.drop(2).joinToString(":")) }
             saved.startsWith("providers:") -> saved.split(':').let { Providers(it[1], it.drop(2).joinToString(":")) }
+            saved.startsWith("terminal:") -> saved.split(':').let { Terminal(it[1], it.drop(2).joinToString(":").ifEmpty { null }) }
             saved == "appearance" -> Appearance
             saved == "notifications" -> Notifications
             saved == "connection" -> Connection
@@ -199,6 +205,7 @@ fun SettingsScreen(
     // where each was left; every other page to the hub.
     val parent: SettingsPage? = when (page) {
         is SettingsPage.Agent -> SettingsPage.Machine(page.pubkey)
+        is SettingsPage.Terminal -> SettingsPage.Machine(page.pubkey)
         is SettingsPage.Plugins -> SettingsPage.Agent(page.pubkey, page.agent)
         is SettingsPage.Mcp -> SettingsPage.Agent(page.pubkey, page.agent)
         is SettingsPage.PermissionRules -> SettingsPage.Agent(page.pubkey, page.agent)
@@ -217,6 +224,8 @@ fun SettingsScreen(
     // An npub that fails to derive shows as absent rather than crashing
     // the whole settings hub.
     val npub = remember { runCatching { core.identityNpub() }.getOrDefault("") }
+    val terminalPrefs = remember { TerminalPrefs(context) }
+    var requireUnlock by remember { mutableStateOf(terminalPrefs.requireUnlock) }
     val signerLabel = (login as? Login.SignerApp)?.let { remember(it.packageName) { appLabel(context, it.packageName) } }
 
     pages.SaveableStateProvider(pageKey) {
@@ -246,9 +255,12 @@ fun SettingsScreen(
                         dispatch = ::dispatch,
                         onBack = toHub,
                         onOpenAgent = { agent -> open(SettingsPage.Agent(machine.pubkeyHex, agent)) },
+                        terminals = ui?.terminals?.byMachine?.get(machine.pubkeyHex).orEmpty(),
+                        onOpenTerminal = { term -> open(SettingsPage.Terminal(machine.pubkeyHex, term)) },
                     )
                 }
             }
+            is SettingsPage.Terminal -> TerminalScreen(core, page.pubkey, page.term, session = null, onBack = back)
             is SettingsPage.Agent -> AgentSettingsScreen(
                 core,
                 page.pubkey,
@@ -277,6 +289,12 @@ fun SettingsScreen(
                 signerLabel,
                 onLogOut,
                 toHub,
+                requireUnlock = requireUnlock,
+                unlockAvailable = remember { DeviceUnlock.available(context) },
+                onRequireUnlock = {
+                    terminalPrefs.requireUnlock = it
+                    requireUnlock = it
+                },
                 // Only a key kept on this phone can be shown; reading it
                 // touches the Keystore and a file, so not on the main thread.
                 revealKey = if (login is Login.OnDevice) {
@@ -647,6 +665,9 @@ internal fun AccountPage(
     signerLabel: String?,
     onLogOut: () -> Unit,
     onBack: () -> Unit,
+    requireUnlock: Boolean,
+    unlockAvailable: Boolean,
+    onRequireUnlock: (Boolean) -> Unit,
     revealKey: (suspend () -> String?)? = null,
 ) {
     var confirming by remember { mutableStateOf(false) }
@@ -659,6 +680,16 @@ internal fun AccountPage(
             ) {}
         }
         if (revealKey != null) SecretKeyGroup(revealKey)
+        // A terminal is a shell on the machine: someone holding the unlocked
+        // phone should not get one for free. Shown while on even when the
+        // phone can no longer ask, so it can still be turned off.
+        Group(footer = "Each time a terminal opens on this phone, your fingerprint or screen lock is asked for first.") {
+            if (unlockAvailable || requireUnlock) {
+                SwitchRow("Lock terminals", checked = requireUnlock, onChange = onRequireUnlock, subtitle = "Fingerprint or screen lock")
+            } else {
+                ValueRow("Lock terminals", subtitle = "Needs Android 11 and a fingerprint or screen lock") {}
+            }
+        }
         Group {
             if (confirming) {
                 GroupBody {

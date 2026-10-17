@@ -95,6 +95,18 @@ class CoreHost(
     )
     val events: SharedFlow<CoreEvent> = _events.asSharedFlow()
 
+    /**
+     * Where the terminal on screen takes its output (`CoreEvent.TerminalOutput`),
+     * called on the core's thread. Kept off [events] on purpose: a shell can
+     * send a frame every 16 ms, which would push every other event out of
+     * that flow's small buffer, and dropping a terminal frame there would
+     * leave a hole in the screen that no offset check could see. Set by the
+     * terminal screen before it opens or attaches, so a replay that answers
+     * at once is not missed; null while no terminal is on screen.
+     */
+    @Volatile
+    var terminalOutput: ((CoreEvent.TerminalOutput) -> Unit)? = null
+
     private val _machines = MutableStateFlow<UniffiMachinesView?>(null)
     val machines: StateFlow<UniffiMachinesView?> = _machines.asStateFlow()
 
@@ -223,6 +235,15 @@ class CoreHost(
     }
 
     /**
+     * [dispatch] on the host's own scope, for a caller whose scope is going
+     * away — a screen telling the core it closed, from its `onDispose`, where
+     * a launch on the composition's scope would be cancelled before it ran.
+     */
+    fun dispatchDetached(intent: UniffiIntent) {
+        scope.launch { dispatch(intent) }
+    }
+
+    /**
      * The phone's own Nostr id in bech32 `npub1…` form — derived by the core
      * at construction from the identity secret it holds, so callers get the
      * answer without ever touching that secret themselves. A pure field read
@@ -293,6 +314,10 @@ class CoreHost(
     }
 
     override fun onEvent(event: CoreEvent) {
+        if (event is CoreEvent.TerminalOutput) {
+            terminalOutput?.invoke(event)
+            return
+        }
         _events.tryEmit(event)
         when (event) {
             is CoreEvent.StateChanged -> when (event.slice) {
