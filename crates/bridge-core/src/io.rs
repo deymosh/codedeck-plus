@@ -311,6 +311,16 @@ pub enum Effect {
     /// A paired phone sent the web page's sign-in `code`: the browser
     /// showing it is signed in, by identity `by` (its npub).
     WebSignedIn { code: String, by: String },
+    /// A paired phone asked which browsers are signed in to the web page
+    /// (`web-browsers-request`). The engine holds no browser list — the page
+    /// does — so the runtime answers `client` from its own `Web` with
+    /// `web-browsers`, an empty list when the bridge runs no page.
+    WebBrowsers { client: Addressee },
+    /// A paired phone ended one signed-in browser (`web-browser-sign-out`) by
+    /// the page id `id`. The runtime revokes it and answers the same `client`
+    /// with the fresh list, so an id that matches nothing is still answered
+    /// with the truth rather than silence.
+    WebBrowserSignOut { id: String, client: Addressee },
 }
 
 /// Well-known [`Store`](crate::ports::Store) keys.

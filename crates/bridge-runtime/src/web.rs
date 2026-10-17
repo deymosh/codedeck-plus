@@ -48,7 +48,7 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use bridge_core::{Input, PairedPhone};
-use protocol::events::SessionListMsg;
+use protocol::events::{SessionListMsg, WebBrowserInfo};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -363,7 +363,10 @@ impl Web {
     /// Sign out the browser whose id (the first [`ID_LEN`] hex characters of
     /// its key) is `id`; false when no signed-in browser has it. Any
     /// signed-in browser may sign out any other: they are all the owner's.
-    fn revoke(&self, id: &str) -> bool {
+    /// The engine asks for this on `web-browser-sign-out`, and the page's own
+    /// API on `POST /api/browsers/sign-out` — one path, so the two cannot
+    /// end different browsers.
+    pub fn revoke(&self, id: &str) -> bool {
         if id.len() != ID_LEN {
             return false;
         }
@@ -440,31 +443,59 @@ impl Web {
         .to_string()
     }
 
-    /// The signed-in browsers, oldest first, for `GET /api/browsers`.
-    fn browsers_json(&self, current: Option<&str>) -> String {
-        let mut rows: Vec<(u64, Value)> = self
+    /// The signed-in browsers, oldest signed in first, as `(key, info)`. The
+    /// page's own list: both `browsers_json` and `browsers` read it, so what
+    /// `GET /api/browsers` serves and what a phone's `web-browsers-request`
+    /// is answered with can never disagree.
+    fn browser_rows(&self) -> Vec<(String, WebBrowserInfo)> {
+        let mut rows: Vec<(u64, String, WebBrowserInfo)> = self
             .browsers
             .borrow()
             .iter()
             .filter_map(|(key, browser)| match &browser.access {
                 Access::SignedIn { by, since_ms, expires_ms } => Some((
                     browser.order,
-                    serde_json::json!({
-                        "id": &key[..ID_LEN],
-                        "by": by,
-                        "sinceMs": since_ms,
-                        "lastSeenMs": browser.last_seen_ms,
-                        "expiresMs": expires_ms,
-                        "peer": browser.peer.to_string(),
-                        "agent": browser.agent,
-                        "current": current == Some(key.as_str()),
-                    }),
+                    key.clone(),
+                    WebBrowserInfo {
+                        id: key[..ID_LEN].to_string(),
+                        by: by.clone(),
+                        since_ms: *since_ms,
+                        last_seen_ms: browser.last_seen_ms,
+                        expires_ms: *expires_ms,
+                        peer: browser.peer.to_string(),
+                        agent: browser.agent.clone(),
+                    },
                 )),
                 Access::Pending { .. } => None,
             })
             .collect();
-        rows.sort_by_key(|(order, _)| *order);
-        serde_json::json!({ "browsers": rows.into_iter().map(|(_, row)| row).collect::<Vec<_>>() }).to_string()
+        rows.sort_by_key(|(order, _, _)| *order);
+        rows.into_iter().map(|(_, key, info)| (key, info)).collect()
+    }
+
+    /// The signed-in browsers, oldest signed in first: what a paired phone's
+    /// `web-browsers-request` is answered with, from the same rows
+    /// `GET /api/browsers` serves.
+    pub fn browsers(&self) -> Vec<WebBrowserInfo> {
+        self.browser_rows().into_iter().map(|(_, info)| info).collect()
+    }
+
+    /// The signed-in browsers, oldest first, for `GET /api/browsers`. Each
+    /// row carries `current` — whether it is the browser asking — which only
+    /// the page's own request can know.
+    fn browsers_json(&self, current: Option<&str>) -> String {
+        let rows: Vec<Value> = self
+            .browser_rows()
+            .into_iter()
+            .map(|(key, info)| {
+                let mut row = serde_json::to_value(&info).unwrap_or(Value::Null);
+                if let Value::Object(map) = &mut row {
+                    map.insert("current".to_string(), Value::Bool(current == Some(key.as_str())));
+                }
+                row
+            })
+            .collect();
+        serde_json::json!({ "browsers": rows }).to_string()
     }
 
     /// The paired identities, for `GET /api/devices`.
@@ -1278,6 +1309,36 @@ mod tests {
         assert_eq!(rows[0]["by"], "npub1owner");
         assert!(serde_json::from_slice::<Value>(&response.body).unwrap().get("token").is_none());
         assert!(second.len() > ID_LEN, "the full token is not what the page sees");
+    }
+
+    #[test]
+    fn the_phone_list_is_the_page_list_without_the_current_mark() {
+        let (web, mut inputs, _dir) = web();
+        let first = sign_in(&web, &mut inputs);
+        let (_second, _) = web.start_sign_in(PEER, "curl/8").unwrap();
+        let Some(Input::WebSignInPending { code, .. }) = inputs.try_recv().ok() else { panic!("the engine is told the code") };
+        web.signed_in(&code, "npub1owner");
+
+        let mut get = request("GET", "/api/browsers", HOST);
+        get.cookie = Some(first.clone());
+        let body: Value = serde_json::from_slice(&route(&get, PEER, &web).body).unwrap();
+        let json_ids: Vec<String> = body["browsers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["id"].as_str().unwrap().to_string())
+            .collect();
+
+        // The phone's list and the page's are one list: same rows, same order.
+        let phone = web.browsers();
+        assert_eq!(phone.iter().map(|b| b.id.clone()).collect::<Vec<_>>(), json_ids);
+        assert_eq!(phone[0].id, &token_key(&first)[..ID_LEN], "the id is the key's short public form, never the token");
+        assert_eq!(phone[0].by, "npub1owner");
+        assert_eq!(phone[0].peer, "192.168.1.20");
+        assert_eq!(phone[1].agent, "curl/8");
+        for browser in &phone {
+            assert!(browser.since_ms > 0 && browser.expires_ms > browser.since_ms);
+        }
     }
 
     #[test]

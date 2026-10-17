@@ -21,7 +21,7 @@ use bridge_core::{
 };
 use protocol::commands::UploadFileMsg;
 use protocol::crypto::Keypair;
-use protocol::events::{BridgeToPhone, TerminalOutputMsg};
+use protocol::events::{BridgeToPhone, TerminalOutputMsg, WebBrowserInfo, WebBrowsersMsg};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -340,6 +340,13 @@ impl Runtime {
         false
     }
 
+    /// The browsers signed in to the web page, as the page itself lists them
+    /// (`Web::browsers`). Empty when this bridge runs no page — no direct
+    /// link — so a request is still answered, with the truth.
+    fn web_browsers(&self) -> Vec<WebBrowserInfo> {
+        self.direct.as_ref().map(|direct| direct.web.browsers()).unwrap_or_default()
+    }
+
     /// Carry out one effect; true for [`Effect::Stopped`]. Async because one
     /// effect does blocking file work that must not run here: opening a
     /// terminal's recording, which is handed to a blocking task before its
@@ -360,6 +367,23 @@ impl Runtime {
                 if let Some(direct) = &self.direct {
                     direct.web.signed_in(&code, &by);
                 }
+            }
+            // The page alone holds the list of signed-in browsers, so the
+            // runtime answers both from it: a request with what it has, a
+            // sign-out by ending that browser and then answering with the
+            // fresh list. Both go to the asking client alone.
+            Effect::WebBrowsers { client } => {
+                let message = BridgeToPhone::WebBrowsers(WebBrowsersMsg { browsers: self.web_browsers() });
+                self.relays.publish(vec![client], message);
+            }
+            Effect::WebBrowserSignOut { id, client } => {
+                // `revoke` persists through the web page's own writer thread,
+                // so ending a browser never blocks the bridge's one thread.
+                if let Some(direct) = &self.direct {
+                    direct.web.revoke(&id);
+                }
+                let message = BridgeToPhone::WebBrowsers(WebBrowsersMsg { browsers: self.web_browsers() });
+                self.relays.publish(vec![client], message);
             }
             Effect::Host(frame) => self.host.send(&frame),
             Effect::SetTimer { id, after_ms } => {

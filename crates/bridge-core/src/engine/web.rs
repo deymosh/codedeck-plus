@@ -71,6 +71,24 @@ impl Engine {
         }
         self.publish_to(phone, BridgeToPhone::WebSignInResult(WebSignInResultMsg { code: sent.to_string(), signed_in: live }));
     }
+
+    /// A paired phone asked which browsers are signed in to the page. The
+    /// engine holds no browser list — the page does — so this is an effect the
+    /// runtime answers from its own `Web`, to the client that asked alone.
+    pub(super) fn on_web_browsers_request(&mut self) {
+        if let Some(client) = self.requester.clone() {
+            self.out.push(Effect::WebBrowsers { client });
+        }
+    }
+
+    /// A paired phone ended one signed-in browser by the page id it saw. The
+    /// engine does not know the browser either, so the runtime revokes it and
+    /// answers the same client with the fresh list.
+    pub(super) fn on_web_browser_sign_out(&mut self, id: String) {
+        if let Some(client) = self.requester.clone() {
+            self.out.push(Effect::WebBrowserSignOut { id, client });
+        }
+    }
 }
 
 #[cfg(test)]
