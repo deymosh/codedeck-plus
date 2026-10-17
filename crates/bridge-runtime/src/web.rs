@@ -183,10 +183,6 @@ pub struct Web {
     /// The next [`Browser::order`].
     order: Cell<u64>,
     inputs: mpsc::UnboundedSender<Input>,
-    /// Sign-in switched off for development (`CODEDECK_WEB_NO_SIGN_IN=1`):
-    /// a browser on a loopback or private address is let in without a
-    /// phone. Never on by default, logged loudly, and shown on the page.
-    no_sign_in: bool,
     /// Where the signed-in browsers are kept between restarts.
     sessions_path: PathBuf,
     /// The config file the config API writes.
@@ -212,13 +208,6 @@ impl Web {
         config: ConfigView,
     ) -> Rc<Self> {
         let hosts = endpoints.iter().filter_map(|url| endpoint_host(url)).collect();
-        let no_sign_in = std::env::var("CODEDECK_WEB_NO_SIGN_IN").is_ok_and(|v| v == "1");
-        if no_sign_in {
-            log::warn!(
-                "[Web] SIGN-IN IS OFF (CODEDECK_WEB_NO_SIGN_IN=1): any browser on a loopback or private \
-                 address sees this bridge's page without a phone. For development only."
-            );
-        }
         let sessions_path = home.join("web-sessions.json");
         let browsers = load_sessions(&sessions_path);
         let order = browsers.values().map(|b| b.order).max().unwrap_or(0) + 1;
@@ -233,7 +222,6 @@ impl Web {
             starts: RefCell::default(),
             order: Cell::new(order),
             inputs,
-            no_sign_in,
             sessions_path,
             config_file: config.path,
             config_fields: RefCell::new(config.fields),
@@ -447,7 +435,6 @@ impl Web {
             "machine": self.machine_npub,
             "signedInBy": by,
             "signedInSince": since_ms,
-            "noSignIn": self.no_sign_in,
             "heartbeat": heartbeat.as_ref().map(|h| serde_json::to_value(h).unwrap_or(serde_json::Value::Null)),
         })
         .to_string()
@@ -946,12 +933,7 @@ fn route(request: &Request, peer: IpAddr, web: &Web) -> Response {
     if request.method == "POST" && request.origin.as_deref() != Some(&format!("https://{host}")) {
         return Response::error(403);
     }
-    let browser = if web.no_sign_in && is_local(peer) {
-        let access = Access::SignedIn { by: "sign-in switched off".into(), since_ms: 0, expires_ms: u64::MAX };
-        Some((String::new(), Browser { access, peer, order: 0, agent: String::new(), last_seen_ms: 0 }))
-    } else {
-        web.browser(request.cookie.as_deref())
-    };
+    let browser = web.browser(request.cookie.as_deref());
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/") => Response::new(200, "text/html; charset=utf-8", INDEX_HTML),
         ("GET", "/app.js") => Response::new(200, "text/javascript; charset=utf-8", APP_JS),
@@ -1040,26 +1022,14 @@ fn bad_request(key: &str, message: &str) -> Response {
     Response::json(400, serde_json::json!({ "error": message, "key": key }).to_string())
 }
 
-/// Loopback, a private network (RFC 1918, unique-local IPv6) or link-local:
-/// where the development switch lets a browser in without a phone.
-fn is_local(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
-        IpAddr::V6(v6) => {
-            v6.is_loopback() || (v6.segments()[0] & 0xfe00) == 0xfc00 || (v6.segments()[0] & 0xffc0) == 0xfe80
-                || v6.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback() || v4.is_private())
-        }
-    }
-}
-
 fn me_json(browser: Option<&Browser>) -> String {
     let now = now_ms();
     match browser.map(|b| &b.access) {
         Some(Access::Pending { code, expires_ms }) => {
             serde_json::json!({ "state": "pending", "code": code, "expiresInMs": expires_ms.saturating_sub(now) })
         }
-        Some(Access::SignedIn { by, since_ms, expires_ms }) => {
-            serde_json::json!({ "state": "signed-in", "by": by, "since": since_ms, "noSignIn": *expires_ms == u64::MAX })
+        Some(Access::SignedIn { by, since_ms, .. }) => {
+            serde_json::json!({ "state": "signed-in", "by": by, "since": since_ms })
         }
         None => serde_json::json!({ "state": "signed-out" }),
     }

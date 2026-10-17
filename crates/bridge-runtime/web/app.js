@@ -159,7 +159,6 @@ async function dashboard() {
 function render() {
   const body = lastStatus;
   if (!body) return;
-  $("no-sign-in").hidden = !body.noSignIn;
   const hb = body.heartbeat || {};
   $("machine").textContent = hb.machine || "";
   document.title = `${hb.machine || "Bridge"} · CodeDeck+`;
