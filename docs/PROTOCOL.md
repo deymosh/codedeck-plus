@@ -785,8 +785,29 @@ characters (`ABCD-EFGH`, from an alphabet without look-alikes) and a QR of
 - A phone sends a scanned code only to the machine its QR names: a code
   shown by one bridge must never sign in another's page.
 
-Cost: two small command-class events per sign-in, nothing while no one
-signs in.
+The phone can also see and end the browsers already signed in, the same thing
+the page's own `GET /api/browsers` and `POST /api/browsers/sign-out` do:
+
+- `web-browsers-request {}` (phone → bridge, a signed command like any
+  other). No fields. Sent when the user opens the screen that lists them,
+  never on a timer: the list changes only when a browser signs in or out, so
+  nothing else would make it stale.
+- `web-browsers {browsers}` to the asking client. Each entry is `{id, by,
+  sinceMs, lastSeenMs, expiresMs, peer, agent}`: `id` is the page's short
+  public id — the first 16 hex characters of the stored key's SHA-256, never
+  the key and never the session token — `by` is the npub that signed it in,
+  the three times are ms since the Unix epoch, `peer` the address it came
+  from and `agent` its `User-Agent` (cleaned and bounded). Oldest signed in
+  first; empty when the bridge runs no web page.
+- `web-browser-sign-out {id}` (phone → bridge). Ends the browser whose page
+  id is `id`; any paired client may end any of the owner's browsers. Answered
+  with `web-browsers`, the fresh list — a sign-out is confirmed by the list it
+  produced, and an id that matched nothing is answered with the list as it is,
+  not an error.
+
+Cost: two small command-class events per sign-in, one request and one response
+per screen opening, and the same again per sign-out; nothing while the screen
+is closed.
 
 ### Version and capabilities
 

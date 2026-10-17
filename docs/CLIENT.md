@@ -423,6 +423,12 @@ anything is sent. The QR has no deep link on purpose: a link opened
 elsewhere must not sign a browser in without the user on this page. Closing
 the page dispatches `ClearWebSignIn`, so a late answer is dropped.
 
+The same group lists the browsers already signed in to the page: opening it
+dispatches `RequestWebBrowsers`, and the bridge's `web-browsers` answer fills
+the UI view's `webBrowsers` (by machine). Ending one dispatches
+`SignOutWebBrowser`, which drops the row at once and lets the bridge's fresh
+list — the same message a request is answered with — confirm it.
+
 ## Conventions
 
 - A UniFFI error variant must not have a field named `message` (it collides

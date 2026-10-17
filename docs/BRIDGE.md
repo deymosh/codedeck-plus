@@ -245,8 +245,11 @@ sessions — and never a secret.
 Signed in, the page also has a few JSON APIs: `GET /api/browsers` lists the
 signed-in browsers (each with its id, approver, sign-in and last-seen times,
 expiry, address and User-Agent, and which is the caller) and
-`POST /api/browsers/sign-out` ends one; `GET /api/devices` shows the paired
-identities and their clients (labels and key expiries, never a key);
+`POST /api/browsers/sign-out` ends one — the same list a paired phone reads
+with `web-browsers-request` and ends one of with `web-browser-sign-out`, both
+served from one place so the two paths never disagree; `GET /api/devices`
+shows the paired identities and their clients (labels and key expiries, never
+a key);
 `GET /api/config` shows the config as it is in effect (a secret only as
 set/not set, and each field whether a flag or environment variable overrides
 the file) and `POST /api/config` changes the safe set — the machine name,
