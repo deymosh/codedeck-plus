@@ -221,6 +221,49 @@ the heartbeat): add the host's addresses to `direct.endpoints`, or on the
 phone, in the machine's settings. To turn the link off, remove `direct` from
 `config.json`.
 
+### Web page
+
+With the direct link listening on `wss://`, the same port serves a web page
+for a browser: open `https://<address>:7447/` (the bridge logs it at start,
+`[Web] The bridge's web page: …`). The browser gets the same self-signed
+certificate as the phone, so it shows a certificate warning; compare the
+SHA-256 it shows with the one `[Direct] Listening on …` logs before
+accepting it. Plain `http://` on the port redirects to
+`https://`; the onion listener serves no page.
+
+A browser signs in with a paired phone: the page shows a code and a QR, and
+on the phone the machine's page, "Browsers", scans or types it (the same
+page lists the signed-in browsers and signs one out). The
+browser then stays signed in for 30 days (a cookie only the bridge can read,
+sent only over HTTPS), and it survives a restart: signed-in browsers are kept
+in `<home>/web-sessions.json`, keyed by the cookie's SHA-256 so the file
+holds no token a copy could be replayed from. Signing out, or revoking one
+from the page, ends it; a pending sign-in is never written. Until signed in
+it sees only the sign-in page. The page shows what the heartbeat carries —
+the bridge, the direct link, the agents and their credential status, the
+sessions — and never a secret.
+
+Signed in, the page also has a few JSON APIs: `GET /api/browsers` lists the
+signed-in browsers (each with its id, approver, sign-in and last-seen times,
+expiry, address and User-Agent, and which is the caller) and
+`POST /api/browsers/sign-out` ends one — the same list a paired phone reads
+with `web-browsers-request` and ends one of with `web-browser-sign-out`, both
+served from one place so the two paths never disagree; `GET /api/devices`
+shows the paired identities and their clients (labels and key expiries, never
+a key);
+`GET /api/config` shows the config as it is in effect (a secret only as
+set/not set, and each field whether a flag or environment variable overrides
+the file) and `POST /api/config` changes the safe set — the machine name,
+the relays, the direct endpoints, the transcript retention and the relay /
+Blossom registration tokens — validating each and rewriting `config.json`
+keeping every other key.
+
+Because a LAN or VPN is not a trusted place, the page refuses a `Host` that
+is not an IP address, `localhost` or a host the direct endpoints name,
+requires an `Origin` equal to its own on every `POST`, forbids framing,
+caching and any script or connection not its own, rate-limits sign-in starts
+to 10 a minute per address, and caps pending codes and signed-in browsers.
+
 ## Terminal
 
 A phone can open a real terminal on the bridge: a shell in a pseudo-terminal
@@ -289,6 +332,8 @@ In `<home>`:
 - `bridge.lock` — held while a bridge runs, so two never share one identity;
   `bridge.pid` beside it names the process holding it.
 - `config.json` — optional; tightened to 0600 when read (it may hold admin tokens).
+- `web-sessions.json` — the signed-in browsers of the web page, keyed by the
+  cookie's SHA-256 (never a token), 0600. Deleting it signs every browser out.
 - `direct/cert.der`, `direct/key.der` — the direct link's certificate and its
   key (0600). Deleting them makes a new one; phones pick up the new pin from
   the next heartbeat.

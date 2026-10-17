@@ -516,6 +516,25 @@ impl<'a> Router<'a> {
                     r.persist(StoreId::Machines);
                 }
             }
+            BridgeToPhone::WebSignInResult(m) => {
+                // An answer to a code the screen is no longer showing says
+                // nothing about what it shows now, so the store keeps its
+                // entry and this asks for no re-fetch.
+                if self
+                    .stores
+                    .ui
+                    .apply_web_sign_in_result(machine, &m.code, m.signed_in)
+                {
+                    r.ui_changed = true;
+                }
+            }
+            BridgeToPhone::WebBrowsers(m) => {
+                // The whole list, replacing whatever this machine showed: a
+                // request's list and a sign-out's fresh list are the same
+                // message, so neither is ever merged.
+                self.stores.ui.set_web_browsers(machine, m.browsers.clone());
+                r.ui_changed = true;
+            }
             BridgeToPhone::ProviderProfileAck(m) => {
                 self.stores.ui.apply_provider_profile_ack(
                     machine,
@@ -1586,6 +1605,72 @@ mod tests {
         let ack = &s.ui.credentials_status[MACHINE];
         assert_eq!(ack.state, client_core::stores::ui::AckState::Saved);
         assert_eq!(s.machines.machine(MACHINE).unwrap().credentials[0].valid, Some(true));
+    }
+
+    #[tokio::test]
+    async fn a_web_sign_in_result_moves_the_code_it_answers_and_no_other() {
+        let (mut s, ts, kp) = stores().await;
+        s.ui.note_web_sign_in_sent(MACHINE, "K7QM-4XPA");
+
+        // The answer names a code other than the one on screen — the screen
+        // closed and reopened, or the user retyped — so it is not about this
+        // attempt and the entry stays where it is.
+        let stale = BridgeToPhone::WebSignInResult(protocol::events::WebSignInResultMsg {
+            code: "OLD1-CODE".into(),
+            signed_in: true,
+        });
+        let mut r = Router::new(&mut s, &ts, &kp, 1_000);
+        let out = r.route(MACHINE, &stale).await;
+        assert!(!out.ui_changed);
+        assert_eq!(
+            s.ui.web_sign_in[MACHINE].state,
+            client_core::stores::ui::WebSignInState::Sending
+        );
+
+        let answered = BridgeToPhone::WebSignInResult(protocol::events::WebSignInResultMsg {
+            code: "K7QM-4XPA".into(),
+            signed_in: true,
+        });
+        let mut r = Router::new(&mut s, &ts, &kp, 2_000);
+        let out = r.route(MACHINE, &answered).await;
+        assert!(out.ui_changed);
+        assert_eq!(
+            s.ui.web_sign_in[MACHINE].state,
+            client_core::stores::ui::WebSignInState::SignedIn
+        );
+
+        // The screen closed before the answer came back: nothing to report.
+        s.ui.clear_web_sign_in(MACHINE);
+        let mut r = Router::new(&mut s, &ts, &kp, 3_000);
+        assert!(!r.route(MACHINE, &answered).await.ui_changed);
+    }
+
+    #[tokio::test]
+    async fn a_web_browsers_answer_replaces_that_machines_list_whole() {
+        let (mut s, ts, kp) = stores().await;
+        let browser = protocol::events::WebBrowserInfo {
+            id: "0123456789abcdef".into(),
+            by: "npub1owner".into(),
+            since_ms: 1,
+            last_seen_ms: 2,
+            expires_ms: 3,
+            peer: "192.168.1.20".into(),
+            agent: "Mozilla/5.0".into(),
+        };
+        let message = BridgeToPhone::WebBrowsers(protocol::events::WebBrowsersMsg {
+            browsers: vec![browser.clone()],
+        });
+
+        let mut r = Router::new(&mut s, &ts, &kp, 1_000);
+        let out = r.route(MACHINE, &message).await;
+        assert!(out.ui_changed, "the screen redraws from the new list");
+        assert_eq!(s.ui.web_browsers[MACHINE], vec![browser]);
+
+        // A later, shorter answer is the whole list, not an addition.
+        let empty = BridgeToPhone::WebBrowsers(protocol::events::WebBrowsersMsg { browsers: vec![] });
+        let mut r = Router::new(&mut s, &ts, &kp, 2_000);
+        assert!(r.route(MACHINE, &empty).await.ui_changed);
+        assert!(s.ui.web_browsers[MACHINE].is_empty());
     }
 
     #[tokio::test]

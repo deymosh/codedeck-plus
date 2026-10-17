@@ -53,7 +53,8 @@ import kotlin.coroutines.resume
 import kotlinx.coroutines.suspendCancellableCoroutine
 
 /**
- * Full-screen in-app QR camera scan for the pairing screen — port of
+ * Full-screen in-app QR camera scan, with [prompt] saying what to point it
+ * at (the bridge's pairing QR, a web page's sign-in QR) — port of
  * `apps/mobile/src/platform/qrScan.ts`'s contract: back camera, QR format
  * only, and "no scan" on every exit path. Cancel (close button or system
  * back), a denied CAMERA prompt, missing camera hardware, or a failed
@@ -82,6 +83,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
  */
 @Composable
 fun PairingScanView(
+    prompt: String,
     onDecoded: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -171,7 +173,7 @@ fun PairingScanView(
                             .border(2.dp, Tokens.Text, RoundedCornerShape(Tokens.RadiusMd)),
                     )
                     Text(
-                        "Point the camera at the bridge's pairing QR",
+                        prompt,
                         color = Tokens.TextMuted,
                         fontSize = Tokens.TextSm,
                         modifier = Modifier.padding(top = Tokens.Space3),

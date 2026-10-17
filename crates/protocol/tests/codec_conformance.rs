@@ -109,9 +109,12 @@ fn p2b_type(m: &PhoneToBridge) -> &'static str {
         PhoneToBridge::TerminalReplay(_) => "terminal-replay",
         PhoneToBridge::TerminalTakeover(_) => "terminal-takeover",
         PhoneToBridge::TerminalClose(_) => "terminal-close",
+        PhoneToBridge::WebSignIn(_) => "web-sign-in",
+        PhoneToBridge::WebBrowsersRequest(_) => "web-browsers-request",
+        PhoneToBridge::WebBrowserSignOut(_) => "web-browser-sign-out",
     }
 }
-const P2B_TYPES: usize = 42;
+const P2B_TYPES: usize = 45;
 
 /// Every bridge→phone message type, by wire name (see [`p2b_type`]).
 fn b2p_type(m: &BridgeToPhone) -> &'static str {
@@ -153,9 +156,11 @@ fn b2p_type(m: &BridgeToPhone) -> &'static str {
         BridgeToPhone::TerminalInputFrom(_) => "terminal-input-from",
         BridgeToPhone::TerminalExited(_) => "terminal-exited",
         BridgeToPhone::TerminalEvent(_) => "terminal-event",
+        BridgeToPhone::WebSignInResult(_) => "web-sign-in-result",
+        BridgeToPhone::WebBrowsers(_) => "web-browsers",
     }
 }
-const B2P_TYPES: usize = 37;
+const B2P_TYPES: usize = 39;
 
 #[test]
 fn corpus_covers_every_message_type() {

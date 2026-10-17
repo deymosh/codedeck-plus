@@ -617,6 +617,54 @@ pub struct TerminalEventMsg {
     pub at: u64,
 }
 
+/// The answer to `web-sign-in`, to the client that sent it: whether `code`
+/// was one the web page is showing now (and so a browser is signed in), or
+/// not — mistyped, expired, or already used.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct WebSignInResultMsg {
+    pub code: String,
+    pub signed_in: bool,
+}
+
+/// One browser signed in to a bridge's web page, for `web-browsers`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct WebBrowserInfo {
+    /// The page's short public id for this browser: the first 16 hex
+    /// characters of the SHA-256 of its session key. Never the key itself and
+    /// never the session token, so a copy of the list can be replayed as
+    /// nothing; a `web-browser-sign-out` names this.
+    pub id: String,
+    /// The npub of the phone identity that signed it in.
+    pub by: String,
+    /// When it signed in, ms since the Unix epoch.
+    #[specta(type = specta_typescript::Number)]
+    pub since_ms: u64,
+    /// When it last made an authenticated request, ms since the Unix epoch.
+    #[specta(type = specta_typescript::Number)]
+    pub last_seen_ms: u64,
+    /// When its session lapses, ms since the Unix epoch.
+    #[specta(type = specta_typescript::Number)]
+    pub expires_ms: u64,
+    /// The address it signed in from (an IP; the page keeps no host name).
+    pub peer: String,
+    /// Its `User-Agent`, cleaned of control characters and bounded.
+    pub agent: String,
+}
+
+/// The browsers signed in to the bridge's web page: the answer to
+/// `web-browsers`, and — after a `web-browser-sign-out` — the fresh list with
+/// the ended browser gone. Sent to the asking client alone; another client
+/// that did not ask keeps whatever its own screen last read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct WebBrowsersMsg {
+    /// Signed-in browsers, oldest signed in first. Empty when the bridge runs
+    /// no web page, and for a browser id a sign-out did not match.
+    pub browsers: Vec<WebBrowserInfo>,
+}
+
 /// The bridge→phone message union.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(tag = "type", rename_all = "kebab-case")]
@@ -660,6 +708,8 @@ pub enum BridgeToPhone {
     TerminalExited(TerminalExitedMsg),
     /// To every present client of the identity.
     TerminalEvent(TerminalEventMsg),
+    WebSignInResult(WebSignInResultMsg),
+    WebBrowsers(WebBrowsersMsg),
 }
 
 #[cfg(test)]
@@ -805,6 +855,11 @@ mod tests {
         rt(&json!({"v":12,"type":"terminal-exited","term":"t1","code":0,"reason":"exit"}));
         rt(&json!({"v":12,"type":"terminal-exited","openId":"o1","reason":"not-allowed","device":"d1"}));
         rt(&json!({"v":12,"type":"terminal-event","term":"t1","what":"takeover","device":"d1","name":"Pixel 8","via":"relay","at":1792008058637_u64}));
+        rt(&json!({"v":12,"type":"web-sign-in-result","code":"K7QM-4XPA","signedIn":true}));
+        rt(&json!({"v":12,"type":"web-browsers","browsers":[]}));
+        rt(&json!({"v":12,"type":"web-browsers","browsers":[{
+            "id":"0123456789abcdef","by":"npub1owner","sinceMs":1792008058637_u64,"lastSeenMs":1792008059000_u64,
+            "expiresMs":1804598458637_u64,"peer":"192.168.1.20","agent":"Mozilla/5.0"}]}));
     }
 
     #[test]

@@ -37,6 +37,7 @@ use client_runtime::client_core::presentation::activity::build_activity;
 use client_runtime::client_core::presentation::display_entries::{
     build_display_entries, find_pending_permission, DisplayEntry, SeqEntry,
 };
+use client_runtime::client_core::stores::ui::WebSignInState;
 use client_runtime::{
     MachinesView, OutboxView, PairingView, PendingSessionsView, QuickPromptsView, SettingsView,
     TranscriptRowsView, UiView,
@@ -1242,6 +1243,50 @@ pub struct UniffiProviderProfileAck {
     pub error: Option<String>,
 }
 
+/// Where a `web-sign-in` round trip for one machine stands — mirrors
+/// `client_core::stores::ui::WebSignInState`. `Sending` that is never answered
+/// stays `Sending`: the screen showing the code is the one that times itself
+/// out, so silence is never reported here as a refusal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum UniffiWebSignInState {
+    Sending,
+    SignedIn,
+    NotMatched,
+}
+
+/// The code a phone sent to sign a browser in to a machine's web page, and
+/// where that round trip stands — mirrors `client_core::stores::ui::WebSignIn`
+/// field for field. `code` is the one the phone sent, which is what the
+/// bridge's answer has to name for this entry to move.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct UniffiWebSignIn {
+    pub code: String,
+    pub state: UniffiWebSignInState,
+}
+
+fn to_uniffi_web_sign_in_state(state: WebSignInState) -> UniffiWebSignInState {
+    match state {
+        WebSignInState::Sending => UniffiWebSignInState::Sending,
+        WebSignInState::SignedIn => UniffiWebSignInState::SignedIn,
+        WebSignInState::NotMatched => UniffiWebSignInState::NotMatched,
+    }
+}
+
+/// One browser signed in to a machine's web page — mirrors
+/// `protocol::events::WebBrowserInfo` field for field. `id` is the page's
+/// short public id (never the session token), and it is what a
+/// `SignOutWebBrowser` intent names.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct UniffiWebBrowser {
+    pub id: String,
+    pub by: String,
+    pub since_ms: u64,
+    pub last_seen_ms: u64,
+    pub expires_ms: u64,
+    pub peer: String,
+    pub agent: String,
+}
+
 /// The bottom "Deleted X — Undo" toast after an optimistic session delete —
 /// mirrors `client_core::stores::ui::UndoToast` field for field. Present
 /// only while the 4 s undo window is open; the hide lands as the next
@@ -1268,6 +1313,15 @@ pub struct UniffiUiView {
     pub credentials_status: HashMap<String, UniffiCredentialsAck>,
     /// Keyed by machine pubkey.
     pub provider_profile_status: HashMap<String, UniffiProviderProfileAck>,
+    /// Keyed by machine pubkey: the code this phone sent to sign a browser in
+    /// to that machine's web page, and where the round trip stands. Absent
+    /// until a sign-in screen asks, and again once it closes.
+    pub web_sign_in: HashMap<String, UniffiWebSignIn>,
+    /// Keyed by machine pubkey: the browsers signed in to that machine's web
+    /// page, as the last `web-browsers` listed them. Absent for a machine
+    /// nobody has opened the screen for — the phone asks then, never on a
+    /// timer.
+    pub web_browsers: HashMap<String, Vec<UniffiWebBrowser>>,
     /// Present while a delete's undo window is open.
     pub undo_toast: Option<UniffiUndoToast>,
     /// The terminals, low-frequency state only — output frames arrive on
@@ -1391,6 +1445,40 @@ pub fn build_uniffi_ui_view(v: &UiView) -> UniffiUiView {
                         token_valid: a.token_valid,
                         error: a.error.clone(),
                     },
+                )
+            })
+            .collect(),
+        web_sign_in: v
+            .web_sign_in
+            .iter()
+            .map(|(k, w)| {
+                (
+                    k.clone(),
+                    UniffiWebSignIn {
+                        code: w.code.clone(),
+                        state: to_uniffi_web_sign_in_state(w.state),
+                    },
+                )
+            })
+            .collect(),
+        web_browsers: v
+            .web_browsers
+            .iter()
+            .map(|(machine, browsers)| {
+                (
+                    machine.clone(),
+                    browsers
+                        .iter()
+                        .map(|b| UniffiWebBrowser {
+                            id: b.id.clone(),
+                            by: b.by.clone(),
+                            since_ms: b.since_ms,
+                            last_seen_ms: b.last_seen_ms,
+                            expires_ms: b.expires_ms,
+                            peer: b.peer.clone(),
+                            agent: b.agent.clone(),
+                        })
+                        .collect(),
                 )
             })
             .collect(),

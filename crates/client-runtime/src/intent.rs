@@ -21,7 +21,7 @@ use protocol::commands::{
     AccountActionMsg, AccountsRequestMsg, AgentActionMsg, BareMsg, CreateFolderMsg, CreateSessionMsg, InputMsg, McpActionMsg, McpRequestMsg, ModelsRequestMsg, PermissionResponseMsg, PermissionRulesRemoveMsg, PermissionRulesRequestMsg, PersonasRequestMsg,
     PhoneToBridge, PlanResponseMsg, PluginActionMsg, PluginsRequestMsg, ProviderProfileWrite, QuestionAnswer,
     QuestionResponseMsg, SessionIdMsg, SessionMcpToggleMsg, SetCredentialsMsg, SetOptionMsg, SetProviderProfileMsg,
-    StopTaskMsg, TerminalIdMsg, TerminalResizeMsg,
+    StopTaskMsg, TerminalIdMsg, TerminalResizeMsg, WebBrowserSignOutMsg, WebSignInMsg,
 };
 use protocol::common::{AccountAction, AgentAction, CredentialValues, McpAction, McpServerSpec, PluginAction, SessionOption};
 use protocol::events::McpAckMsg;
@@ -433,6 +433,36 @@ pub enum Intent {
     /// not had them yet (the bridge pushes every change).
     RequestProviderProfiles {
         machine: String,
+    },
+    /// Sign in the browser showing `code` on this machine's web page: the
+    /// signature on the command is what lets it in, so the code alone is
+    /// worthless to anyone else. Answered with
+    /// `BridgeToPhone::WebSignInResult`, taken only when it answers the code
+    /// the ui store recorded for this attempt.
+    WebSignIn {
+        machine: String,
+        code: String,
+    },
+    /// The sign-in screen closed: forget this machine's code, so a late
+    /// answer cannot move an entry nothing is showing any more.
+    ClearWebSignIn {
+        machine: String,
+    },
+    /// Ask this machine's web page which browsers are signed in to it
+    /// (`web-browsers-request`). Sent when the screen that lists them opens,
+    /// never on a timer: the page changes only when a browser signs in or out.
+    /// The answer, `BridgeToPhone::WebBrowsers`, replaces the ui store's list
+    /// for the machine.
+    RequestWebBrowsers {
+        machine: String,
+    },
+    /// End one signed-in browser by the page id the list showed
+    /// (`web-browser-sign-out`). The row goes from the store at once — a
+    /// browser the user ended should not linger on screen — and the bridge's
+    /// answer replaces the list again, with the truth.
+    SignOutWebBrowser {
+        machine: String,
+        id: String,
     },
     /// Create a new project folder under a workspace root (and `git init` it,
     /// bridge-side). Answered with `CoreEvent::FolderAck`, matched by
@@ -965,6 +995,27 @@ pub fn apply(
             if stores.machines.fetches.should_request(&machine, Fetch::ProviderProfiles, ctx.now) {
                 r.send(&machine, PhoneToBridge::ProviderProfilesRequest(BareMsg {}))
             }
+        }
+        Intent::WebSignIn { machine, code } => {
+            stores.ui.note_web_sign_in_sent(&machine, &code);
+            r.ui_changed = true;
+            r.send(&machine, PhoneToBridge::WebSignIn(WebSignInMsg { code }));
+        }
+        Intent::ClearWebSignIn { machine } => {
+            if stores.ui.clear_web_sign_in(&machine) {
+                r.ui_changed = true;
+            }
+        }
+        Intent::RequestWebBrowsers { machine } => {
+            r.send(&machine, PhoneToBridge::WebBrowsersRequest(BareMsg {}));
+        }
+        Intent::SignOutWebBrowser { machine, id } => {
+            // Optimistic: the row goes now, and the bridge's answer — the
+            // fresh list — replaces it with what actually happened.
+            if stores.ui.remove_web_browser(&machine, &id) {
+                r.ui_changed = true;
+            }
+            r.send(&machine, PhoneToBridge::WebBrowserSignOut(WebBrowserSignOutMsg { id }));
         }
         Intent::CreateFolder {
             machine,
@@ -1700,6 +1751,116 @@ mod tests {
             out.sends.as_slice(),
             [Send { machine, msg: PhoneToBridge::ProviderProfilesRequest(_) }] if machine == "m"
         ));
+    }
+
+    #[tokio::test]
+    async fn web_sign_in_sends_the_code_and_records_it_until_answered() {
+        let (mut s, kp) = stores().await;
+        let out = apply(
+            &mut s,
+            Intent::WebSignIn {
+                machine: "m".into(),
+                code: "K7QM-4XPA".into(),
+            },
+            &kp,
+            ctx(),
+        );
+        assert!(matches!(
+            out.sends.as_slice(),
+            [Send { machine, msg: PhoneToBridge::WebSignIn(m) }]
+                if machine == "m" && m.code == "K7QM-4XPA"
+        ));
+        assert!(out.ui_changed, "the sign-in screen reads the entry back");
+        assert_eq!(s.ui.web_sign_in["m"].code, "K7QM-4XPA");
+        assert_eq!(
+            s.ui.web_sign_in["m"].state,
+            client_core::stores::ui::WebSignInState::Sending,
+            "silence is not a verdict; the screen times itself out"
+        );
+    }
+
+    #[tokio::test]
+    async fn clearing_a_web_sign_in_sends_nothing_and_reports_its_own_change() {
+        let (mut s, kp) = stores().await;
+        apply(
+            &mut s,
+            Intent::WebSignIn {
+                machine: "m".into(),
+                code: "K7QM-4XPA".into(),
+            },
+            &kp,
+            ctx(),
+        );
+
+        let out = apply(&mut s, Intent::ClearWebSignIn { machine: "m".into() }, &kp, ctx());
+        assert!(out.sends.is_empty());
+        assert!(out.ui_changed);
+        assert!(!s.ui.web_sign_in.contains_key("m"));
+
+        // Nothing left to forget: no re-fetch for a screen that is gone.
+        let out = apply(&mut s, Intent::ClearWebSignIn { machine: "m".into() }, &kp, ctx());
+        assert!(!out.ui_changed);
+    }
+
+    #[tokio::test]
+    async fn requesting_the_web_browsers_sends_a_bare_request() {
+        let (mut s, kp) = stores().await;
+        let out = apply(
+            &mut s,
+            Intent::RequestWebBrowsers { machine: "m".into() },
+            &kp,
+            ctx(),
+        );
+        assert!(matches!(
+            out.sends.as_slice(),
+            [Send { machine, msg: PhoneToBridge::WebBrowsersRequest(_) }] if machine == "m"
+        ));
+        assert!(!out.ui_changed, "nothing changed until the bridge answers");
+    }
+
+    #[tokio::test]
+    async fn signing_out_a_browser_sends_it_and_drops_the_row_at_once() {
+        let (mut s, kp) = stores().await;
+        s.ui.set_web_browsers("m", vec![protocol::events::WebBrowserInfo {
+            id: "0123456789abcdef".into(),
+            by: "npub1owner".into(),
+            since_ms: 1,
+            last_seen_ms: 2,
+            expires_ms: 3,
+            peer: "192.168.1.20".into(),
+            agent: "Mozilla/5.0".into(),
+        }]);
+
+        let out = apply(
+            &mut s,
+            Intent::SignOutWebBrowser {
+                machine: "m".into(),
+                id: "0123456789abcdef".into(),
+            },
+            &kp,
+            ctx(),
+        );
+        assert!(matches!(
+            out.sends.as_slice(),
+            [Send { machine, msg: PhoneToBridge::WebBrowserSignOut(m) }]
+                if machine == "m" && m.id == "0123456789abcdef"
+        ));
+        assert!(out.ui_changed, "the row left before the answer");
+        assert!(s.ui.web_browsers["m"].is_empty());
+
+        // An id the list no longer holds still goes to the bridge — its
+        // answer is what the screen trusts — but moves nothing here.
+        let out = apply(
+            &mut s,
+            Intent::SignOutWebBrowser {
+                machine: "m".into(),
+                id: "0123456789abcdef".into(),
+            },
+            &kp,
+            ctx(),
+        );
+        assert_eq!(out.sends.len(), 1);
+        assert!(!out.ui_changed);
     }
 
     /// Screens ask each time they open; the profiles, which the bridge

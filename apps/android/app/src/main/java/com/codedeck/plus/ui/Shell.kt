@@ -25,6 +25,7 @@ import com.codedeck.plus.ui.screens.SessionsScreen
 import com.codedeck.plus.platform.Login
 import com.codedeck.plus.ui.screens.LogsScreen
 import com.codedeck.plus.ui.screens.MachineSettingsScreen
+import com.codedeck.plus.ui.screens.WebSignInScreen
 import com.codedeck.plus.ui.screens.PairingScreen
 import com.codedeck.plus.ui.screens.McpScreen
 import com.codedeck.plus.ui.screens.AgentSettingsScreen
@@ -51,6 +52,8 @@ private sealed interface Screen {
     data object Pairing : Screen
     /** A machine's settings page, opened from its name on the sessions list. */
     data class Machine(val machine: String) : Screen
+    /** Signing a browser in to a machine's web page, opened from the machine's page. */
+    data class WebSignIn(val machine: String) : Screen
     /** One agent's page on a machine, opened from the machine's page. */
     data class Agent(val machine: String, val agent: String) : Screen
     /** One agent's plugins on a machine, opened from the agent's page. */
@@ -75,6 +78,7 @@ private fun Screen.parts(): List<String> = when (this) {
     Screen.Logs -> listOf("logs")
     Screen.Pairing -> listOf("pairing")
     is Screen.Machine -> listOf("machine", machine)
+    is Screen.WebSignIn -> listOf("web-sign-in", machine)
     is Screen.Agent -> listOf("agent", machine, agent)
     is Screen.Plugins -> listOf("plugins", machine, agent)
     is Screen.Mcp -> listOf("mcp", machine, agent)
@@ -89,7 +93,7 @@ private fun Screen.stateKey(): String = parts().joinToString("/")
  *  shallower one. */
 private fun Screen.depth(): Int = when (this) {
     Screen.Sessions -> 0
-    Screen.Logs, is Screen.Agent, is Screen.Terminal -> 2
+    Screen.Logs, is Screen.Agent, is Screen.Terminal, is Screen.WebSignIn -> 2
     is Screen.Plugins, is Screen.Mcp, is Screen.PermissionRules, is Screen.Providers -> 3
     else -> 1
 }
@@ -106,6 +110,7 @@ private val ScreenSaver = listSaver<Screen, String>(
             "logs" -> Screen.Logs
             "pairing" -> Screen.Pairing
             "machine" -> Screen.Machine(saved[1])
+            "web-sign-in" -> Screen.WebSignIn(saved[1])
             "agent" -> Screen.Agent(saved[1], saved[2])
             "plugins" -> Screen.Plugins(saved[1], saved[2])
             "mcp" -> Screen.Mcp(saved[1], saved[2])
@@ -272,6 +277,7 @@ fun Shell(
                     when (val current = screen) {
                         Screen.Logs -> Screen.Settings
                         is Screen.Agent -> Screen.Machine(current.machine)
+                        is Screen.WebSignIn -> Screen.Machine(current.machine)
                         is Screen.Plugins -> Screen.Agent(current.machine, current.agent)
                         is Screen.Mcp -> Screen.Agent(current.machine, current.agent)
                         is Screen.PermissionRules -> Screen.Agent(current.machine, current.agent)
@@ -298,6 +304,7 @@ fun Shell(
                     onBack = { go(Screen.Sessions) },
                     onOpenAgent = { agent -> go(Screen.Agent(current.machine, agent)) },
                     onOpenTerminal = { term -> go(Screen.Terminal(current.machine, term, session = null)) },
+                    onOpenWebSignIn = { go(Screen.WebSignIn(current.machine)) },
                 )
                 is Screen.Terminal -> TerminalScreen(
                     core,
@@ -306,6 +313,7 @@ fun Shell(
                     current.session,
                     onBack = { leaveTerminal(current) },
                 )
+                is Screen.WebSignIn -> WebSignInScreen(core, current.machine, onBack = { go(Screen.Machine(current.machine)) })
                 is Screen.Agent -> AgentSettingsScreen(
                     core,
                     current.machine,

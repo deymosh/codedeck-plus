@@ -81,9 +81,14 @@
       { "v": 12, "type": "terminal-resize", "term": "t1", "cols": 100, "rows": 30 },
       { "v": 12, "type": "terminal-replay", "term": "t1", "from": 4096 },
       { "v": 12, "type": "terminal-takeover", "term": "t1" },
-      { "v": 12, "type": "terminal-close", "term": "t1" }
+      { "v": 12, "type": "terminal-close", "term": "t1" },
+      { "v": 12, "type": "web-sign-in", "code": "K7QM-4XPA" },
+      { "v": 12, "type": "web-browsers-request" },
+      { "v": 12, "type": "web-browser-sign-out", "id": "0123456789abcdef" }
     ],
     "rejected": [
+      { "v": 12, "type": "web-sign-in" },
+      { "v": 12, "type": "web-browser-sign-out" },
       { "v": 13, "type": "input", "sessionId": "s", "text": "from a newer phone" },
       { "type": "input", "sessionId": "s", "text": "from an unversioned sender" },
       { "v": 12, "type": "input", "text": "no session id" },
@@ -216,7 +221,10 @@
       { "v": 12, "type": "terminal-exited", "openId": "o2", "reason": "not-allowed", "device": "bf1f111943b3930a4c64a5c06d9153b2" },
       { "v": 12, "type": "terminal-event", "term": "t1", "what": "takeover", "device": "bf1f111943b3930a4c64a5c06d9153b2", "name": "Pixel 8", "via": "relay", "at": 1792008058637 },
       { "v": 12, "type": "terminal-event", "term": "t1", "what": "closed", "device": "aa11", "via": "direct", "at": 1792008058638 },
-      { "v": 12, "type": "sessions", "machine": "m", "sessions": [], "agents": [], "terminals": [{ "term": "t1", "shell": "/bin/bash", "opened": 1792008058637, "device": "bf1f111943b3930a4c64a5c06d9153b2", "name": "Pixel 8", "writer": "bf1f111943b3930a4c64a5c06d9153b2", "cols": 80, "rows": 24 }, { "term": "t2", "shell": "/bin/zsh", "opened": 1792008058638, "device": "aa11", "writer": "aa11", "cols": 132, "rows": 43 }] }
+      { "v": 12, "type": "sessions", "machine": "m", "sessions": [], "agents": [], "terminals": [{ "term": "t1", "shell": "/bin/bash", "opened": 1792008058637, "device": "bf1f111943b3930a4c64a5c06d9153b2", "name": "Pixel 8", "writer": "bf1f111943b3930a4c64a5c06d9153b2", "cols": 80, "rows": 24 }, { "term": "t2", "shell": "/bin/zsh", "opened": 1792008058638, "device": "aa11", "writer": "aa11", "cols": 132, "rows": 43 }] },
+      { "v": 12, "type": "web-sign-in-result", "code": "K7QM-4XPA", "signedIn": true },
+      { "v": 12, "type": "web-browsers", "browsers": [] },
+      { "v": 12, "type": "web-browsers", "browsers": [{ "id": "0123456789abcdef", "by": "npub1owner", "sinceMs": 1792008058637, "lastSeenMs": 1792008059000, "expiresMs": 1804598458637, "peer": "192.168.1.20", "agent": "Mozilla/5.0 (Android 15)" }] }
     ],
     "rejected": [
       { "v": 10, "type": "input-ack", "sessionId": "s", "inputId": "i" },
@@ -237,6 +245,7 @@
       { "v": 12, "type": "input-failed", "sessionId": "s", "reason": "unknown-reason" },
       { "v": 12, "type": "pair-ack", "machine": "m", "ok": true, "reason": "meltdown" },
       { "v": 12, "type": "mode-confirmed", "sessionId": "s", "mode": "plan" },
+      { "v": 12, "type": "web-browsers" },
       { "v": 12, "type": "warp", "sessionId": "s" }
     ]
   },

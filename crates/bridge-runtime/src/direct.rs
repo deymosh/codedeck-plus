@@ -7,6 +7,10 @@
 //! - `ws://` on [`DirectConfig::onion_listen`], loopback only, for an onion
 //!   service to forward to.
 //!
+//! The `wss://` listener also serves the bridge's web page (`crate::web`): a
+//! request that is not a WebSocket upgrade is a page request. The onion
+//! listener serves no page.
+//!
 //! A connection must finish its TLS and WebSocket handshakes within
 //! `HANDSHAKE_TIMEOUT`, then answer the challenge with a paired identity's
 //! HELLO within `HELLO_TIMEOUT`. Then it gets every event the bridge publishes
@@ -31,7 +35,7 @@ use protocol::direct::{
 use protocol::kinds::{COMMAND_KIND, LIVE_KIND};
 use protocol::nostr_event::SignedEvent;
 use sha2::{Digest, Sha256};
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -49,6 +53,11 @@ const HELLO_TIMEOUT: Duration = Duration::from_secs(60);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(400);
 /// Connections served at once, authenticated or not.
 const MAX_CONNECTIONS: usize = 64;
+/// Connections one host holds at once (an IPv6 host by its /64). A phone
+/// holds one and a browser a few; the cap keeps a single host — a flood of
+/// page requests or of handshakes left hanging — from taking the slots the
+/// phones need.
+const MAX_CONNECTIONS_PER_HOST: usize = 8;
 /// Events kept for resuming, at most (besides [`OUTBOX_SECS`]).
 const OUTBOX_CAP: usize = 5000;
 /// Largest frame accepted from a phone. Commands are small; an image goes
@@ -72,6 +81,8 @@ fn short(key: &str) -> &str {
 /// What the runtime needs of a running direct link.
 pub struct Direct {
     pub hub: Rc<Hub>,
+    /// The web page served on the `wss://` listener.
+    pub web: Rc<crate::web::Web>,
     /// What the heartbeat advertises.
     pub info: DirectInfo,
     tasks: Vec<JoinHandle<()>>,
@@ -97,6 +108,8 @@ pub struct Hub {
     /// Published events, oldest first, with the identity each is for.
     outbox: RefCell<VecDeque<(String, SignedEvent)>>,
     open: Cell<usize>,
+    /// Connections open now by host (`web::rate_key`).
+    open_by_host: RefCell<HashMap<std::net::IpAddr, usize>>,
 }
 
 struct Conn {
@@ -171,6 +184,7 @@ impl Hub {
             next_id: Cell::new(0),
             outbox: RefCell::default(),
             open: Cell::new(0),
+            open_by_host: RefCell::default(),
         })
     }
 
@@ -263,16 +277,20 @@ impl Hub {
 }
 
 /// Start the listeners `config` asks for; `None` when it asks for none.
+/// `web_config` is what the page's config API reads and writes.
 pub async fn start(
     config: &DirectConfig,
     home: &Path,
     bridge_pubkey: String,
     inputs: mpsc::UnboundedSender<Input>,
+    web_config: crate::web::ConfigView,
 ) -> Result<Option<Direct>, String> {
     if !config.enabled() {
         log::info!("[Direct] Off (no direct listener configured)");
         return Ok(None);
     }
+    let npub = protocol::crypto::npub_from_hex(&bridge_pubkey).unwrap_or_else(|_| bridge_pubkey.clone());
+    let web = crate::web::Web::new(npub, &config.endpoints, inputs.clone(), home, web_config);
     let hub = Hub::new(bridge_pubkey, inputs);
     let mut tasks = Vec::new();
     let mut bound_wss = None;
@@ -287,10 +305,24 @@ pub async fn start(
         bound_wss = Some(bound);
         log::info!("[Direct] Listening on wss://{bound} (certificate sha256 {})", cert.sha256_hex());
         let hub = Rc::clone(&hub);
+        let web = Rc::clone(&web);
         tasks.push(tokio::task::spawn_local(async move {
-            accept_loop(listener, hub, move |stream| {
+            let pages = Rc::clone(&web);
+            accept_loop(listener, hub, Some(web), move |stream| {
                 let acceptor = acceptor.clone();
-                async move { acceptor.accept(stream).await.ok() }
+                let pages = Rc::clone(&pages);
+                async move {
+                    // A TLS handshake opens with a handshake record (0x16);
+                    // anything else is a browser that typed `http://`, which
+                    // is sent to the `https://` page rather than handed TLS
+                    // bytes it cannot read.
+                    let mut first = [0u8; 1];
+                    if matches!(stream.peek(&mut first).await, Ok(1) if first[0] != 0x16) {
+                        crate::web::redirect_to_https(stream, &pages).await;
+                        return None;
+                    }
+                    acceptor.accept(stream).await.ok()
+                }
             })
             .await
         }));
@@ -300,12 +332,17 @@ pub async fn start(
         log::info!("[Direct] Listening on ws://{addr} for an onion service");
         let hub = Rc::clone(&hub);
         tasks.push(tokio::task::spawn_local(async move {
-            accept_loop(listener, hub, |stream| async move { Some(stream) }).await
+            accept_loop(listener, hub, None, |stream| async move { Some(stream) }).await
         }));
     }
     let endpoints = advertised_endpoints(config, bound_wss, in_container());
     for endpoint in &endpoints {
         log::info!("[Direct] Advertising {endpoint}");
+    }
+    // The page is on the same `wss://` listener, so it is wherever phones
+    // are told to dial it (`localhost` too, on the machine itself).
+    for page in endpoints.iter().filter_map(|e| e.strip_prefix("wss://")) {
+        log::info!("[Web] The bridge's web page: https://{}/", page.trim_end_matches('/'));
     }
     if endpoints.is_empty() {
         log::info!(
@@ -313,7 +350,7 @@ pub async fn start(
              Add the host's address to direct.endpoints, or on the phone (the machine's page)."
         );
     }
-    Ok(Some(Direct { hub, info: DirectInfo { endpoints, cert_sha256 }, tasks }))
+    Ok(Some(Direct { hub, web, info: DirectInfo { endpoints, cert_sha256 }, tasks }))
 }
 
 /// The endpoints the heartbeat advertises: the configured ones, led by the
@@ -372,7 +409,7 @@ fn lan_ip() -> Option<IpAddr> {
     socket.local_addr().ok().map(|a| a.ip()).filter(|ip| !ip.is_unspecified() && !ip.is_loopback())
 }
 
-async fn accept_loop<S, F, Fut>(listener: TcpListener, hub: Rc<Hub>, secure: F)
+async fn accept_loop<S, F, Fut>(listener: TcpListener, hub: Rc<Hub>, web: Option<Rc<crate::web::Web>>, secure: F)
 where
     S: AsyncRead + AsyncWrite + Unpin + 'static,
     F: Fn(tokio::net::TcpStream) -> Fut + 'static,
@@ -391,15 +428,82 @@ where
             log::warn!("[Direct] Refusing {peer}: {MAX_CONNECTIONS} connections open");
             continue;
         }
+        let host = crate::web::rate_key(peer.ip());
+        {
+            let mut by_host = hub.open_by_host.borrow_mut();
+            let held = by_host.entry(host).or_insert(0);
+            if *held >= MAX_CONNECTIONS_PER_HOST {
+                log::info!("[Direct] Refusing {peer}: {MAX_CONNECTIONS_PER_HOST} connections open from that host");
+                continue;
+            }
+            *held += 1;
+        }
         hub.open.set(hub.open.get() + 1);
         let hub = Rc::clone(&hub);
+        let web = web.clone();
         let secured = secure(stream);
         tokio::task::spawn_local(async move {
             if let Ok(Some(stream)) = tokio::time::timeout(HANDSHAKE_TIMEOUT, secured).await {
-                serve(stream, &hub).await;
+                match web {
+                    Some(web) => route(stream, peer.ip(), &hub, &web).await,
+                    None => serve(stream, &hub).await,
+                }
             }
             hub.open.set(hub.open.get() - 1);
+            let mut by_host = hub.open_by_host.borrow_mut();
+            if let Some(held) = by_host.get_mut(&host) {
+                *held -= 1;
+                if *held == 0 {
+                    by_host.remove(&host);
+                }
+            }
         });
+    }
+}
+
+/// A connection on the listener that also serves the web page: read the
+/// request head, then hand a WebSocket upgrade to the direct link (with the
+/// bytes already read put back in front) and anything else to the page.
+async fn route<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, peer: IpAddr, hub: &Hub, web: &crate::web::Web) {
+    let Ok(Some(head)) = tokio::time::timeout(HANDSHAKE_TIMEOUT, crate::web::read_head(&mut stream)).await else { return };
+    if crate::web::is_websocket(&head) {
+        serve(Replay { prefix: head, at: 0, inner: stream }, hub).await;
+    } else {
+        crate::web::serve(&head, stream, peer, web).await;
+    }
+}
+
+/// A stream that yields `prefix` before reading on from `inner`: the request
+/// head [`route`] read to tell a WebSocket from a page, given back to the
+/// WebSocket handshake that needs it.
+struct Replay<S> {
+    prefix: Vec<u8>,
+    at: usize,
+    inner: S,
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for Replay<S> {
+    fn poll_read(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>, buf: &mut ReadBuf<'_>) -> std::task::Poll<std::io::Result<()>> {
+        if self.at < self.prefix.len() {
+            let n = (self.prefix.len() - self.at).min(buf.remaining());
+            let at = self.at;
+            buf.put_slice(&self.prefix[at..at + n]);
+            self.at += n;
+            return std::task::Poll::Ready(Ok(()));
+        }
+        std::pin::Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for Replay<S> {
+    fn poll_write(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>, buf: &[u8]) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+    fn poll_flush(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+    }
+    fn poll_shutdown(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
     }
 }
 

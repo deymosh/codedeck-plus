@@ -564,6 +564,28 @@ pub struct TerminalIdMsg {
     pub term: String,
 }
 
+/// `web-sign-in`: sign in the browser showing `code` on this bridge's web
+/// page. The page shows a short code (and a QR of it) to a browser that asks
+/// to sign in; a paired phone sending it — signed by the identity, like every
+/// command — is what lets that browser in, so the page needs no password.
+/// Reply: `web-sign-in-result`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct WebSignInMsg {
+    pub code: String,
+}
+
+/// `web-browser-sign-out`: end the browser whose page id is `id` — the short
+/// id `web-browsers` listed, never the session token. Any paired client may
+/// sign out any browser: they are all the owner's. Reply: `web-browsers`, the
+/// fresh list with it gone; an id that matches no signed-in browser leaves
+/// the list as it was.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct WebBrowserSignOutMsg {
+    pub id: String,
+}
+
 /// The phone→bridge message union.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(tag = "type", rename_all = "kebab-case")]
@@ -624,6 +646,15 @@ pub enum PhoneToBridge {
     TerminalTakeover(TerminalIdMsg),
     /// Hang up a terminal.
     TerminalClose(TerminalIdMsg),
+    WebSignIn(WebSignInMsg),
+    /// List the browsers signed in to this bridge's web page. No fields.
+    /// Reply: `web-browsers`, to this client alone. Sent when the user opens
+    /// the screen that shows them, never on a timer: the list changes only
+    /// when a browser signs in or out.
+    WebBrowsersRequest(BareMsg),
+    /// End one signed-in browser by its page id. Reply: `web-browsers`, the
+    /// fresh list.
+    WebBrowserSignOut(WebBrowserSignOutMsg),
 }
 
 #[cfg(test)]
@@ -696,6 +727,9 @@ mod tests {
         rt(&json!({"v":12,"type":"pair-request","npub":"npub1","pubkeyHex":"aa","label":"phone","token":"t"}));
         rt(&json!({"v":12,"type":"pair-request","npub":"npub1","pubkeyHex":"aa","label":"phone","token":"t","sessionKey":{"pubkeyHex":"bb","bridgePubkeyHex":"cc","expiresAt":1800000000}}));
         rt(&json!({"v":12,"type":"provider-profiles-request"}));
+        rt(&json!({"v":12,"type":"web-sign-in","code":"K7QM-4XPA"}));
+        rt(&json!({"v":12,"type":"web-browsers-request"}));
+        rt(&json!({"v":12,"type":"web-browser-sign-out","id":"0123456789abcdef"}));
         rt(&json!({"v":12,"type":"session-key","sessionKey":{"pubkeyHex":"bb","bridgePubkeyHex":"cc","expiresAt":1800000000}}));
         rt(&json!({"v":12,"type":"session-key","sessionKey":{"pubkeyHex":"bb","bridgePubkeyHex":"cc","expiresAt":1800000000,"label":"Pixel 8"}}));
         rt(&json!({"v":12,"type":"presence","watchingTerminal":"t1"}));
@@ -713,6 +747,11 @@ mod tests {
         // A window size past u16, and input without its bytes.
         assert!(serde_json::from_str::<PhoneToBridge>(r#"{"v":12,"type":"terminal-open","openId":"o","cols":70000,"rows":24}"#).is_err());
         assert!(serde_json::from_str::<PhoneToBridge>(r#"{"v":12,"type":"terminal-input","term":"t","seq":1}"#).is_err());
+    }
+
+    #[test]
+    fn a_web_browser_sign_out_must_name_an_id() {
+        assert!(serde_json::from_str::<PhoneToBridge>(r#"{"v":12,"type":"web-browser-sign-out"}"#).is_err());
     }
 
     #[test]

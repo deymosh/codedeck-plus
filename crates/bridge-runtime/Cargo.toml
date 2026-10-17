@@ -48,6 +48,10 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["ring",
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rcgen = { version = "0.13", default-features = false, features = ["crypto", "ring"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+# The web page's request parsing (`src/web.rs`), already in the tree through
+# the WebSocket handshake.
+httparse = "1"
+
 # Terminals (src/terminal.rs): a real pty per terminal the phone opens — a
 # unix pty, ConPTY on Windows — so interactive programs behave as they do
 # over ssh. The runtime owns it; the engine only decides.

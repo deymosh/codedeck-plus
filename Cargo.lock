@@ -389,6 +389,7 @@ dependencies = [
  "env_logger",
  "futures-util",
  "hex",
+ "httparse",
  "log",
  "nix",
  "nostr",

@@ -34,7 +34,7 @@ pub mod time;
 
 pub use engine::{
     Config, Engine, PendingDevice, TerminalAllowlist, TerminalAuditRecord, TerminalAuditWhat, TerminalConfig,
-    DEFAULT_HEARTBEAT_INTERVAL_MS, MAX_CLIENTS,
+    DEFAULT_HEARTBEAT_INTERVAL_MS, MAX_CLIENTS, MAX_WEB_SIGN_IN_CODES,
 };
 pub use sync::SyncConfig;
 pub use io::*;

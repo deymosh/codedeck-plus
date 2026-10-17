@@ -11,6 +11,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use protocol::events::WebBrowserInfo;
 use serde::Serialize;
 
 pub use crate::notifications::session_key_of;
@@ -54,6 +55,26 @@ pub struct ProviderProfileAck {
     pub token_valid: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+/// Where a `web-sign-in` round trip for one machine stands. `Sending` with no
+/// answer stays `Sending` — the screen showing the code is the one that times
+/// itself out, so nothing here turns silence into a verdict.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
+#[serde(rename_all = "lowercase")]
+pub enum WebSignInState {
+    Sending,
+    SignedIn,
+    NotMatched,
+}
+
+/// The code a phone sent to sign a browser in to a machine's web page, kept
+/// so the bridge's answer can be matched to the attempt it belongs to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct WebSignIn {
+    pub code: String,
+    pub state: WebSignInState,
 }
 
 /// The bottom "Deleted X — Undo" toast for a pending session delete. The
@@ -116,6 +137,13 @@ pub struct UiState {
     pub plan_approval_choices: BTreeMap<String, String>,
     pub credentials_status: BTreeMap<String, CredentialsAck>,
     pub provider_profile_status: BTreeMap<String, ProviderProfileAck>,
+    /// machine pubkey → the `web-sign-in` the phone last sent there.
+    pub web_sign_in: BTreeMap<String, WebSignIn>,
+    /// machine pubkey → the browsers signed in to its web page, as the last
+    /// `web-browsers` listed them. Filled only while a screen asks — the phone
+    /// sends `web-browsers-request` when the user opens it, never on a timer —
+    /// so a machine nobody has looked at is simply absent.
+    pub web_browsers: BTreeMap<String, Vec<WebBrowserInfo>>,
     pub undo_toast: Option<UndoToast>,
 }
 
@@ -264,11 +292,75 @@ impl UiState {
     pub fn set_undo_toast(&mut self, toast: Option<UndoToast>) {
         self.undo_toast = toast;
     }
+
+    /// A `web-sign-in` left for this machine: the code the phone is asking the
+    /// bridge to honour, remembered verbatim so the answer can be matched to
+    /// this attempt and not to a later one.
+    pub fn note_web_sign_in_sent(&mut self, machine_pubkey: &str, code: &str) {
+        self.web_sign_in.insert(
+            machine_pubkey.to_string(),
+            WebSignIn {
+                code: code.to_string(),
+                state: WebSignInState::Sending,
+            },
+        );
+    }
+
+    /// The bridge's answer to a `web-sign-in` on this machine, which moves the
+    /// entry only when it answers the code recorded now — an answer to an
+    /// older code says nothing about the attempt on screen. Once a code has
+    /// signed a browser in, a later refusal of the same code does not undo
+    /// it: a code works once, so the answer to a resend of it (the phone sent
+    /// it again while the first answer was late) is always a refusal, and
+    /// says nothing about the browser it already let in. Whether the entry
+    /// moved.
+    pub fn apply_web_sign_in_result(&mut self, machine_pubkey: &str, code: &str, signed_in: bool) -> bool {
+        let Some(entry) = self.web_sign_in.get_mut(machine_pubkey) else {
+            return false;
+        };
+        if entry.code != code || (!signed_in && entry.state == WebSignInState::SignedIn) {
+            return false;
+        }
+        entry.state = if signed_in {
+            WebSignInState::SignedIn
+        } else {
+            WebSignInState::NotMatched
+        };
+        true
+    }
+
+    /// The sign-in screen closed: forget this machine's code. Whether there
+    /// was one.
+    pub fn clear_web_sign_in(&mut self, machine_pubkey: &str) -> bool {
+        self.web_sign_in.remove(machine_pubkey).is_some()
+    }
+
+    /// The bridge's `web-browsers` for this machine: the browsers signed in
+    /// to its web page, as it last listed them. Replaced whole by every answer
+    /// — a request's list and a sign-out's fresh list are the same message —
+    /// so this is never merged with what was there.
+    pub fn set_web_browsers(&mut self, machine_pubkey: &str, browsers: Vec<WebBrowserInfo>) {
+        self.web_browsers.insert(machine_pubkey.to_string(), browsers);
+    }
+
+    /// Drop one browser from this machine's list the moment a sign-out is
+    /// sent, so the screen does not keep showing one the user ended. The
+    /// bridge's answer replaces the list again — with the truth, which still
+    /// holds the browser if the id matched nothing. Whether the id was there.
+    pub fn remove_web_browser(&mut self, machine_pubkey: &str, id: &str) -> bool {
+        let Some(browsers) = self.web_browsers.get_mut(machine_pubkey) else {
+            return false;
+        };
+        let before = browsers.len();
+        browsers.retain(|b| b.id != id);
+        browsers.len() != before
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use protocol::events::WebBrowserInfo;
 
     #[test]
     fn mark_clear_is_session_unread_round_trip_keyed_per_machine_and_session() {
@@ -388,6 +480,93 @@ mod tests {
         let ack = &ui.provider_profile_status["m"];
         assert_eq!(ack.state, AckState::Saved);
         assert_eq!(ack.token_valid, Some(false));
+    }
+
+    #[test]
+    fn a_web_sign_in_answer_moves_only_the_code_it_answers() {
+        let mut ui = UiState::default();
+        ui.note_web_sign_in_sent("m", "K7QM-4XPA");
+        assert_eq!(ui.web_sign_in["m"].state, WebSignInState::Sending);
+
+        assert!(ui.apply_web_sign_in_result("m", "K7QM-4XPA", true));
+        assert_eq!(ui.web_sign_in["m"].state, WebSignInState::SignedIn);
+        assert_eq!(ui.web_sign_in["m"].code, "K7QM-4XPA");
+
+        // A refusal lands too, and on the same terms.
+        ui.note_web_sign_in_sent("m", "AAAA-BBBB");
+        assert!(ui.apply_web_sign_in_result("m", "AAAA-BBBB", false));
+        assert_eq!(ui.web_sign_in["m"].state, WebSignInState::NotMatched);
+    }
+
+    #[test]
+    fn a_resent_code_refused_after_it_signed_in_stays_signed_in() {
+        let mut ui = UiState::default();
+        ui.note_web_sign_in_sent("m", "K7QM-4XPA");
+        // The first answer was late, so the code went again.
+        ui.note_web_sign_in_sent("m", "K7QM-4XPA");
+        assert!(ui.apply_web_sign_in_result("m", "K7QM-4XPA", true));
+        assert!(!ui.apply_web_sign_in_result("m", "K7QM-4XPA", false), "the resend was refused because the code was used");
+        assert_eq!(ui.web_sign_in["m"].state, WebSignInState::SignedIn);
+    }
+
+    #[test]
+    fn a_late_answer_to_an_older_code_is_ignored() {
+        let mut ui = UiState::default();
+        ui.note_web_sign_in_sent("m", "OLD1-CODE");
+        ui.note_web_sign_in_sent("m", "NEW1-CODE");
+
+        assert!(!ui.apply_web_sign_in_result("m", "OLD1-CODE", true), "not this attempt's answer");
+        assert_eq!(ui.web_sign_in["m"].state, WebSignInState::Sending);
+        assert_eq!(ui.web_sign_in["m"].code, "NEW1-CODE");
+
+        // An answer with no entry at all (the screen closed) is ignored too.
+        assert!(!ui.apply_web_sign_in_result("other", "NEW1-CODE", true));
+    }
+
+    #[test]
+    fn clearing_a_web_sign_in_reports_whether_there_was_one() {
+        let mut ui = UiState::default();
+        assert!(!ui.clear_web_sign_in("m"));
+        ui.note_web_sign_in_sent("m", "K7QM-4XPA");
+        assert!(ui.clear_web_sign_in("m"));
+        assert!(!ui.web_sign_in.contains_key("m"));
+        assert!(!ui.clear_web_sign_in("m"));
+    }
+
+    fn a_browser() -> WebBrowserInfo {
+        WebBrowserInfo {
+            id: "0123456789abcdef".into(),
+            by: "npub1owner".into(),
+            since_ms: 1,
+            last_seen_ms: 2,
+            expires_ms: 3,
+            peer: "192.168.1.20".into(),
+            agent: "Mozilla/5.0".into(),
+        }
+    }
+
+    #[test]
+    fn a_web_browsers_answer_replaces_the_whole_list_for_its_machine() {
+        let mut ui = UiState::default();
+        let mut second = a_browser();
+        second.id = "fedcba9876543210".into();
+        ui.set_web_browsers("m", vec![a_browser(), second.clone()]);
+        assert_eq!(ui.web_browsers["m"].len(), 2);
+        assert!(!ui.web_browsers.contains_key("other"));
+
+        // A later answer, even a shorter one, is the whole list — never merged.
+        ui.set_web_browsers("m", vec![second.clone()]);
+        assert_eq!(ui.web_browsers["m"], vec![second]);
+    }
+
+    #[test]
+    fn removing_a_browser_reports_whether_the_id_was_there() {
+        let mut ui = UiState::default();
+        assert!(!ui.remove_web_browser("m", "0123456789abcdef"), "no list at all");
+        ui.set_web_browsers("m", vec![a_browser()]);
+        assert!(ui.remove_web_browser("m", "0123456789abcdef"));
+        assert!(ui.web_browsers["m"].is_empty());
+        assert!(!ui.remove_web_browser("m", "0123456789abcdef"), "already gone");
     }
 
     #[test]

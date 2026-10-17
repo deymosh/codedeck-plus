@@ -167,6 +167,7 @@ internal fun PairingBody(
         // runs exactly once per granted+open window.
         if (scanOpen) {
             PairingScanView(
+                prompt = "Point the camera at the bridge's pairing QR",
                 onDecoded = { decoded ->
                     // One path, same as a paste: the raw string fills the
                     // visible field AND crosses into BeginPairing

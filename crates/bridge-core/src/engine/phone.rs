@@ -64,6 +64,9 @@ fn type_name(msg: &PhoneToBridge) -> &'static str {
         PhoneToBridge::TerminalReplay(_) => "terminal-replay",
         PhoneToBridge::TerminalTakeover(_) => "terminal-takeover",
         PhoneToBridge::TerminalClose(_) => "terminal-close",
+        PhoneToBridge::WebSignIn(_) => "web-sign-in",
+        PhoneToBridge::WebBrowsersRequest(_) => "web-browsers-request",
+        PhoneToBridge::WebBrowserSignOut(_) => "web-browser-sign-out",
     }
 }
 
@@ -194,6 +197,9 @@ impl Engine {
             PhoneToBridge::TerminalReplay(m) => self.on_terminal_replay(m, super::terminal::via_of(via)),
             PhoneToBridge::TerminalTakeover(m) => self.on_terminal_takeover(m, super::terminal::via_of(via)),
             PhoneToBridge::TerminalClose(m) => self.on_terminal_close(m, super::terminal::via_of(via)),
+            PhoneToBridge::WebSignIn(m) => self.on_web_sign_in(&m.code, phone),
+            PhoneToBridge::WebBrowsersRequest(_) => self.on_web_browsers_request(),
+            PhoneToBridge::WebBrowserSignOut(m) => self.on_web_browser_sign_out(m.id),
         }
     }
 

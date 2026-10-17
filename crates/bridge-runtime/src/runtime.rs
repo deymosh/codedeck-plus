@@ -21,7 +21,7 @@ use bridge_core::{
 };
 use protocol::commands::UploadFileMsg;
 use protocol::crypto::Keypair;
-use protocol::events::{BridgeToPhone, TerminalOutputMsg};
+use protocol::events::{BridgeToPhone, TerminalOutputMsg, WebBrowserInfo, WebBrowsersMsg};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -166,7 +166,8 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
     };
 
     let (inputs, mut rx) = mpsc::unbounded_channel();
-    let direct = crate::direct::start(&config.direct, &config.home, keys.pubkey_hex.clone(), inputs.clone()).await?;
+    let web_config = crate::web::ConfigView { path: config.config_file.clone(), fields: crate::config::web_config_fields(&config) };
+    let direct = crate::direct::start(&config.direct, &config.home, keys.pubkey_hex.clone(), inputs.clone(), web_config).await?;
     engine_config.direct = direct.as_ref().map(|d| d.info.clone());
     let relays = Relays::start(
         config.relays.clone(),
@@ -339,13 +340,51 @@ impl Runtime {
         false
     }
 
+    /// The browsers signed in to the web page, as the page itself lists them
+    /// (`Web::browsers`). Empty when this bridge runs no page — no direct
+    /// link — so a request is still answered, with the truth.
+    fn web_browsers(&self) -> Vec<WebBrowserInfo> {
+        self.direct.as_ref().map(|direct| direct.web.browsers()).unwrap_or_default()
+    }
+
     /// Carry out one effect; true for [`Effect::Stopped`]. Async because one
     /// effect does blocking file work that must not run here: opening a
     /// terminal's recording, which is handed to a blocking task before its
     /// shell is started.
     async fn execute(&mut self, effect: Effect) -> bool {
         match effect {
-            Effect::Publish { to, message } => self.relays.publish(to, message),
+            Effect::Publish { to, message } => {
+                if let (protocol::events::BridgeToPhone::Sessions(list), Some(direct)) = (&message, &self.direct) {
+                    direct.web.set_heartbeat(list);
+                    // The devices API follows the heartbeat: the paired
+                    // phones are cheap to hand over, and this is where they
+                    // change.
+                    direct.web.set_devices(self.engine.paired_phones());
+                }
+                self.relays.publish(to, message)
+            }
+            Effect::WebSignedIn { code, by } => {
+                if let Some(direct) = &self.direct {
+                    direct.web.signed_in(&code, &by);
+                }
+            }
+            // The page alone holds the list of signed-in browsers, so the
+            // runtime answers both from it: a request with what it has, a
+            // sign-out by ending that browser and then answering with the
+            // fresh list. Both go to the asking client alone.
+            Effect::WebBrowsers { client } => {
+                let message = BridgeToPhone::WebBrowsers(WebBrowsersMsg { browsers: self.web_browsers() });
+                self.relays.publish(vec![client], message);
+            }
+            Effect::WebBrowserSignOut { id, client } => {
+                // `revoke` persists through the web page's own writer thread,
+                // so ending a browser never blocks the bridge's one thread.
+                if let Some(direct) = &self.direct {
+                    direct.web.revoke(&id);
+                }
+                let message = BridgeToPhone::WebBrowsers(WebBrowsersMsg { browsers: self.web_browsers() });
+                self.relays.publish(vec![client], message);
+            }
             Effect::Host(frame) => self.host.send(&frame),
             Effect::SetTimer { id, after_ms } => {
                 let inputs = self.inputs.clone();
@@ -364,6 +403,9 @@ impl Runtime {
                 let filter = self.engine.commands_filter();
                 if let Some(direct) = &self.direct {
                     direct.hub.set_paired(&filter.authors);
+                    // Pairing changed (this effect rebuilds the command
+                    // subscription): keep the devices API in step at once.
+                    direct.web.set_devices(self.engine.paired_phones());
                 }
                 self.relays.subscribe_commands(filter.authors, filter.since, self.terminals_on_relays);
             }

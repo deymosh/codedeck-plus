@@ -26,6 +26,7 @@ import com.codedeck.plus.ui.screens.ExtraKeysRow
 import com.codedeck.plus.ui.screens.TerminalLockedContent
 import com.codedeck.plus.ui.components.Page
 import androidx.compose.material3.Text
+import com.codedeck.plus.ui.screens.WebSignInContent
 import com.codedeck.plus.ui.screens.McpContent
 import com.codedeck.plus.ui.screens.PermissionRulesContent
 import com.codedeck.plus.ui.screens.ConnectionPage
@@ -50,6 +51,9 @@ import uniffi.client_ffi.UniffiAttachedTerminal
 import uniffi.client_ffi.UniffiTerminalEnded
 import uniffi.client_ffi.UniffiTerminalInfo
 import uniffi.client_ffi.UniffiTerminalRefusal
+import uniffi.client_ffi.UniffiWebBrowser
+import uniffi.client_ffi.UniffiWebSignIn
+import uniffi.client_ffi.UniffiWebSignInState
 import uniffi.client_ffi.UniffiUsageData
 import uniffi.client_ffi.UniffiBackupStatus
 import uniffi.client_ffi.UniffiBackupView
@@ -295,14 +299,14 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
         MachineSettingsContent(
             machine = workstation.copy(capabilities = listOf(TERMINAL_CAPABILITY)), connectedRelays = setOf("wss://relay.example.org"),
             credentialsStatus = null, now = NOW, dispatch = {}, onBack = {}, onOpenAgent = {},
-            terminals = listOf(bashTerminal), onOpenTerminal = {},
+            terminals = listOf(bashTerminal), onOpenTerminal = {}, onOpenWebSignIn = {},
         )
     },
     "settings_machine_update_needed" to {
         MachineSettingsContent(
             machine = workstation.copy(updateNeeded = "bridge"), connectedRelays = setOf("wss://relay.example.org"),
             credentialsStatus = null, now = NOW, dispatch = {}, onBack = {}, onOpenAgent = {},
-            terminals = emptyList(), onOpenTerminal = {},
+            terminals = emptyList(), onOpenTerminal = {}, onOpenWebSignIn = {},
         )
     },
     "terminal_opening" to { Terminal(attached(term = null)) },
@@ -329,6 +333,12 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
             MachineTerminalsGroup(workstation, emptyList(), NOW, onOpen = {}, onAttach = {})
         }
     },
+    "web_sign_in" to { WebSignIn(signIn = null, code = "") },
+    "web_sign_in_asking" to { WebSignIn(signIn = null, code = "", browsers = null) },
+    "web_sign_in_none" to { WebSignIn(signIn = null, code = "", browsers = emptyList()) },
+    "web_sign_in_sending" to { WebSignIn(UniffiWebSignIn("K7QM-4XTR", UniffiWebSignInState.SENDING), code = "K7QM-4XTR") },
+    "web_sign_in_not_matched" to { WebSignIn(UniffiWebSignIn("K7QM-4XTR", UniffiWebSignInState.NOT_MATCHED), code = "K7QM-4XTR") },
+    "web_sign_in_signed_in" to { WebSignIn(UniffiWebSignIn("K7QM-4XTR", UniffiWebSignInState.SIGNED_IN), code = "K7QM-4XTR") },
     "settings_agent_opencode" to { AgentPage("opencode") },
     "settings_agent_claude" to { AgentPage("claude-code") },
     "settings_agent_not_installed" to { AgentPage("deepseek-harness") },
@@ -470,6 +480,25 @@ private fun AgentPage(agent: String) = AgentSettingsContent(
     onOpenProviders = {}, onOpenPlugins = {}, onOpenMcp = {}, onOpenPermissionRules = {},
 )
 
+/** Signing a browser in to the workstation's web page. */
+@Composable
+private fun WebSignIn(signIn: UniffiWebSignIn?, code: String, browsers: List<UniffiWebBrowser>? = signedInBrowsers) = WebSignInContent(
+    signIn = signIn, noAnswer = false, notice = null, code = code, onCodeChange = {}, onSend = {}, onScan = {},
+    browsers = browsers, ownNpub = workstation.npub, now = NOW, onSignOut = {}, onBack = {},
+)
+
+/** Two browsers on the workstation's page: one this identity signed in, one another identity did. */
+private val signedInBrowsers = listOf(
+    UniffiWebBrowser(
+        "0123456789abcdef", workstation.npub, (NOW - 3 * 86_400_000).toULong(), (NOW - 4 * 60_000).toULong(), (NOW + 27 * 86_400_000).toULong(),
+        "192.168.1.20", "Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0",
+    ),
+    UniffiWebBrowser(
+        "fedcba9876543210", "npub1q8zy7gyw0l9fh2qkj6x4wlcw5h6xyq9d0k3e8w2yv3m5l6n7p8r9s0tuvx", (NOW - 86_400_000).toULong(), (NOW - 2 * 3_600_000).toULong(),
+        (NOW + 29 * 86_400_000).toULong(), "10.8.0.6", "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
+    ),
+)
+
 @Composable
 private fun Styled(look: AgentLook, content: @Composable () -> Unit) =
     CompositionLocalProvider(LocalAgentLook provides look, content = content)
@@ -540,6 +569,12 @@ class DesignSnapshotTest {
     @Test fun terminal_locked_unavailable() = paparazzi.page("terminal_locked_unavailable")
     @Test fun session_options_terminal() = paparazzi.page("session_options_terminal")
     @Test fun machine_terminals() = paparazzi.page("machine_terminals")
+    @Test fun web_sign_in() = paparazzi.page("web_sign_in")
+    @Test fun web_sign_in_asking() = paparazzi.page("web_sign_in_asking")
+    @Test fun web_sign_in_none() = paparazzi.page("web_sign_in_none")
+    @Test fun web_sign_in_sending() = paparazzi.page("web_sign_in_sending")
+    @Test fun web_sign_in_not_matched() = paparazzi.page("web_sign_in_not_matched")
+    @Test fun web_sign_in_signed_in() = paparazzi.page("web_sign_in_signed_in")
     @Test fun settings_agent_opencode() = paparazzi.page("settings_agent_opencode")
     @Test fun settings_agent_claude() = paparazzi.page("settings_agent_claude")
     @Test fun settings_agent_not_installed() = paparazzi.page("settings_agent_not_installed")
@@ -580,7 +615,7 @@ class DesignSnapshotTest {
 class DesignFullPageSnapshotTest {
     @get:Rule
     val paparazzi = Paparazzi(
-        deviceConfig = DeviceConfig.PIXEL_6.copy(softButtons = false, screenWidth = 1080, screenHeight = 4200, density = Density.XXHIGH),
+        deviceConfig = DeviceConfig.PIXEL_6.copy(softButtons = false, screenWidth = 1080, screenHeight = 5400, density = Density.XXHIGH),
         showSystemUi = false,
     )
 
@@ -590,4 +625,5 @@ class DesignFullPageSnapshotTest {
     @Test fun settings_machine() = paparazzi.page("settings_machine")
     @Test fun plugins() = paparazzi.page("plugins")
     @Test fun settings_messages() = paparazzi.page("settings_messages")
+    @Test fun web_sign_in() = paparazzi.page("web_sign_in")
 }

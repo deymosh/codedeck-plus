@@ -329,6 +329,29 @@ pub enum UniffiIntent {
         profile_id: String,
         profile: Option<UniffiProviderProfileWrite>,
     },
+    /// Sign in the browser showing `code` on `machine`'s web page. The code
+    /// is trimmed; surrounding whitespace never reaches the bridge.
+    WebSignIn {
+        machine: String,
+        code: String,
+    },
+    /// The sign-in screen closed: drop this machine's code and its answer, so
+    /// a late one is not reported to a screen that is gone.
+    ClearWebSignIn {
+        machine: String,
+    },
+    /// Ask `machine`'s web page which browsers are signed in to it. Sent when
+    /// the screen that lists them opens; the answer replaces this machine's
+    /// list in `UniffiUiView.web_browsers`.
+    RequestWebBrowsers {
+        machine: String,
+    },
+    /// End one signed-in browser by the page id the list showed. The row goes
+    /// at once, and the bridge's answer replaces the list with the truth.
+    SignOutWebBrowser {
+        machine: String,
+        id: String,
+    },
     /// Answer a permission request with one of its options' ids.
     RespondPermission {
         machine: String,
@@ -565,6 +588,11 @@ pub enum UniffiIntent {
 pub enum UniffiIntentError {
     #[error("not a recognized value for this field: {detail}")]
     BadEnumValue { detail: String },
+    /// The intent needs this value and got nothing (whitespace counts as
+    /// nothing): there is no command to send without it, so it is refused
+    /// here rather than published as an empty field.
+    #[error("this intent needs a value for {field}")]
+    EmptyValue { field: String },
 }
 
 fn parse_enum<T: serde::de::DeserializeOwned>(field: &str, s: &str) -> Result<T, UniffiIntentError> {
@@ -684,6 +712,22 @@ impl TryFrom<UniffiIntent> for Intent {
                     default_model: p.default_model,
                 }),
             },
+            UniffiIntent::WebSignIn { machine, code } => {
+                let code = code.trim().to_string();
+                if code.is_empty() {
+                    return Err(UniffiIntentError::EmptyValue { field: "code".into() });
+                }
+                Intent::WebSignIn { machine, code }
+            }
+            UniffiIntent::ClearWebSignIn { machine } => Intent::ClearWebSignIn { machine },
+            UniffiIntent::RequestWebBrowsers { machine } => Intent::RequestWebBrowsers { machine },
+            UniffiIntent::SignOutWebBrowser { machine, id } => {
+                let id = id.trim().to_string();
+                if id.is_empty() {
+                    return Err(UniffiIntentError::EmptyValue { field: "id".into() });
+                }
+                Intent::SignOutWebBrowser { machine, id }
+            }
             UniffiIntent::RespondPermission { machine, session_id, request_id, option_id } => {
                 Intent::RespondPermission { machine, session_id, request_id, option_id }
             }
@@ -966,6 +1010,39 @@ mod tests {
         };
         let mapped: Intent = intent.try_into().unwrap();
         assert_eq!(mapped, Intent::SetProviderProfile { machine: "m".into(), profile_id: "kimi-k3".into(), profile: None });
+    }
+
+    #[test]
+    fn web_sign_in_trims_the_code_and_refuses_an_empty_one() {
+        let mapped: Intent = UniffiIntent::WebSignIn {
+            machine: "m".into(),
+            code: "  k7qm-4xpa  ".into(),
+        }
+        .try_into()
+        .unwrap();
+        assert_eq!(
+            mapped,
+            Intent::WebSignIn {
+                machine: "m".into(),
+                code: "k7qm-4xpa".into()
+            }
+        );
+
+        // Whitespace is not a code: there is nothing to ask the bridge for.
+        for empty in ["", "   "] {
+            let err = Intent::try_from(UniffiIntent::WebSignIn {
+                machine: "m".into(),
+                code: empty.into(),
+            })
+            .unwrap_err();
+            assert!(matches!(err, UniffiIntentError::EmptyValue { .. }), "{empty:?} -> {err:?}");
+        }
+    }
+
+    #[test]
+    fn clear_web_sign_in_maps_to_the_store_action() {
+        let mapped: Intent = UniffiIntent::ClearWebSignIn { machine: "m".into() }.try_into().unwrap();
+        assert_eq!(mapped, Intent::ClearWebSignIn { machine: "m".into() });
     }
 
     #[test]

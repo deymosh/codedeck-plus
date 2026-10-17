@@ -408,6 +408,31 @@ link is an extra path beside the relays, never a replacement.
 - The machines view reports the endpoint each link is up on; Settings shows
   it per machine.
 
+### Web page sign-in
+
+A machine's page has a "Web page" group: the `https://` address of the
+bridge's web page on each of its `wss://` direct endpoints (onion and
+plain `ws://` ones serve no page), and "Browsers"
+(`screens/MachineWebPage.kt`, the wire in
+[`PROTOCOL.md`](PROTOCOL.md#web-page-sign-in)). That page scans the
+browser's QR in the app's own scanner, or takes the typed code, and
+dispatches `WebSignIn`; the UI view's `webSignIn` (by machine) says whether
+the code is on its way, signed in, or did not match, and the page says so
+when no answer came in 15 s. A QR naming another machine is refused before
+anything is sent. The QR has no deep link on purpose: a link opened
+elsewhere must not sign a browser in without the user on this page. Closing
+the page dispatches `ClearWebSignIn`, so a late answer is dropped. Under
+the sign-in it lists the browsers signed in now (`RequestWebBrowsers` when
+the page opens and again after a sign-in from it, never polled; the view's
+`webBrowsers`), each signed out with `SignOutWebBrowser` after a
+confirmation.
+
+The same group lists the browsers already signed in to the page: opening it
+dispatches `RequestWebBrowsers`, and the bridge's `web-browsers` answer fills
+the UI view's `webBrowsers` (by machine). Ending one dispatches
+`SignOutWebBrowser`, which drops the row at once and lets the bridge's fresh
+list — the same message a request is answered with — confirm it.
+
 ## Conventions
 
 - A UniFFI error variant must not have a field named `message` (it collides

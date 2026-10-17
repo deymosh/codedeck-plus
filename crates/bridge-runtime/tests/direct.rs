@@ -87,7 +87,7 @@ async fn a_paired_phone_gets_its_events_and_sends_commands_over_the_pinned_link(
             let (bridge, phone, stranger) = (generate_keypair(), generate_keypair(), generate_keypair());
             let (inputs, mut engine) = mpsc::unbounded_channel();
             let config = DirectConfig { listen: Some("127.0.0.1:0".parse().unwrap()), ..Default::default() };
-            let mut link = direct::start(&config, home.path(), bridge.pubkey_hex.clone(), inputs).await.unwrap().expect("enabled");
+            let mut link = direct::start(&config, home.path(), bridge.pubkey_hex.clone(), inputs, Default::default()).await.unwrap().expect("enabled");
             let endpoint = link.info.endpoints[0].clone();
             let pin = link.info.cert_sha256.clone().expect("a wss listener advertises its pin");
             assert!(endpoint.starts_with("wss://127.0.0.1:"), "{endpoint}");
@@ -156,7 +156,7 @@ async fn a_paired_phone_sends_live_input_and_terminal_output_never_jumps_a_norma
             let (bridge, phone) = (generate_keypair(), generate_keypair());
             let (inputs, mut engine) = mpsc::unbounded_channel();
             let config = DirectConfig { listen: Some("127.0.0.1:0".parse().unwrap()), ..Default::default() };
-            let mut link = direct::start(&config, home.path(), bridge.pubkey_hex.clone(), inputs).await.unwrap().unwrap();
+            let mut link = direct::start(&config, home.path(), bridge.pubkey_hex.clone(), inputs, Default::default()).await.unwrap().unwrap();
             let endpoint = link.info.endpoints[0].clone();
             let pin = link.info.cert_sha256.clone().unwrap();
             link.hub.set_paired(std::slice::from_ref(&phone.pubkey_hex));
@@ -201,7 +201,7 @@ async fn the_phone_link_talks_to_the_bridge() {
             let (bridge, phone) = (generate_keypair(), generate_keypair());
             let (inputs, mut engine) = mpsc::unbounded_channel();
             let config = DirectConfig { listen: Some("127.0.0.1:0".parse().unwrap()), ..Default::default() };
-            let mut server = direct::start(&config, home.path(), bridge.pubkey_hex.clone(), inputs).await.unwrap().unwrap();
+            let mut server = direct::start(&config, home.path(), bridge.pubkey_hex.clone(), inputs, Default::default()).await.unwrap().unwrap();
             server.hub.set_paired(std::slice::from_ref(&phone.pubkey_hex));
 
             let start = |pin: String| {
