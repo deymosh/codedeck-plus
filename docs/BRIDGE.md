@@ -232,7 +232,8 @@ accepting it. Plain `http://` on the port redirects to
 `https://`; the onion listener serves no page.
 
 A browser signs in with a paired phone: the page shows a code and a QR, and
-on the phone the machine's page, "Sign in a browser", scans or types it. The
+on the phone the machine's page, "Browsers", scans or types it (the same
+page lists the signed-in browsers and signs one out). The
 browser then stays signed in for 30 days (a cookie only the bridge can read,
 sent only over HTTPS), and it survives a restart: signed-in browsers are kept
 in `<home>/web-sessions.json`, keyed by the cookie's SHA-256 so the file
