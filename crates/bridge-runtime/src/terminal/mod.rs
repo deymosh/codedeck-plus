@@ -532,11 +532,13 @@ fn shell_command(command: Option<&[String]>) -> (String, Vec<String>, String) {
     (shell.clone(), Vec::new(), shell)
 }
 
-/// The shell to run when the owner has configured none: `$SHELL`, else the
-/// account's login shell, else `/bin/sh` on unix — a service or a container
-/// often runs with no `$SHELL`, and `/bin/sh` may be a shell with no line
-/// editing or completion (Debian's dash) while the account's is bash; on Windows `pwsh`, else `powershell`, else `cmd` — in
-/// that order, the modern PowerShell first, the one every Windows has last.
+/// The shell to run when the owner has configured none. On unix: `$SHELL`,
+/// else the account's login shell (unless it is `nologin` or `false`, a
+/// service account's), else `/bin/sh` — a service or a container often runs
+/// with no `$SHELL`, and `/bin/sh` may be a shell with no line editing or
+/// completion (Debian's dash) while the account's is bash. On Windows
+/// `pwsh`, else `powershell`, else `cmd` — in that order, the modern
+/// PowerShell first, the one every Windows has last.
 #[cfg(unix)]
 fn default_shell() -> String {
     std::env::var("SHELL")
@@ -545,7 +547,9 @@ fn default_shell() -> String {
         .or_else(|| {
             let user = nix::unistd::User::from_uid(nix::unistd::getuid()).ok().flatten()?;
             let shell = user.shell.to_str()?.to_string();
-            (!shell.is_empty()).then_some(shell)
+            // A service account's "shell" refuses logins; /bin/sh is better.
+            let refuses = ["nologin", "false"].contains(&shell.rsplit('/').next().unwrap_or_default());
+            (!shell.is_empty() && !refuses).then_some(shell)
         })
         .unwrap_or_else(|| "/bin/sh".to_string())
 }
