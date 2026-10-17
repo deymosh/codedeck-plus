@@ -1982,7 +1982,12 @@ impl Loop {
             .watching_machine()
             .map(|m| self.terminal_transport(m))
             .unwrap_or(InputTransport::Direct);
+        let waiting = self.stores.terminals.waiting_input();
         let step = self.stores.terminals.flush_due(transport, self.clock.now_ms());
+        // What was held back is sent: the app's predicted echo of it goes.
+        if self.stores.terminals.waiting_input() != waiting {
+            self.state_changed(SliceId::Ui);
+        }
         let Some(machine) = step.machine.clone() else { return };
         for msg in step.sends {
             self.on_send(machine.clone(), PhoneToBridge::TerminalInput(msg), None);

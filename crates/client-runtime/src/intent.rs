@@ -1085,16 +1085,23 @@ pub fn apply(
             r.ui_changed = true;
         }
         Intent::TerminalInput { machine, term, bytes, alternate_screen } => {
+            let waiting = stores.terminals.waiting_input();
             let step = stores
                 .terminals
                 .input(&machine, &term, &bytes, alternate_screen, ctx.terminal_transport, ctx.now);
             r.terminal_step(&machine, step);
+            // The app draws the bytes held back as the predicted echo; without
+            // a redraw a key shows only once the shell echoes it, a pause and
+            // a round trip later.
+            r.ui_changed |= stores.terminals.waiting_input() != waiting;
         }
         Intent::TerminalPaste { machine, term, bytes } => {
+            let waiting = stores.terminals.waiting_input();
             let step = stores
                 .terminals
                 .paste(&machine, &term, &bytes, ctx.terminal_transport, ctx.now);
             r.terminal_step(&machine, step);
+            r.ui_changed |= stores.terminals.waiting_input() != waiting;
         }
         Intent::ResizeTerminal { machine, term, cols, rows } => {
             r.send(&machine, PhoneToBridge::TerminalResize(TerminalResizeMsg { term, cols, rows }));

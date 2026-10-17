@@ -3291,6 +3291,58 @@ async fn typing_into_a_terminal_goes_out_as_one_batched_command() {
         .await;
 }
 
+/// A key held back for the next batch redraws the app, whose predicted echo
+/// shows it at once; the send that empties the batch redraws it again.
+#[tokio::test]
+async fn keys_held_back_redraw_the_predicted_echo() {
+    LocalSet::new()
+        .run_until(async {
+            let mock = mock_relay().await;
+            let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+            let machine = generate_keypair();
+            let spy = Rc::new(Spy::default());
+            let core = core_for(&mock, &phone, Rc::clone(&spy)).await;
+            core.set_machines(vec![machine.pubkey_hex.clone()]);
+            core.start();
+
+            core.dispatch(Intent::AttachTerminal { machine: machine.pubkey_hex.clone(), term: "t1".into() })
+                .await;
+            settle().await;
+            let ui_changes = || {
+                spy.events
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|e| matches!(e, CoreEvent::StateChanged { slice: SliceId::Ui }))
+                    .count()
+            };
+            let before = ui_changes();
+            core.dispatch(Intent::TerminalInput {
+                machine: machine.pubkey_hex.clone(),
+                term: "t1".into(),
+                bytes: b"l".to_vec(),
+                alternate_screen: false,
+            })
+            .await;
+            settle().await;
+            assert_eq!(core.ui_view().await.terminals.attached.unwrap().waiting_input, b"l".to_vec());
+            assert!(ui_changes() > before, "a held key must redraw the app");
+
+            let before = ui_changes();
+            core.dispatch(Intent::TerminalInput {
+                machine: machine.pubkey_hex.clone(),
+                term: "t1".into(),
+                bytes: b"\r".to_vec(),
+                alternate_screen: false,
+            })
+            .await;
+            settle().await;
+            assert!(core.ui_view().await.terminals.attached.unwrap().waiting_input.is_empty());
+            assert!(ui_changes() > before, "the send must clear the prediction");
+        })
+        .await;
+}
+
 /// Terminal output never goes through a view: it arrives as its own event,
 /// already base64-decoded, with the offset it starts at.
 #[tokio::test]
