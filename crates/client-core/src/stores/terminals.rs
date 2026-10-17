@@ -303,12 +303,16 @@ impl TerminalsState {
         (a.machine == machine).then(|| a.term.clone())?
     }
 
-    /// Bytes typed and not yet sent, for the app's predicted echo.
+    /// Bytes typed and not yet sent, for the app's predicted echo. Empty on
+    /// the alternate screen: there every key is a command whose effect the
+    /// program decides, so nothing is predicted, and the bytes it holds for
+    /// a few ms are no reason to redraw the app.
     pub fn waiting_input(&self) -> Vec<u8> {
         let Some(a) = self.attached.as_ref() else { return Vec::new() };
         let Some(term) = a.term.as_deref() else { return Vec::new() };
         self.inputs
             .get(&(a.machine.clone(), term.to_string()))
+            .filter(|s| !s.alternate_screen)
             .map(|s| s.pending.clone())
             .unwrap_or_default()
     }
@@ -1207,6 +1211,9 @@ mod tests {
         typed(&mut s, b"git che", false, 0);
         assert_eq!(s.waiting_input(), b"git che".to_vec());
         typed(&mut s, b"\t", false, 1);
+        assert!(s.waiting_input().is_empty());
+        // On the alternate screen nothing is predicted, held or not.
+        typed(&mut s, b"j", true, 2);
         assert!(s.waiting_input().is_empty());
     }
 
