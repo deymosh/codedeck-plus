@@ -262,15 +262,25 @@ PTYs die with it), and each one's end is audited.
   VT100/xterm sequences, 256 colours, the alternate screen, selection and
   the IME.
 - An extra-keys row above the keyboard (Esc, Ctrl, Alt, Tab, arrows, `|`,
-  `~`, `/`), as in Termux — a phone keyboard has none of these.
+  `~`, `/`) — a phone keyboard has none of these. Ctrl and Alt modify the
+  next key. Only the writer gets it; a device that watches gets no keyboard.
+- Output reaches the emulator on its own sink in the app, never the shared
+  event flow: a frame every 16 ms would push every other event out of that
+  flow's small buffer. Input, extra keys and pastes go through one ordered
+  queue; a paste is one event, bracketed when the program asked for it.
 - Reached from the machine's page (Terminal) and from a session's menu
   (Terminal here, opened in the session's directory). Running terminals show
   on the machine's page, with the device that opened each.
 - A refused open shows the device's id and name and the command to run on
   the machine.
-- Pinch zooms the font; the emulator's size follows the view and every
-  change sends `terminal-resize`.
-- Settings: "Require fingerprint for terminals" (off by default).
+- Pinch zooms the font (kept per phone); the emulator's size follows the
+  view and the writer's changes send `terminal-resize`. An open carries a
+  size estimated from the window, so the shell starts close to right.
+- Leaving the page detaches (the shell keeps running); a rotation does not,
+  and the recreated page replays the same terminal.
+- Settings, Account: "Lock terminals" (off by default) asks for the
+  fingerprint or screen lock before a terminal opens. It needs Android 11,
+  the first to offer both in one prompt; older phones do not offer it.
 
 ## Traffic and battery
 

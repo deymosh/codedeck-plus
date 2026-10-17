@@ -360,7 +360,10 @@ a view, since a shell can write megabytes a second and a view snapshot per
 frame would slow every other slice down. A frame at the expected offset is
 passed on and the offset advances. A frame beyond it means one was lost: the
 core asks for `terminal-replay` from the expected offset **once per gap** and
-drops frames until the replay arrives. A frame that starts before the
+drops live frames until the replay arrives. The answer is marked `replay`;
+it may start past the offset asked for (the bridge keeps only the last 256
+KiB), and the core takes it from there instead of asking again. An attach
+asks from 0 the same way. A frame that starts before the
 expected offset is trimmed to the part not yet drawn, or dropped when it is
 entirely behind.
 
