@@ -59,7 +59,7 @@ portable-pty = "0.9"
 # `get_termios` returns *its* `Termios`, and a different nix would be a
 # different type.
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.28", features = ["term"] }
+nix = { version = "0.28", features = ["term", "user"] }
 
 [dev-dependencies]
 tempfile = "3"
