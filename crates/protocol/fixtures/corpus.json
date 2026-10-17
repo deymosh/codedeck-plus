@@ -209,6 +209,7 @@
       { "v": 12, "type": "provider-profile-ack", "machine": "m", "profileId": "p", "success": true, "tokenValid": false },
       { "v": 12, "type": "terminal-opened", "openId": "o1", "term": "t1", "shell": "/bin/bash" },
       { "v": 12, "type": "terminal-output", "term": "t1", "offset": 0, "data": "bHMgLWxhCg==" },
+      { "v": 12, "type": "terminal-output", "term": "t1", "offset": 300000, "data": "cmVwbGF5", "replay": true },
       { "v": 12, "type": "terminal-input-from", "term": "t1", "seq": 4 },
       { "v": 12, "type": "terminal-exited", "term": "t1", "code": 0, "reason": "exit" },
       { "v": 12, "type": "terminal-exited", "term": "t1", "reason": "idle" },

@@ -311,12 +311,15 @@ opens a real shell on the bridge's machine:
   says resend from `seq`: the first one that never arrived, or — to a device
   that has just taken the pen — the seq its own count resumes at, which the
   phone adopts.
-- `terminal-output {term, offset, data}` is what the shell wrote, `data`
-  base64 and `offset` the byte offset of its first byte in everything this
-  terminal has output. Also LIVE_KIND, and like `partial` it goes ONLY to the
-  present clients watching that terminal (`presence.watchingTerminal`) — a
+- `terminal-output {term, offset, data, replay?}` is what the shell wrote,
+  `data` base64 and `offset` the byte offset of its first byte in everything
+  this terminal has output. Also LIVE_KIND, and like `partial` it goes ONLY to
+  the present clients watching that terminal (`presence.watchingTerminal`) — a
   client that missed a run reattaches with `terminal-replay {term, from}`,
-  which resends the output from `from` and what follows, read-only.
+  which resends the output from `from` and what follows, read-only. `replay`
+  is set (true) only on the bridge's answer to that request: its `offset` may
+  be past `from` when the bridge no longer holds those bytes, and the client
+  takes it from there.
 - `terminal-resize {term, cols, rows}`, `terminal-takeover {term}` (become
   the writer) and `terminal-close {term}` (hang up).
 - `terminal-exited {term?, openId?, code?, reason, device?}` says a terminal

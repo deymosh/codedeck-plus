@@ -561,6 +561,11 @@ pub struct TerminalOutputMsg {
     #[specta(type = specta_typescript::Number)]
     pub offset: u64,
     pub data: String,
+    /// Set (true) only on the bridge's answer to `terminal-replay`. Its
+    /// `offset` may be past what the client asked for when the bridge no
+    /// longer holds those bytes, and the client takes it from there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replay: Option<bool>,
 }
 
 /// The input the bridge is still waiting for: `seq` is the first one that

@@ -164,8 +164,9 @@ When relays are allowed, a terminal falls back to them like any message.
 - Loss is tolerated: every output frame carries the terminal's byte offset,
   and a phone that sees a gap (or reconnects) asks for a replay from the
   last offset it drew. The bridge keeps the last 256 KiB of each terminal's
-  output for that; older than that, the phone resets the screen and redraws
-  from what is kept (the program's next repaint fixes the rest).
+  output for that; older than that, the answer starts at the ring's first
+  byte — marked `replay: true`, with an `offset` past the one asked for — and
+  the phone takes it from there (the program's next repaint fixes the rest).
 
 ## Messages
 
@@ -177,7 +178,7 @@ All carry `v` like every message. `term` is a terminal id the bridge assigns.
 | `terminal-opened` | bridge → phone | `openId`, `term`, `shell` (what runs, e.g. `/bin/bash`) |
 | `terminal-input` | phone → bridge | `term`, `seq`, `data` (base64 of the bytes — a key press need not be valid UTF-8) |
 | `terminal-input-from` | bridge → phone | `term`, `seq` (resend from here; on a takeover, the seq this device's own count resumes at) |
-| `terminal-output` | bridge → phone | `term`, `offset`, `data` (base64) |
+| `terminal-output` | bridge → phone | `term`, `offset`, `data` (base64), `replay?` (true only on the answer to `terminal-replay`; `offset` may be past what was asked when the ring no longer holds those bytes) |
 | `terminal-resize` | phone → bridge | `term`, `cols`, `rows` (writer only) |
 | `terminal-replay` | phone → bridge | `term`, `from` (byte offset; attaches read-only) |
 | `terminal-takeover` | phone → bridge | `term` (become the writer) |

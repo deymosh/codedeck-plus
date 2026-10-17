@@ -401,15 +401,24 @@ struct PendingTerminal {
     offset: u64,
     /// The merged bytes, contiguous from `offset`.
     data: Vec<u8>,
+    /// Whether this range is the answer to a `terminal-replay`, and so may
+    /// start past what the phone asked for; kept through the merge so the
+    /// paced frame still says so.
+    replay: Option<bool>,
     /// When this terminal's window is up.
     due: tokio::time::Instant,
 }
 
 impl PendingTerminal {
     /// Whether `msg` continues this range: the same terminal, the same
-    /// clients, and the byte straight after what is held.
+    /// clients, the same replay marking, and the byte straight after what is
+    /// held. A replay answer never folds into live output, or the other way
+    /// round: the marking describes where the range starts.
     fn continues(&self, to: &[Addressee], msg: &TerminalOutputMsg) -> bool {
-        self.term == msg.term && self.to.as_slice() == to && self.offset + self.data.len() as u64 == msg.offset
+        self.term == msg.term
+            && self.to.as_slice() == to
+            && self.replay == msg.replay
+            && self.offset + self.data.len() as u64 == msg.offset
     }
 }
 
@@ -431,7 +440,14 @@ impl TerminalPace {
             }
             return;
         }
-        self.pending.push(PendingTerminal { to, term: msg.term.clone(), offset: msg.offset, data: bytes, due: now + TERMINAL_FLUSH });
+        self.pending.push(PendingTerminal {
+            to,
+            term: msg.term.clone(),
+            offset: msg.offset,
+            data: bytes,
+            replay: msg.replay,
+            due: now + TERMINAL_FLUSH,
+        });
     }
 
     /// Take the terminal-output jobs queued right behind the front into the
@@ -493,7 +509,12 @@ async fn flush_terminals(
 ) {
     let ready = if all { terminal.take_all() } else { terminal.take_due(tokio::time::Instant::now()) };
     for p in ready {
-        let message = BridgeToPhone::TerminalOutput(TerminalOutputMsg { term: p.term, offset: p.offset, data: STANDARD.encode(&p.data) });
+        let message = BridgeToPhone::TerminalOutput(TerminalOutputMsg {
+            term: p.term,
+            offset: p.offset,
+            data: STANDARD.encode(&p.data),
+            replay: p.replay,
+        });
         let lane = lane_of(&message);
         match &lane {
             Some(lane) => flight.room_in(lane).await,
@@ -882,7 +903,12 @@ mod tests {
         // Terminal output rides the live kind and is never stored: the bytes
         // a shell printed may hold a secret, and a stored frame would outlive
         // the terminal.
-        let out = BridgeToPhone::TerminalOutput(TerminalOutputMsg { term: "t".into(), offset: 0, data: "aGk=".into() });
+        let out = BridgeToPhone::TerminalOutput(TerminalOutputMsg {
+            term: "t".into(),
+            offset: 0,
+            data: "aGk=".into(),
+            replay: None,
+        });
         let ev = f.events(&out, &to(&phone.pubkey_hex), 1000).unwrap().remove(0);
         assert_eq!((ev.kind, tag(&ev, "expiration")), (LIVE_KIND, None));
         // The small, state-like terminal messages are stored responses: a
@@ -1056,7 +1082,7 @@ mod tests {
     }
 
     fn output_msg(term: &str, offset: u64, data: &[u8]) -> TerminalOutputMsg {
-        TerminalOutputMsg { term: term.into(), offset, data: STANDARD.encode(data) }
+        TerminalOutputMsg { term: term.into(), offset, data: STANDARD.encode(data), replay: None }
     }
 
     fn term_job(to: &[Addressee], msg: TerminalOutputMsg) -> Job {

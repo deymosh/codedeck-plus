@@ -844,7 +844,10 @@ impl Engine {
     /// asked for a replay reads from.
     pub(super) fn on_terminal_output(&mut self, term: String, offset: u64, data: String) {
         let Some(identity) = self.terminals.open.get(&term).map(|t| t.identity.clone()) else { return };
-        self.out.publish(vec![identity], BridgeToPhone::TerminalOutput(TerminalOutputMsg { term, offset, data }));
+        self.out.publish(
+            vec![identity],
+            BridgeToPhone::TerminalOutput(TerminalOutputMsg { term, offset, data, replay: None }),
+        );
     }
 
     /// The shell is gone. Whoever ended it — the shell itself, its pipe, the

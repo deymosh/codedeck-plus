@@ -1048,7 +1048,7 @@ mod tests {
     // --- output -------------------------------------------------------------
 
     fn out(offset: u64, text: &str) -> TerminalOutputMsg {
-        TerminalOutputMsg { term: T.into(), offset, data: STANDARD.encode(text.as_bytes()) }
+        TerminalOutputMsg { term: T.into(), offset, data: STANDARD.encode(text.as_bytes()), replay: None }
     }
 
     #[test]
@@ -1095,7 +1095,10 @@ mod tests {
         other.term = "t9".into();
         assert_eq!(s.output(M, &other), None);
         assert_eq!(
-            s.output(M, &TerminalOutputMsg { term: T.into(), offset: 0, data: "not base64!".into() }),
+            s.output(
+                M,
+                &TerminalOutputMsg { term: T.into(), offset: 0, data: "not base64!".into(), replay: None },
+            ),
             None
         );
         assert_eq!(s.attached().unwrap().expected, 0);

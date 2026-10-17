@@ -3320,6 +3320,7 @@ async fn terminal_output_reaches_the_host_on_its_own_event() {
                     term: "t1".into(),
                     offset: 0,
                     data: "aGk=".into(),
+                    replay: None,
                 }),
                 LIVE_KIND,
                 None,

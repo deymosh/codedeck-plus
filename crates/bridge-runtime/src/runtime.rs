@@ -447,10 +447,15 @@ impl Runtime {
                 // ring it keeps. An oversize replay is split into `chunk`
                 // fragments by the transport, like any other message.
                 if let Some((offset, data)) = self.terminals.replay(&term, from) {
+                    // `replay` marks this as the answer to `terminal-replay`:
+                    // `offset` is the ring's start, which may be past the
+                    // requested `from`, and the phone takes it from there
+                    // instead of asking again.
                     let message = BridgeToPhone::TerminalOutput(TerminalOutputMsg {
                         term,
                         offset,
                         data: STANDARD.encode(data),
+                        replay: Some(true),
                     });
                     self.relays.publish(vec![client], message);
                 }
