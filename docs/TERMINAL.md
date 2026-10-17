@@ -119,9 +119,11 @@ When relays are allowed, a terminal falls back to them like any message.
   typing pauses (150 ms on the direct link, 400 ms on relays), or past 256
   bytes. So `git che` + Tab is one event carrying `git che\t`, and the
   completion comes back in one output frame. Characters still waiting are
-  drawn at once as a **predicted echo** (dimmed, at the cursor, as mosh
-  does) and replaced by the real output when it arrives, so batching never
-  feels like lag. On the alternate screen (vim, htop, less — every key is a
+  drawn at once as a **predicted echo** (dimmed, at the cursor) and
+  replaced by the real output when it arrives, so batching never feels like
+  lag. After a control key (Enter, Tab, Ctrl-C) nothing is predicted until
+  the shell has echoed a key of the new line: a password prompt echoes
+  nothing, so a password is never drawn. On the alternate screen (vim, htop, less — every key is a
   command there) there is no prediction and keys go after at most 20 ms on
   the direct link and 60 ms on relays, coalescing a held key's repeats. The
   emulator already knows which screen is showing; nothing extra crosses the

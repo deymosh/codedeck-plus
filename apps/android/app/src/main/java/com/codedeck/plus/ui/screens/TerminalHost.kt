@@ -122,26 +122,34 @@ internal class RemoteTerminal(
     private var viewSize: Pair<Int, Int>? = null
 
     /**
-     * The predicted echo drawn at the cursor. Kept once the core has sent
-     * those keys ([echoSent]) until the shell's output arrives: the echo is a
-     * round trip behind the send, and the letters would blink out meanwhile.
+     * The predicted echo drawn at the cursor: the keys the core has sent and
+     * the shell has not echoed yet ([sentEcho] — the echo is a round trip
+     * behind the send, and the letters would blink out meanwhile), then the
+     * keys still waiting ([waitingEcho]). Output from the shell ends the
+     * first part; the second follows the core's waiting bytes.
+     *
+     * Nothing is predicted until the shell has echoed a key typed since the
+     * last control key ([echoTrusted]): at a password prompt it echoes
+     * nothing, and a prediction would draw the password.
      */
-    var echoText: String = ""
-        private set
-    private var echoSent = false
+    val echoText: String get() = if (echoTrusted) sentEcho + waitingEcho else ""
+    private var echoTrusted = false
+    private var typedSinceControl = false
+    private var sentEcho = ""
+    private var waitingEcho = ""
+    private var waiting = ByteArray(0)
 
     fun update(next: UniffiAttachedTerminal) {
         val wasWriter = attached?.writer == true
         attached = next
-        val predicted = if (next.writer) predictedEcho(next.waitingInput) else ""
-        when {
-            predicted.isNotEmpty() -> {
-                echoText = predicted
-                echoSent = false
-            }
-            next.waitingInput.isEmpty() && echoText.isNotEmpty() -> echoSent = true
-            else -> echoText = ""
-        }
+        // Bytes that no longer lead what waits were sent (two reads can
+        // fold a send and the next key into one change).
+        val now = next.waitingInput
+        val kept = now.size >= waiting.size && waiting.indices.all { now[it] == waiting[it] }
+        if (!kept) sentEcho += waitingEcho
+        waiting = now
+        waitingEcho = if (next.writer) predictedEcho(now) else ""
+        if (!next.writer) sentEcho = ""
         // A device that just took the pen tells the shell its own size.
         if (next.writer && !wasWriter) sentSize = null
         sendSize()
@@ -197,6 +205,12 @@ internal class RemoteTerminal(
 
     override fun onInput(data: ByteArray) {
         val term = writerTerm() ?: return
+        if (data.any { it in 0..0x1f }) {
+            echoTrusted = false
+            typedSinceControl = false
+        } else {
+            typedSinceControl = true
+        }
         pasting?.let { it.write(data); return }
         send(UniffiIntent.TerminalInput(machine, term, data, session.isAlternateBufferActive))
     }
@@ -209,10 +223,9 @@ internal class RemoteTerminal(
     // --- TerminalSessionClient: from the emulator -----------------------------
 
     override fun onTextChanged(changedSession: TerminalSession) {
-        if (echoSent) {
-            echoText = ""
-            echoSent = false
-        }
+        // Output after a key typed on this line is taken as its echo.
+        if (typedSinceControl) echoTrusted = true
+        sentEcho = ""
         view?.onScreenUpdated()
         echo?.invalidate()
     }
@@ -494,9 +507,12 @@ fun TerminalScreen(core: CoreHost, machine: String, term: String?, session: Stri
         // a replay that answers at once is drawn.
         val sink: (CoreEvent.TerminalOutput) -> Unit = { if (it.machine == machine) terminal.session.feed(it.bytes) }
         core.terminalOutput = sink
-        val current = core.ui.value?.terminals?.attached
-            ?.takeIf { it.machine == machine && it.refusal == null && it.ended == null }
+        val here = core.ui.value?.terminals?.attached?.takeIf { it.machine == machine }
+        val current = here?.takeIf { it.refusal == null && it.ended == null }
         val first = when {
+            // Recreated over a terminal that was refused or ended: the page
+            // keeps saying so rather than opening another.
+            here != null && current == null && (term == null || here.term == term) -> null
             term != null -> UniffiIntent.AttachTerminal(machine, term)
             // The page was recreated (a rotation) over the terminal it had:
             // the new screen is blank, so it is replayed.
