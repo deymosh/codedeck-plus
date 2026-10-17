@@ -447,13 +447,16 @@ impl Web {
     /// page's own list: both `browsers_json` and `browsers` read it, so what
     /// `GET /api/browsers` serves and what a phone's `web-browsers-request`
     /// is answered with can never disagree.
+    /// A browser whose sign-in has lapsed is left out: it is only reaped when
+    /// it next asks for something, and until then it is not signed in.
     fn browser_rows(&self) -> Vec<(String, WebBrowserInfo)> {
+        let now = now_ms();
         let mut rows: Vec<(u64, String, WebBrowserInfo)> = self
             .browsers
             .borrow()
             .iter()
             .filter_map(|(key, browser)| match &browser.access {
-                Access::SignedIn { by, since_ms, expires_ms } => Some((
+                Access::SignedIn { by, since_ms, expires_ms } if *expires_ms > now => Some((
                     browser.order,
                     key.clone(),
                     WebBrowserInfo {
@@ -466,7 +469,7 @@ impl Web {
                         agent: browser.agent.clone(),
                     },
                 )),
-                Access::Pending { .. } => None,
+                _ => None,
             })
             .collect();
         rows.sort_by_key(|(order, _, _)| *order);
