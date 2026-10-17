@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Logout
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.QrCodeScanner
@@ -38,6 +39,7 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.core.content.ContextCompat
 import com.codedeck.plus.core.CoreHost
+import com.codedeck.plus.ui.components.ConfirmDialog
 import com.codedeck.plus.ui.components.EmptyState
 import com.codedeck.plus.ui.components.ErrorNote
 import com.codedeck.plus.ui.components.Field
@@ -49,11 +51,13 @@ import com.codedeck.plus.ui.components.Page
 import com.codedeck.plus.ui.components.PrimaryButton
 import com.codedeck.plus.ui.components.RowSpinner
 import com.codedeck.plus.ui.components.SecondaryButton
+import com.codedeck.plus.ui.components.ValueRow
 import com.codedeck.plus.ui.theme.Tokens
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import uniffi.client_ffi.UniffiIntent
 import uniffi.client_ffi.UniffiMachineSummary
+import uniffi.client_ffi.UniffiWebBrowser
 import uniffi.client_ffi.UniffiWebSignIn
 import uniffi.client_ffi.UniffiWebSignInState
 
@@ -100,7 +104,7 @@ internal fun readSignInQr(text: String, machineNpub: String): ScannedSignIn {
 /**
  * The "Web page" group on a machine's page: the addresses its web page is
  * served on (each copies, in full with its https://), and the row that opens
- * [WebSignInContent].
+ * [WebSignInContent]: signing a browser in, and the ones signed in.
  */
 @Composable
 internal fun MachineWebPageGroup(machine: UniffiMachineSummary, onOpenWebSignIn: () -> Unit) {
@@ -139,7 +143,7 @@ internal fun MachineWebPageGroup(machine: UniffiMachineSummary, onOpenWebSignIn:
             }
             Divider()
         }
-        NavRow("Sign in a browser", onClick = onOpenWebSignIn)
+        NavRow("Browsers", onClick = onOpenWebSignIn, subtitle = "Sign one in, or out")
     }
 }
 
@@ -151,6 +155,9 @@ internal fun MachineWebPageGroup(machine: UniffiMachineSummary, onOpenWebSignIn:
  *
  * [signIn] is the code this phone sent and the bridge's answer; [noAnswer]
  * that the answer did not come in time; [notice] what was wrong with a scan.
+ * Under that, the browsers signed in now ([browsers], null until the bridge
+ * answers), each signed out with [onSignOut] after a confirmation;
+ * [ownNpub] is this phone's identity, which a row does not repeat.
  */
 @Composable
 fun WebSignInContent(
@@ -161,9 +168,14 @@ fun WebSignInContent(
     onCodeChange: (String) -> Unit,
     onSend: (String) -> Unit,
     onScan: () -> Unit,
+    browsers: List<UniffiWebBrowser>?,
+    ownNpub: String,
+    now: Long,
+    onSignOut: (UniffiWebBrowser) -> Unit,
     onBack: () -> Unit,
 ) {
-    Page(title = "Sign in a browser", onBack = onBack) {
+    var confirming by remember { mutableStateOf<UniffiWebBrowser?>(null) }
+    Page(title = "Browsers", onBack = onBack) {
         if (signIn?.state == UniffiWebSignInState.SIGNED_IN) {
             EmptyState(
                 icon = Icons.Outlined.Check,
@@ -208,6 +220,69 @@ fun WebSignInContent(
                 }
             }
         }
+        SignedInBrowsers(browsers, ownNpub, now, onSignOut = { confirming = it })
+    }
+    confirming?.let { browser ->
+        ConfirmDialog(
+            title = "Sign out ${browserName(browser.agent)}?",
+            body = "The browser at ${browser.peer} sees only the sign-in page again, until a phone signs it in.",
+            confirm = "Sign out",
+            onConfirm = {
+                onSignOut(browser)
+                confirming = null
+            },
+            onDismiss = { confirming = null },
+        )
+    }
+}
+
+/** "Firefox on Windows" from a User-Agent, as the web page names it, or the string itself. */
+internal fun browserName(agent: String): String {
+    if (agent.isBlank()) return "A browser"
+    val name = when {
+        "Edg/" in agent -> "Edge"
+        "OPR/" in agent -> "Opera"
+        "Firefox/" in agent -> "Firefox"
+        "Chrome/" in agent -> "Chrome"
+        "Safari/" in agent -> "Safari"
+        else -> return agent
+    }
+    val os = when {
+        "Android" in agent -> "Android"
+        "iPhone" in agent || "iPad" in agent -> "iOS"
+        "Windows" in agent -> "Windows"
+        "Mac OS X" in agent -> "macOS"
+        "Linux" in agent -> "Linux"
+        else -> return name
+    }
+    return "$name on $os"
+}
+
+private fun ago(ms: Long, now: Long): String {
+    val minutes = (now - ms).coerceAtLeast(0) / 60_000
+    return when {
+        minutes < 1 -> "just now"
+        minutes < 60 -> "$minutes min ago"
+        minutes < 48 * 60 -> "${minutes / 60} h ago"
+        else -> "${minutes / (24 * 60)} days ago"
+    }
+}
+
+/** The browsers signed in to the page now, each with where it is, when it was last seen, and Sign out. */
+@Composable
+private fun SignedInBrowsers(browsers: List<UniffiWebBrowser>?, ownNpub: String, now: Long, onSignOut: (UniffiWebBrowser) -> Unit) {
+    Group(title = "Signed in", footer = "A browser stays signed in for 30 days after its sign-in.") {
+        when {
+            browsers == null -> ValueRow("Asking the bridge") { RowSpinner() }
+            browsers.isEmpty() -> ValueRow("No browser is signed in") {}
+            else -> browsers.forEachIndexed { i, b ->
+                if (i > 0) Divider()
+                val by = b.by.takeIf { it != ownNpub }?.let { " · by ${shortKey(it)}" }.orEmpty()
+                ValueRow(browserName(b.agent), subtitle = "${b.peer} · seen ${ago(b.lastSeenMs.toLong(), now)}$by") {
+                    IconAction(Icons.AutoMirrored.Outlined.Logout, "Sign out ${browserName(b.agent)}", onClick = { onSignOut(b) }, tint = Tokens.TextMuted)
+                }
+            }
+        }
     }
 }
 
@@ -223,6 +298,13 @@ fun WebSignInScreen(core: CoreHost, pubkey: String, onBack: () -> Unit) {
     val context = LocalContext.current
     val machine = machineOrLeave(core, pubkey, onGone = onBack) ?: return
     val signIn = ui?.webSignIn?.get(pubkey)
+    val browsers = ui?.webBrowsers?.get(pubkey)
+    val ownNpub = remember { runCatching { core.identityNpub() }.getOrDefault("") }
+    // Asked once when the page opens, and again once a browser signs in from
+    // here: the list changes only then, so it is never polled.
+    LaunchedEffect(pubkey, signIn?.state == UniffiWebSignInState.SIGNED_IN) {
+        core.dispatch(UniffiIntent.RequestWebBrowsers(pubkey))
+    }
     var code by rememberSaveable { mutableStateOf("") }
     var notice by remember { mutableStateOf<String?>(null) }
     var noAnswer by remember { mutableStateOf(false) }
@@ -270,6 +352,10 @@ fun WebSignInScreen(core: CoreHost, pubkey: String, onBack: () -> Unit) {
                     cameraPermission.launch(Manifest.permission.CAMERA)
                 }
             },
+            browsers = browsers,
+            ownNpub = ownNpub,
+            now = System.currentTimeMillis(),
+            onSignOut = { b -> scope.launch { core.dispatch(UniffiIntent.SignOutWebBrowser(pubkey, b.id)) } },
             onBack = onBack,
         )
         if (scanOpen) {
