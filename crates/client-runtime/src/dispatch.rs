@@ -528,6 +528,13 @@ impl<'a> Router<'a> {
                     r.ui_changed = true;
                 }
             }
+            BridgeToPhone::WebBrowsers(m) => {
+                // The whole list, replacing whatever this machine showed: a
+                // request's list and a sign-out's fresh list are the same
+                // message, so neither is ever merged.
+                self.stores.ui.set_web_browsers(machine, m.browsers.clone());
+                r.ui_changed = true;
+            }
             BridgeToPhone::ProviderProfileAck(m) => {
                 self.stores.ui.apply_provider_profile_ack(
                     machine,
@@ -1636,6 +1643,34 @@ mod tests {
         s.ui.clear_web_sign_in(MACHINE);
         let mut r = Router::new(&mut s, &ts, &kp, 3_000);
         assert!(!r.route(MACHINE, &answered).await.ui_changed);
+    }
+
+    #[tokio::test]
+    async fn a_web_browsers_answer_replaces_that_machines_list_whole() {
+        let (mut s, ts, kp) = stores().await;
+        let browser = protocol::events::WebBrowserInfo {
+            id: "0123456789abcdef".into(),
+            by: "npub1owner".into(),
+            since_ms: 1,
+            last_seen_ms: 2,
+            expires_ms: 3,
+            peer: "192.168.1.20".into(),
+            agent: "Mozilla/5.0".into(),
+        };
+        let message = BridgeToPhone::WebBrowsers(protocol::events::WebBrowsersMsg {
+            browsers: vec![browser.clone()],
+        });
+
+        let mut r = Router::new(&mut s, &ts, &kp, 1_000);
+        let out = r.route(MACHINE, &message).await;
+        assert!(out.ui_changed, "the screen redraws from the new list");
+        assert_eq!(s.ui.web_browsers[MACHINE], vec![browser]);
+
+        // A later, shorter answer is the whole list, not an addition.
+        let empty = BridgeToPhone::WebBrowsers(protocol::events::WebBrowsersMsg { browsers: vec![] });
+        let mut r = Router::new(&mut s, &ts, &kp, 2_000);
+        assert!(r.route(MACHINE, &empty).await.ui_changed);
+        assert!(s.ui.web_browsers[MACHINE].is_empty());
     }
 
     #[tokio::test]

@@ -711,6 +711,7 @@ impl Core {
             credentials_status: Default::default(),
             provider_profile_status: Default::default(),
             web_sign_in: Default::default(),
+            web_browsers: Default::default(),
             undo_toast: None,
             terminals: Default::default(),
         })

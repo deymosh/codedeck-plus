@@ -24,7 +24,7 @@ use client_core::stores::settings::SettingsData;
 use client_core::stores::transcript::{SyncState, TranscriptState};
 use client_core::stores::ui::{CredentialsAck, ProviderProfileAck, UndoToast, WebSignIn};
 use protocol::common::{AgentStyle, TerminalEndReason};
-use protocol::events::TerminalInfo;
+use protocol::events::{TerminalInfo, WebBrowserInfo};
 use serde::Serialize;
 
 use crate::ports::TranscriptStore;
@@ -205,6 +205,10 @@ pub struct UiView {
     /// machine pubkey → the code the phone sent to sign a browser in to that
     /// machine's web page, and where the round trip stands.
     pub web_sign_in: BTreeMap<String, WebSignIn>,
+    /// machine pubkey → the browsers signed in to its web page, as the last
+    /// `web-browsers` listed them. Absent for a machine nobody has opened the
+    /// screen for: the phone asks then, never on a timer.
+    pub web_browsers: BTreeMap<String, Vec<WebBrowserInfo>>,
     pub undo_toast: Option<UndoToast>,
     /// The terminals, low-frequency state only: the frames themselves go to
     /// the host on `CoreEvent::TerminalOutput`, never through a view.
@@ -296,6 +300,7 @@ impl UiView {
             credentials_status: ui.credentials_status.clone(),
             provider_profile_status: ui.provider_profile_status.clone(),
             web_sign_in: ui.web_sign_in.clone(),
+            web_browsers: ui.web_browsers.clone(),
             undo_toast: ui.undo_toast.clone(),
             terminals: TerminalsView::from_stores(s),
         }

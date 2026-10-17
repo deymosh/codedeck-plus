@@ -11,6 +11,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use protocol::events::WebBrowserInfo;
 use serde::Serialize;
 
 pub use crate::notifications::session_key_of;
@@ -138,6 +139,11 @@ pub struct UiState {
     pub provider_profile_status: BTreeMap<String, ProviderProfileAck>,
     /// machine pubkey → the `web-sign-in` the phone last sent there.
     pub web_sign_in: BTreeMap<String, WebSignIn>,
+    /// machine pubkey → the browsers signed in to its web page, as the last
+    /// `web-browsers` listed them. Filled only while a screen asks — the phone
+    /// sends `web-browsers-request` when the user opens it, never on a timer —
+    /// so a machine nobody has looked at is simply absent.
+    pub web_browsers: BTreeMap<String, Vec<WebBrowserInfo>>,
     pub undo_toast: Option<UndoToast>,
 }
 
@@ -328,11 +334,33 @@ impl UiState {
     pub fn clear_web_sign_in(&mut self, machine_pubkey: &str) -> bool {
         self.web_sign_in.remove(machine_pubkey).is_some()
     }
+
+    /// The bridge's `web-browsers` for this machine: the browsers signed in
+    /// to its web page, as it last listed them. Replaced whole by every answer
+    /// — a request's list and a sign-out's fresh list are the same message —
+    /// so this is never merged with what was there.
+    pub fn set_web_browsers(&mut self, machine_pubkey: &str, browsers: Vec<WebBrowserInfo>) {
+        self.web_browsers.insert(machine_pubkey.to_string(), browsers);
+    }
+
+    /// Drop one browser from this machine's list the moment a sign-out is
+    /// sent, so the screen does not keep showing one the user ended. The
+    /// bridge's answer replaces the list again — with the truth, which still
+    /// holds the browser if the id matched nothing. Whether the id was there.
+    pub fn remove_web_browser(&mut self, machine_pubkey: &str, id: &str) -> bool {
+        let Some(browsers) = self.web_browsers.get_mut(machine_pubkey) else {
+            return false;
+        };
+        let before = browsers.len();
+        browsers.retain(|b| b.id != id);
+        browsers.len() != before
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use protocol::events::WebBrowserInfo;
 
     #[test]
     fn mark_clear_is_session_unread_round_trip_keyed_per_machine_and_session() {
@@ -503,6 +531,42 @@ mod tests {
         assert!(ui.clear_web_sign_in("m"));
         assert!(!ui.web_sign_in.contains_key("m"));
         assert!(!ui.clear_web_sign_in("m"));
+    }
+
+    fn a_browser() -> WebBrowserInfo {
+        WebBrowserInfo {
+            id: "0123456789abcdef".into(),
+            by: "npub1owner".into(),
+            since_ms: 1,
+            last_seen_ms: 2,
+            expires_ms: 3,
+            peer: "192.168.1.20".into(),
+            agent: "Mozilla/5.0".into(),
+        }
+    }
+
+    #[test]
+    fn a_web_browsers_answer_replaces_the_whole_list_for_its_machine() {
+        let mut ui = UiState::default();
+        let mut second = a_browser();
+        second.id = "fedcba9876543210".into();
+        ui.set_web_browsers("m", vec![a_browser(), second.clone()]);
+        assert_eq!(ui.web_browsers["m"].len(), 2);
+        assert!(!ui.web_browsers.contains_key("other"));
+
+        // A later answer, even a shorter one, is the whole list — never merged.
+        ui.set_web_browsers("m", vec![second.clone()]);
+        assert_eq!(ui.web_browsers["m"], vec![second]);
+    }
+
+    #[test]
+    fn removing_a_browser_reports_whether_the_id_was_there() {
+        let mut ui = UiState::default();
+        assert!(!ui.remove_web_browser("m", "0123456789abcdef"), "no list at all");
+        ui.set_web_browsers("m", vec![a_browser()]);
+        assert!(ui.remove_web_browser("m", "0123456789abcdef"));
+        assert!(ui.web_browsers["m"].is_empty());
+        assert!(!ui.remove_web_browser("m", "0123456789abcdef"), "already gone");
     }
 
     #[test]

@@ -1272,6 +1272,21 @@ fn to_uniffi_web_sign_in_state(state: WebSignInState) -> UniffiWebSignInState {
     }
 }
 
+/// One browser signed in to a machine's web page — mirrors
+/// `protocol::events::WebBrowserInfo` field for field. `id` is the page's
+/// short public id (never the session token), and it is what a
+/// `SignOutWebBrowser` intent names.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct UniffiWebBrowser {
+    pub id: String,
+    pub by: String,
+    pub since_ms: u64,
+    pub last_seen_ms: u64,
+    pub expires_ms: u64,
+    pub peer: String,
+    pub agent: String,
+}
+
 /// The bottom "Deleted X — Undo" toast after an optimistic session delete —
 /// mirrors `client_core::stores::ui::UndoToast` field for field. Present
 /// only while the 4 s undo window is open; the hide lands as the next
@@ -1302,6 +1317,11 @@ pub struct UniffiUiView {
     /// to that machine's web page, and where the round trip stands. Absent
     /// until a sign-in screen asks, and again once it closes.
     pub web_sign_in: HashMap<String, UniffiWebSignIn>,
+    /// Keyed by machine pubkey: the browsers signed in to that machine's web
+    /// page, as the last `web-browsers` listed them. Absent for a machine
+    /// nobody has opened the screen for — the phone asks then, never on a
+    /// timer.
+    pub web_browsers: HashMap<String, Vec<UniffiWebBrowser>>,
     /// Present while a delete's undo window is open.
     pub undo_toast: Option<UniffiUndoToast>,
     /// The terminals, low-frequency state only — output frames arrive on
@@ -1438,6 +1458,27 @@ pub fn build_uniffi_ui_view(v: &UiView) -> UniffiUiView {
                         code: w.code.clone(),
                         state: to_uniffi_web_sign_in_state(w.state),
                     },
+                )
+            })
+            .collect(),
+        web_browsers: v
+            .web_browsers
+            .iter()
+            .map(|(machine, browsers)| {
+                (
+                    machine.clone(),
+                    browsers
+                        .iter()
+                        .map(|b| UniffiWebBrowser {
+                            id: b.id.clone(),
+                            by: b.by.clone(),
+                            since_ms: b.since_ms,
+                            last_seen_ms: b.last_seen_ms,
+                            expires_ms: b.expires_ms,
+                            peer: b.peer.clone(),
+                            agent: b.agent.clone(),
+                        })
+                        .collect(),
                 )
             })
             .collect(),

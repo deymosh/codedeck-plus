@@ -340,6 +340,18 @@ pub enum UniffiIntent {
     ClearWebSignIn {
         machine: String,
     },
+    /// Ask `machine`'s web page which browsers are signed in to it. Sent when
+    /// the screen that lists them opens; the answer replaces this machine's
+    /// list in `UniffiUiView.web_browsers`.
+    RequestWebBrowsers {
+        machine: String,
+    },
+    /// End one signed-in browser by the page id the list showed. The row goes
+    /// at once, and the bridge's answer replaces the list with the truth.
+    SignOutWebBrowser {
+        machine: String,
+        id: String,
+    },
     /// Answer a permission request with one of its options' ids.
     RespondPermission {
         machine: String,
@@ -708,6 +720,14 @@ impl TryFrom<UniffiIntent> for Intent {
                 Intent::WebSignIn { machine, code }
             }
             UniffiIntent::ClearWebSignIn { machine } => Intent::ClearWebSignIn { machine },
+            UniffiIntent::RequestWebBrowsers { machine } => Intent::RequestWebBrowsers { machine },
+            UniffiIntent::SignOutWebBrowser { machine, id } => {
+                let id = id.trim().to_string();
+                if id.is_empty() {
+                    return Err(UniffiIntentError::EmptyValue { field: "id".into() });
+                }
+                Intent::SignOutWebBrowser { machine, id }
+            }
             UniffiIntent::RespondPermission { machine, session_id, request_id, option_id } => {
                 Intent::RespondPermission { machine, session_id, request_id, option_id }
             }
