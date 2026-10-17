@@ -112,8 +112,9 @@ pub struct Attached {
     pub rows: u16,
     /// The next output byte offset expected: frames are drawn from here.
     pub expected: u64,
-    /// A frame was lost and a replay asked for; frames are dropped until one
-    /// arrives at `expected`.
+    /// A replay was asked for (an attach asks from the start of the ring);
+    /// live frames are dropped until its answer arrives or a frame at
+    /// `expected` fills the gap.
     pub replay_pending: bool,
     pub refusal: Option<Refusal>,
     pub ended: Option<Ended>,
@@ -383,7 +384,8 @@ impl TerminalsState {
     }
 
     /// Attach to a terminal the heartbeat lists, read-only, from the start of
-    /// what the bridge still holds. Returns the replay command to send.
+    /// what the bridge still holds. Returns the replay command to send, and
+    /// waits for its answer before taking live frames.
     pub fn begin_attach(&mut self, machine: &str, term: &str) -> TerminalReplayMsg {
         let info = self.lists.get(machine).and_then(|m| m.get(term)).cloned();
         let writer = info
@@ -398,7 +400,7 @@ impl TerminalsState {
             cols: info.as_ref().map_or(80, |t| t.cols),
             rows: info.as_ref().map_or(24, |t| t.rows),
             expected: 0,
-            replay_pending: false,
+            replay_pending: true,
             refusal: None,
             ended: None,
         });
@@ -551,7 +553,7 @@ impl TerminalsState {
 
     /// `terminal-output` for the terminal on screen. `None` when it is for
     /// another terminal or the frame is dropped (an overlap already drawn, or
-    /// a frame ahead of a replay that was asked for).
+    /// a live frame ahead of a replay that was asked for).
     pub fn output(&mut self, machine: &str, msg: &TerminalOutputMsg) -> Option<OutputFrame> {
         let a = self.attached.as_mut()?;
         if a.machine != machine || a.term.as_deref() != Some(msg.term.as_str()) {
@@ -559,13 +561,25 @@ impl TerminalsState {
         }
         let bytes = STANDARD.decode(&msg.data).ok()?;
         if msg.offset > a.expected {
-            // A frame was lost. Ask for the bytes from where the screen is
-            // once per gap, and drop what arrives until the replay does.
-            if a.replay_pending {
-                return None;
+            if a.replay_pending && msg.replay == Some(true) {
+                // The answer to the replay starts at the oldest byte the
+                // bridge still holds, which is past what was asked for once
+                // that output has left the ring. Take it from there: asking
+                // again would only earn the same clamped answer.
+                a.expected = msg.offset;
+            } else {
+                // A frame was lost. Ask for the bytes from where the screen is
+                // once per gap, and drop what arrives until the replay does.
+                if a.replay_pending {
+                    return None;
+                }
+                a.replay_pending = true;
+                return Some(OutputFrame {
+                    offset: a.expected,
+                    data: Vec::new(),
+                    replay_from: Some(a.expected),
+                });
             }
-            a.replay_pending = true;
-            return Some(OutputFrame { offset: a.expected, data: Vec::new(), replay_from: Some(a.expected) });
         }
         let skip = (a.expected - msg.offset) as usize;
         if skip >= bytes.len() {
@@ -1070,9 +1084,66 @@ mod tests {
         assert_eq!(f.replay_from, Some(4), "asked from where the screen is");
         assert!(f.data.is_empty());
         assert_eq!(s.output(M, &out(20, "still lost")), None, "one request per gap");
-        let f = s.output(M, &out(4, "efgh")).unwrap();
+        let mut answer = out(4, "efgh");
+        answer.replay = Some(true);
+        let f = s.output(M, &answer).unwrap();
         assert_eq!((f.offset, f.data.as_slice()), (4, b"efgh".as_slice()));
         assert_eq!(s.attached().unwrap().expected, 8);
+        assert!(!s.attached().unwrap().replay_pending);
+        // The marking alone does not excuse a gap nobody asked about: with no
+        // replay pending this is an ordinary lost frame.
+        let mut ahead = out(20, "ahead");
+        ahead.replay = Some(true);
+        let f = s.output(M, &ahead).unwrap();
+        assert_eq!(f.replay_from, Some(8), "asked from where the screen is");
+        assert!(f.data.is_empty());
+    }
+
+    #[test]
+    fn an_attach_takes_a_replay_clamped_to_the_ring() {
+        // An attach asks from 0, so its answer is accepted from wherever the
+        // ring now starts.
+        let mut s = attached();
+        assert!(s.attached().unwrap().replay_pending);
+        let mut answer = out(300_000, "clamped");
+        answer.replay = Some(true);
+        let f = s.output(M, &answer).unwrap();
+        assert_eq!((f.offset, f.data.as_slice()), (300_000, b"clamped".as_slice()));
+        assert_eq!(f.replay_from, None, "a clamped answer is not a new gap");
+        assert_eq!(s.attached().unwrap().expected, 300_007);
+        assert!(!s.attached().unwrap().replay_pending);
+    }
+
+    #[test]
+    fn a_gap_older_than_the_ring_resumes_from_the_replay() {
+        let mut s = attached();
+        s.output(M, &out(0, "abcd"));
+        let f = s.output(M, &out(10, "lost")).unwrap();
+        assert_eq!(f.replay_from, Some(4));
+        // The requested bytes left the ring, so the answer starts later.
+        let mut answer = out(300_000, "kept");
+        answer.replay = Some(true);
+        let f = s.output(M, &answer).unwrap();
+        assert_eq!((f.offset, f.data.as_slice()), (300_000, b"kept".as_slice()));
+        assert_eq!(s.attached().unwrap().expected, 300_004);
+        assert!(!s.attached().unwrap().replay_pending);
+        // Live output continues from the answer's end.
+        let f = s.output(M, &out(300_004, "!")).unwrap();
+        assert_eq!((f.offset, f.data.as_slice()), (300_004, b"!".as_slice()));
+        assert_eq!(s.attached().unwrap().expected, 300_005);
+    }
+
+    #[test]
+    fn a_live_frame_while_a_replay_is_pending_does_not_advance_the_screen() {
+        let mut s = attached();
+        assert_eq!(s.output(M, &out(500, "ahead")), None);
+        assert!(s.attached().unwrap().replay_pending);
+        assert_eq!(s.attached().unwrap().expected, 0);
+        // The bridge may answer nothing (an empty ring, or nothing left after
+        // `from`); the next live frame at the expected offset still lands.
+        let f = s.output(M, &out(0, "live")).unwrap();
+        assert_eq!((f.offset, f.data.as_slice()), (0, b"live".as_slice()));
+        assert_eq!(s.attached().unwrap().expected, 4);
         assert!(!s.attached().unwrap().replay_pending);
     }
 
