@@ -28,7 +28,7 @@ data over); v12 sends a copy of each message per client of an identity (see
 | Purpose | Kind | Storage |
 |---|---|---|
 | Session-list heartbeat (`sessions`) | **30515** | NIP-33 replaceable, one per client (`d` = the copy's recipient tag); NIP-40 expiry 1 day |
-| Live output / usage / partial text | **24515** | ephemeral — never stored; `partial` goes to the clients watching that session, loss is recoverable (sync / re-request / the completing entry) |
+| Live output / usage / partial text, terminal output and keystrokes | **24515** | ephemeral — never stored; `partial` goes to the clients watching that session and `terminal-output` to those watching that terminal, loss is recoverable (sync / re-request / `terminal-replay` / the completing entry) |
 | Phone→bridge commands | **4515** | stored, NIP-40 expiry 1 h |
 | Bridge→phone responses (sync chunks, acks, lifecycle, pairing) | **4516** | stored, NIP-40 expiry 1 h |
 
@@ -56,7 +56,10 @@ The stored cursor moves at command/response cadence, not at output cadence —
 that is what keeps a burst of output from starving a response.
 
 The bridge subscribes to 4515 from paired authors with
-`since = lastSeen − 5s` (crash-gap grace). The relay therefore REPLAYS
+`since = lastSeen − 5s` (crash-gap grace). When the owner allows a terminal
+over relays it subscribes to the live kind (24515) from the same authors
+too, so a phone's keystrokes reach it there; off, the live kind is not
+subscribed and a relay sees none. The relay therefore REPLAYS
 recently processed commands after a restart — the bridge persists its dedup
 event-id set alongside the cursor so the replay is a no-op.
 
@@ -284,6 +287,64 @@ the relays when no server is set (or it failed). The bridge saves the file
 under its own name in `<first root>/.codedeck/uploads` and runs `text` with
 the path added as the session's next input — an image to be looked at, any
 other file named. At most 25 MiB; a relay-only upload must fit 200 chunks.
+
+### Terminal
+
+With the `terminal` capability — which a bridge advertises only when its
+owner has terminals switched on, unlike `files` and `session-keys` — a phone
+opens a real shell on the bridge's machine:
+
+- `terminal-open {openId, cols, rows, session?}` opens one. `openId` is the
+  phone's own, echoed in the answer, so it can match a reply to the request
+  that earned it; `session` starts the shell in that session's directory
+  (the phone never names a path). Answer: `terminal-opened {openId, term,
+  shell}`, or `terminal-exited` with `openId` and a refusal `reason`
+  (`limit`, `not-allowed`, `disabled`).
+- `terminal-input {term, seq, data}` types into it, writer only. `seq` counts
+  up by one from 1 **per terminal and per device**: the bridge applies input
+  in that order and drops a `seq` it has already applied, and a device's
+  count only ever grows — a takeover does not start it over — so a relay
+  replaying a signed event types nothing twice however many writers came in
+  between. `data` is base64 of the bytes (a key press need not be valid
+  UTF-8). It rides **LIVE_KIND (24515)**, ephemeral like the output — a
+  keystroke is never stored on a relay. `terminal-input-from {term, seq}`
+  says resend from `seq`: the first one that never arrived, or — to a device
+  that has just taken the pen — the seq its own count resumes at, which the
+  phone adopts.
+- `terminal-output {term, offset, data, replay?}` is what the shell wrote,
+  `data` base64 and `offset` the byte offset of its first byte in everything
+  this terminal has output. Also LIVE_KIND, and like `partial` it goes ONLY to
+  the present clients watching that terminal (`presence.watchingTerminal`) — a
+  client that missed a run reattaches with `terminal-replay {term, from}`,
+  which resends the output from `from` and what follows, read-only. `replay`
+  is set (true) only on the bridge's answer to that request: its `offset` may
+  be past `from` when the bridge no longer holds those bytes, and the client
+  takes it from there.
+- `terminal-resize {term, cols, rows}`, `terminal-takeover {term}` (become
+  the writer) and `terminal-close {term}` (hang up).
+- `terminal-exited {term?, openId?, code?, reason, device?}` says a terminal
+  is gone: `exit` with the shell's `code`, or `killed` / `closed` / `idle` /
+  `transport` / `restart`; the vocabulary is open, and a phone shows an
+  unknown reason as "ended". `openId` is set instead of `term` when an open
+  was refused, `device` when it was refused for that device.
+- `terminal-event {term, what, device, name?, via, at}` tells EVERY present
+  client of the identity what happened (`opened`, `attached`, `takeover`,
+  `closed`, `exited`), with the device that acted, its `name` and how its
+  command arrived (`via`: `direct`, `onion` or `relay`), so a phone that did
+  not act learns at once — takeovers and closes are audited this way.
+- The heartbeat's `terminals[]` (`TerminalInfo {term, shell, opened, device,
+  name?, writer, cols, rows}`) lists what is open, so a phone shows one it
+  did not open. It lists only the receiving identity's OWN terminals: a
+  terminal belongs to the identity that opened it, so another identity's
+  heartbeat does not name it at all — not its id, its shell, nor the device
+  running it. An identity with a terminal open receives a heartbeat event of
+  its own, carrying the same `rev` as the shared list; an identity with none
+  receives the shared list unchanged.
+- **The device id** names a client across its key rotations: the first 16
+  bytes, in hex, of `sha256("codedeck/device\0" + first session key + "\0")`,
+  the FIRST key the client granted this bridge — the one its `replaces`
+  chains back to (`crates/protocol/src/recipients.rs` pins it). Re-pairing or
+  reinstalling makes a new device.
 
 ### Credentials
 
@@ -625,8 +686,11 @@ client's tags before and after a key rotation.
 
 A phone whose identity key lives in an external signer (NIP-55) should not
 ask it to decrypt every message. It grants a local key, once:
-`session-key {sessionKey: {pubkeyHex, bridgePubkeyHex, expiresAt, replaces?}}` (or
-`sessionKey` on its `pair-request`). `bridgePubkeyHex` names the one bridge
+`session-key {sessionKey: {pubkeyHex, bridgePubkeyHex, expiresAt, replaces?, label?}}` (or
+`sessionKey` on its `pair-request`). `label` is the device's name as its user
+set it (the phone's model by default) — display only, for the bridge's audit
+and allowlist; what the bridge trusts is the device id it derives from the
+client's first key (see [Terminal](#terminal)). `bridgePubkeyHex` names the one bridge
 the grant is for; a bridge refuses a grant naming another, so a grant one
 bridge saw cannot be replayed to a second. A session key only ever keys NIP-44 payloads; it never
 signs. Every event keeps the same parties — the phone signs everything it
@@ -699,8 +763,9 @@ spec.
 - After `READY` the bridge sends what it published for that identity since
   `since` (seconds; it keeps an hour of it), then everything new — only the
   copies tagged with one of the `recipients`, never another client's. It
-  takes only command events (4515) authored by the identity that said
-  `HELLO`.
+  takes command events (4515) and terminal input on the live kind (24515),
+  each authored by the identity that said `HELLO`; the engine accepts only
+  `terminal-input` on the live kind, so nothing else can ride it in.
 
 ### Version and capabilities
 
@@ -717,8 +782,10 @@ ignored. The open vocabularies a bridge or agent may grow decode an unknown
 value as a catch-all instead of failing the whole message: an entry type as
 `unsupported` (it keeps its seq; the phone says it needs an update to show
 it), a tool or task kind as `other`, a notice kind as `other` (its text still
-shows), and an MCP status, session state or install state as `unknown` (an
-agent in an unknown install state runs no session). A known value with a
+shows), and an MCP status, session state, install state, terminal end
+reason, terminal event kind or terminal via as `unknown` (an agent in an
+unknown install state runs no session; a terminal with an unknown reason is
+shown as ended). A known value with a
 missing or mistyped field is still an error.
 
 The heartbeat carries `capabilities[]`, what this BRIDGE offers; what an
@@ -727,7 +794,9 @@ a phone does, and a string is added only when a phone relying on it against
 a bridge without it would otherwise fail:
 
 - `files`: the phone shows the attach control only when present;
-- `session-keys`: the phone grants a session key only when present.
+- `session-keys`: the phone grants a session key only when present;
+- `terminal`: the phone shows the terminal only when present (a bridge that
+  has terminals switched off does not advertise it).
 
 ### Oversize-event fragmentation (`chunk`)
 

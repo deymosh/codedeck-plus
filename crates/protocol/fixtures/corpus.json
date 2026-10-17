@@ -71,7 +71,17 @@
       { "v": 12, "type": "presence" },
       { "v": 12, "type": "presence", "away": true },
       { "v": 12, "type": "presence", "watching": "s1" },
-      { "v": 12, "type": "presence", "watching": null }
+      { "v": 12, "type": "presence", "watching": null },
+      { "v": 12, "type": "presence", "watching": "s1", "watchingTerminal": "t1" },
+      { "v": 12, "type": "presence", "away": false, "watching": null, "watchingTerminal": null },
+      { "v": 12, "type": "session-key", "sessionKey": { "pubkeyHex": "be", "bridgePubkeyHex": "cc", "expiresAt": 1800000000, "label": "Pixel 8" } },
+      { "v": 12, "type": "terminal-open", "openId": "o1", "cols": 80, "rows": 24 },
+      { "v": 12, "type": "terminal-open", "openId": "o2", "cols": 132, "rows": 43, "session": "s" },
+      { "v": 12, "type": "terminal-input", "term": "t1", "seq": 1, "data": "bHMgLWxhCg==" },
+      { "v": 12, "type": "terminal-resize", "term": "t1", "cols": 100, "rows": 30 },
+      { "v": 12, "type": "terminal-replay", "term": "t1", "from": 4096 },
+      { "v": 12, "type": "terminal-takeover", "term": "t1" },
+      { "v": 12, "type": "terminal-close", "term": "t1" }
     ],
     "rejected": [
       { "v": 13, "type": "input", "sessionId": "s", "text": "from a newer phone" },
@@ -108,7 +118,10 @@
       { "v": 12, "type": "account-action", "agent": "opencode", "account": "openai", "action": { "kind": "teleport" } },
       { "v": 12, "type": "mcp-action", "agent": "claude-code", "action": "add", "servers": [{ "name": "x", "transport": { "type": "websocket", "url": "wss://x" } }] },
       { "v": 12, "type": "session-mcp-toggle", "sessionId": "s", "name": "github" },
-      { "v": 12, "type": "keypress", "sessionId": "s", "key": "1", "context": "plan-approval" }
+      { "v": 12, "type": "keypress", "sessionId": "s", "key": "1", "context": "plan-approval" },
+      { "v": 12, "type": "terminal-input", "term": "t1", "seq": -1, "data": "aGk=" },
+      { "v": 12, "type": "terminal-open", "openId": "o1", "cols": 70000, "rows": 24 },
+      { "v": 12, "type": "terminal-input", "term": "t1", "seq": 1 }
     ]
   },
   "bridgeToPhone": {
@@ -193,7 +206,17 @@
       { "v": 12, "type": "pair-ack", "machine": "m", "ok": true },
       { "v": 12, "type": "pair-ack", "machine": "m", "ok": false, "reason": "bad-token", "relays": ["wss://r"], "host": "cli" },
       { "v": 12, "type": "provider-profiles", "machine": "m", "profiles": [{ "id": "p", "agent": "claude-code", "label": "L", "baseUrl": "https://x", "models": [{ "id": "m" }], "hasToken": true }, { "id": "q", "agent": "opencode", "label": "Q", "baseUrl": "https://y", "models": [{ "id": "a/b", "label": "B" }, { "id": "OpenCode Go/deepseek-v4.1-flash", "label": "deepseek-v4.1-flash", "provider": "OpenCode Go", "contextWindow": 1000000 }], "modelsFromProvider": true, "hasToken": true }, { "id": "r", "agent": "opencode", "label": "DeepSeek", "baseUrl": "https://z", "models": [{ "id": "c" }], "hasToken": true, "error": "OpenCode already has a provider called 'deepseek'. Give this profile another name." }] },
-      { "v": 12, "type": "provider-profile-ack", "machine": "m", "profileId": "p", "success": true, "tokenValid": false }
+      { "v": 12, "type": "provider-profile-ack", "machine": "m", "profileId": "p", "success": true, "tokenValid": false },
+      { "v": 12, "type": "terminal-opened", "openId": "o1", "term": "t1", "shell": "/bin/bash" },
+      { "v": 12, "type": "terminal-output", "term": "t1", "offset": 0, "data": "bHMgLWxhCg==" },
+      { "v": 12, "type": "terminal-output", "term": "t1", "offset": 300000, "data": "cmVwbGF5", "replay": true },
+      { "v": 12, "type": "terminal-input-from", "term": "t1", "seq": 4 },
+      { "v": 12, "type": "terminal-exited", "term": "t1", "code": 0, "reason": "exit" },
+      { "v": 12, "type": "terminal-exited", "term": "t1", "reason": "idle" },
+      { "v": 12, "type": "terminal-exited", "openId": "o2", "reason": "not-allowed", "device": "bf1f111943b3930a4c64a5c06d9153b2" },
+      { "v": 12, "type": "terminal-event", "term": "t1", "what": "takeover", "device": "bf1f111943b3930a4c64a5c06d9153b2", "name": "Pixel 8", "via": "relay", "at": 1792008058637 },
+      { "v": 12, "type": "terminal-event", "term": "t1", "what": "closed", "device": "aa11", "via": "direct", "at": 1792008058638 },
+      { "v": 12, "type": "sessions", "machine": "m", "sessions": [], "agents": [], "terminals": [{ "term": "t1", "shell": "/bin/bash", "opened": 1792008058637, "device": "bf1f111943b3930a4c64a5c06d9153b2", "name": "Pixel 8", "writer": "bf1f111943b3930a4c64a5c06d9153b2", "cols": 80, "rows": 24 }, { "term": "t2", "shell": "/bin/zsh", "opened": 1792008058638, "device": "aa11", "writer": "aa11", "cols": 132, "rows": 43 }] }
     ],
     "rejected": [
       { "v": 10, "type": "input-ack", "sessionId": "s", "inputId": "i" },
@@ -255,6 +278,8 @@
     { "dir": "b2p", "msg": { "v": 12, "type": "output", "sessionId": "s", "seq": 1, "entries": [{ "timestamp": "t", "entryType": "notice", "kind": "session_paused", "text": "x" }] } },
     { "dir": "b2p", "msg": { "v": 12, "type": "output", "sessionId": "s", "seq": 1, "entries": [{ "timestamp": "t", "entryType": "background_task", "taskId": "b1", "kind": "cron", "title": "x", "status": "running" }] } },
     { "dir": "b2p", "msg": { "v": 12, "type": "session-mcp", "sessionId": "s", "servers": [{ "name": "github", "status": "rate-limited" }] } },
-    { "dir": "b2p", "msg": { "v": 12, "type": "sessions", "machine": "m", "sessions": [{ "id": "s", "agent": "opencode", "slug": "sl", "cwd": "/w", "lastActivity": "t", "lineCount": 1, "title": null, "project": "p", "state": "waiting_plan" }], "agents": [{ "id": "pi", "displayName": "Pi", "install": { "state": "upgrading", "progress": 0.5 } }] } }
+    { "dir": "b2p", "msg": { "v": 12, "type": "sessions", "machine": "m", "sessions": [{ "id": "s", "agent": "opencode", "slug": "sl", "cwd": "/w", "lastActivity": "t", "lineCount": 1, "title": null, "project": "p", "state": "waiting_plan" }], "agents": [{ "id": "pi", "displayName": "Pi", "install": { "state": "upgrading", "progress": 0.5 } }] } },
+    { "dir": "b2p", "msg": { "v": 12, "type": "terminal-exited", "term": "t1", "reason": "quarantined" } },
+    { "dir": "b2p", "msg": { "v": 12, "type": "terminal-event", "term": "t1", "what": "hologram", "device": "aa11", "via": "telepathy", "at": 1792008058639 } }
   ]
 }

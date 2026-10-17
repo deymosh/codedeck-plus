@@ -28,13 +28,15 @@ mod phone;
 mod session_keys;
 pub use session_keys::MAX_CLIENTS;
 mod settings;
+mod terminal;
+pub use terminal::{TerminalAllowlist, TerminalAuditRecord, TerminalAuditWhat, TerminalConfig, PendingDevice};
 
 use std::collections::BTreeMap;
 
-use protocol::capabilities::{BridgeHostKind, ALL_BRIDGE_CAPABILITIES};
+use protocol::capabilities::{BridgeHostKind, ALL_BRIDGE_CAPABILITIES, TERMINAL};
 use protocol::common::{OutputEntry, RemoteSessionInfo, SessionState};
 use protocol::crypto::Keypair;
-use protocol::events::{BridgeToPhone, OutputMsg, SessionListMsg};
+use protocol::events::{BridgeToPhone, OutputMsg, SessionListMsg, TerminalInfo};
 
 use crate::catalog::Catalog;
 use crate::ingest::{since_for_connect, CommandsFilter, Ingest};
@@ -49,6 +51,7 @@ use crate::sync::{SyncConfig, SyncServer, SyncTimer};
 use crate::time::iso;
 
 use host::{ConversationDelete, HostCall};
+use terminal::Terminals;
 
 pub const DEFAULT_HEARTBEAT_INTERVAL_MS: u64 = 60_000;
 /// How often a session's `committed` flag is checked against git (catches
@@ -84,6 +87,9 @@ pub struct Config {
     pub card_timeout_ms: u64,
     pub pairing_window_ms: u64,
     pub sync: SyncConfig,
+    /// Whether this machine runs terminals, who may have one, and how many.
+    /// Off unless the owner turns it on; never switched from a phone.
+    pub terminal: TerminalConfig,
 }
 
 impl Config {
@@ -102,6 +108,7 @@ impl Config {
             card_timeout_ms: DEFAULT_CARD_TIMEOUT_MS,
             pairing_window_ms: DEFAULT_PAIRING_WINDOW_MS,
             sync: SyncConfig::default(),
+            terminal: TerminalConfig::default(),
         }
     }
 }
@@ -162,6 +169,8 @@ pub struct Engine {
     profile_refusals: BTreeMap<String, String>,
     next_ticket: u64,
     sync: SyncServer,
+    /// The shells this bridge runs for phones, and who may have one.
+    terminals: Terminals,
     pairing: Option<PairingWindow>,
     pairing_epoch: u64,
     nacks: NackBudget,
@@ -194,6 +203,7 @@ pub struct Engine {
 impl Engine {
     pub fn new(config: Config, ports: Ports) -> Self {
         let sync = SyncServer::new(config.sync);
+        let terminals = Terminals::new(config.terminal.clone());
         Self {
             config,
             system: ports.system,
@@ -218,6 +228,7 @@ impl Engine {
             profile_refusals: BTreeMap::new(),
             next_ticket: 0,
             sync,
+            terminals,
             pairing: None,
             pairing_epoch: 0,
             nacks: NackBudget::default(),
@@ -258,6 +269,12 @@ impl Engine {
             Input::OpenPairing { duration_ms } => self.open_pairing(duration_ms),
             Input::ClosePairing => self.close_pairing(crate::io::PairingCloseReason::Closed, None),
             Input::WorkspaceChanged => self.list_dirty = true,
+            Input::TerminalSpawned { term, shell } => self.on_terminal_spawned(term, shell),
+            Input::TerminalSpawnFailed { term, note } => self.on_terminal_spawn_failed(term, note),
+            Input::TerminalOutput { term, offset, data } => self.on_terminal_output(term, offset, data),
+            Input::TerminalExited { term, code, reason } => self.on_terminal_exited(term, code, reason),
+            Input::TerminalAllowlist(allowlist) => self.on_terminal_allowlist(allowlist),
+            Input::Unpaired { identity } => self.unpair(&identity),
             Input::Shutdown => self.shutdown(),
         }
         self.requester = None;
@@ -303,6 +320,7 @@ impl Engine {
         self.started = true;
         self.paired = load_or_default(self.store.get(store_keys::PAIRED_PHONES), "paired phones");
         self.presume_present();
+        self.hydrate_devices();
         self.credentials = load_or_default(self.store.get(store_keys::CREDENTIALS), "credentials");
         let profiles: StoredProfiles = load_or_default(self.store.get(store_keys::PROVIDER_PROFILES), "provider profiles");
         self.profiles = profiles.profiles.into_iter().map(|p| (p.id.clone(), p)).collect();
@@ -344,6 +362,12 @@ impl Engine {
         let ids: Vec<String> = self.sessions.keys().cloned().collect();
         for id in ids {
             self.close_runner(&id, "Session closed");
+        }
+        // The runtime takes the ptys down with it: every shell ends, and each
+        // one's end is audited.
+        let identities: Vec<String> = self.paired.iter().map(|p| p.pubkey_hex.clone()).collect();
+        for identity in identities {
+            self.close_identity_terminals(&identity, protocol::common::TerminalEndReason::Restart);
         }
         let timers: Vec<_> = self.out.timers.keys().copied().collect();
         for timer in timers {
@@ -395,6 +419,8 @@ impl Engine {
                     self.close_pairing(crate::io::PairingCloseReason::Expired, None);
                 }
             }
+            TimerKind::TerminalGap { term } => self.on_terminal_gap(&term),
+            TimerKind::TerminalIdle { term } => self.on_terminal_idle(&term),
         }
     }
 
@@ -585,6 +611,17 @@ impl Engine {
     /// The session-list heartbeat: sessions, agents, credentials,
     /// capabilities, folders and tombstones. To every present client, or
     /// only to `to`.
+    ///
+    /// A terminal belongs to the identity that opened it, and only that
+    /// identity's clients may act on it, so its `terminals` list holds the
+    /// receiving identity's own terminals and no other identity ever hears of
+    /// them — not their ids, their shells, nor which device runs them. The
+    /// list is built once without terminals and goes out unchanged to every
+    /// identity that owns none (one publish, as before); each identity that
+    /// owns at least one gets a copy of its own. The cost is therefore one
+    /// extra heartbeat event per identity with a terminal open, and none for
+    /// the others. Every copy of one heartbeat carries the same `rev`: it is
+    /// the same session list.
     fn publish_list(&mut self, offline: bool, to: Option<Vec<Addressee>>) {
         self.list_dirty = false;
         if self.paired.is_empty() {
@@ -601,23 +638,67 @@ impl Engine {
         let credentials = self.bridge_credentials();
         let removed = self.tombstones.ids();
         let rev = self.next_list_rev();
-        let message = BridgeToPhone::Sessions(SessionListMsg {
+        // The terminal capability is the owner's decision, so unlike the rest
+        // it is advertised only when this machine runs terminals: a phone that
+        // sent a `terminal-open` to a bridge without it would wait on a
+        // terminal that never opens.
+        let mut capabilities: Vec<String> = ALL_BRIDGE_CAPABILITIES.iter().map(|c| c.to_string()).collect();
+        if self.terminals_enabled() {
+            capabilities.push(TERMINAL.to_string());
+        }
+        // Built once, without terminals: an identity that owns none gets this
+        // one unchanged, and each identity that owns some gets a copy of its
+        // own. Every copy keeps this `rev` — they are one list.
+        let base = SessionListMsg {
             machine: self.config.machine.clone(),
             host: self.config.host_kind,
             sessions,
             agents,
             credentials,
-            capabilities: Some(ALL_BRIDGE_CAPABILITIES.iter().map(|c| c.to_string()).collect()),
+            capabilities: Some(capabilities),
             folders: Some(self.workspace.folders()),
             roots: Some(self.workspace.roots()),
             removed_sessions: (!removed.is_empty()).then_some(removed),
             machine_offline: offline.then_some(true),
             direct: self.config.direct.clone(),
+            terminals: None,
             rev: Some(rev),
-        });
+        };
         match to {
-            Some(to) => self.out.publish_addressed(to, message),
-            None => self.publish_all(message),
+            // One copy per identity asked, carrying that identity's own
+            // terminals; several clients of one identity share it.
+            Some(to) => {
+                let mut by_phone: BTreeMap<String, Vec<Addressee>> = BTreeMap::new();
+                for addressee in to {
+                    by_phone.entry(addressee.phone.clone()).or_default().push(addressee);
+                }
+                for (identity, group) in by_phone {
+                    let own = self.terminal_infos(&identity);
+                    let mut list = base.clone();
+                    list.terminals = (!own.is_empty()).then_some(own);
+                    self.out.publish_addressed(group, BridgeToPhone::Sessions(list));
+                }
+            }
+            None => {
+                let mut shared = Vec::new();
+                let mut owners: Vec<(String, Vec<TerminalInfo>)> = Vec::new();
+                for phone in self.phones() {
+                    let own = self.terminal_infos(&phone);
+                    if own.is_empty() {
+                        shared.push(phone);
+                    } else {
+                        owners.push((phone, own));
+                    }
+                }
+                for (identity, own) in owners {
+                    let mut list = base.clone();
+                    list.terminals = Some(own);
+                    self.out.publish(vec![identity], BridgeToPhone::Sessions(list));
+                }
+                // Identities owning no terminal share one publish: the cost
+                // of a terminal is not paid by a phone that has none.
+                self.out.publish(shared, BridgeToPhone::Sessions(base));
+            }
         }
     }
 

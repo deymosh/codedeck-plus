@@ -48,6 +48,18 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["ring",
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rcgen = { version = "0.13", default-features = false, features = ["crypto", "ring"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+# Terminals (src/terminal.rs): a real pty per terminal the phone opens — a
+# unix pty, ConPTY on Windows — so interactive programs behave as they do
+# over ssh. The runtime owns it; the engine only decides.
+portable-pty = "0.9"
+
+# The pty's termios, to tell whether the shell is echoing what is typed
+# (a password prompt): input typed with echo off is recorded as its byte
+# count, never its bytes. Pinned to the nix portable-pty 0.9 builds against:
+# `get_termios` returns *its* `Termios`, and a different nix would be a
+# different type.
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.28", features = ["term", "user"] }
 
 [dev-dependencies]
 tempfile = "3"

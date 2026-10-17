@@ -27,6 +27,7 @@ use std::time::Duration;
 
 use client_core::stores::backup::{backup_d_tag, backup_fingerprint, build_backup, merge_backup, ConfigBackup, BACKUP_KIND};
 use client_core::stores::pairing::is_relay_url;
+use client_core::stores::terminals::InputTransport;
 use nostr_transport::{Filter, SubCallbacks, Transport};
 use tokio::sync::oneshot;
 
@@ -321,7 +322,7 @@ impl Loop {
         // Removed on another device: removed here as a removal from this
         // device would be, with what is kept about the machine.
         for pubkey_hex in outcome.removed {
-            let ctx = IntentCtx { now, visible: self.conn.visible };
+            let ctx = IntentCtx { now, visible: self.conn.visible, terminal_transport: InputTransport::Direct };
             let result = apply_intent(&mut self.stores, Intent::RemoveMachine { pubkey_hex }, &self.keys, ctx);
             self.interpret_intent(result).await;
         }

@@ -23,7 +23,8 @@ use client_core::stores::quick_prompts::QuickPrompt;
 use client_core::stores::settings::SettingsData;
 use client_core::stores::transcript::{SyncState, TranscriptState};
 use client_core::stores::ui::{CredentialsAck, ProviderProfileAck, UndoToast};
-use protocol::common::AgentStyle;
+use protocol::common::{AgentStyle, TerminalEndReason};
+use protocol::events::TerminalInfo;
 use serde::Serialize;
 
 use crate::ports::TranscriptStore;
@@ -202,6 +203,82 @@ pub struct UiView {
     pub credentials_status: BTreeMap<String, CredentialsAck>,
     pub provider_profile_status: BTreeMap<String, ProviderProfileAck>,
     pub undo_toast: Option<UndoToast>,
+    /// The terminals, low-frequency state only: the frames themselves go to
+    /// the host on `CoreEvent::TerminalOutput`, never through a view.
+    pub terminals: TerminalsView,
+}
+
+/// The terminals each machine lists, and the one this phone has on screen.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalsView {
+    /// machine → the terminals its heartbeat lists, oldest opened first.
+    pub by_machine: BTreeMap<String, Vec<TerminalInfo>>,
+    pub attached: Option<AttachedTerminalView>,
+}
+
+/// The terminal on screen: what the bridge calls it, whether this device is
+/// the writer, and how the last open or the end went.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachedTerminalView {
+    pub machine: String,
+    /// The bridge's id, absent while the open is still pending.
+    pub term: Option<String>,
+    /// This phone's own id for a pending open, echoed by `terminal-opened`.
+    pub open_id: Option<String>,
+    pub shell: Option<String>,
+    pub writer: bool,
+    pub cols: u16,
+    pub rows: u16,
+    #[specta(type = specta_typescript::Number)]
+    pub expected_offset: u64,
+    /// Bytes typed and not yet sent — the app draws them dimmed at the cursor
+    /// as the predicted echo until the real output arrives.
+    pub waiting_input: Vec<u8>,
+    pub refusal: Option<TerminalRefusalView>,
+    pub ended: Option<TerminalEndedView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalRefusalView {
+    pub reason: TerminalEndReason,
+    /// The device the open was refused for; its name when one was ever seen.
+    pub device: Option<String>,
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalEndedView {
+    pub reason: TerminalEndReason,
+    pub code: Option<i32>,
+}
+
+impl TerminalsView {
+    pub fn from_stores(s: &CoreStores) -> Self {
+        Self {
+            by_machine: s.terminals.lists(),
+            attached: s.terminals.attached().map(|a| AttachedTerminalView {
+                machine: a.machine.clone(),
+                term: a.term.clone(),
+                open_id: a.open_id.clone(),
+                shell: a.shell.clone(),
+                writer: a.writer,
+                cols: a.cols,
+                rows: a.rows,
+                expected_offset: a.expected,
+                waiting_input: s.terminals.waiting_input(),
+                refusal: a.refusal.as_ref().map(|r| TerminalRefusalView {
+                    reason: r.reason,
+                    device: r.device.clone(),
+                    name: r.name.clone(),
+                }),
+                ended: a.ended.as_ref().map(|e| TerminalEndedView { reason: e.reason, code: e.code }),
+            }),
+        }
+    }
 }
 
 impl UiView {
@@ -216,6 +293,7 @@ impl UiView {
             credentials_status: ui.credentials_status.clone(),
             provider_profile_status: ui.provider_profile_status.clone(),
             undo_toast: ui.undo_toast.clone(),
+            terminals: TerminalsView::from_stores(s),
         }
     }
 }

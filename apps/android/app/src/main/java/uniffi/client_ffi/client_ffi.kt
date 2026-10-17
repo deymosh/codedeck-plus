@@ -967,7 +967,7 @@ internal object UniffiLib {
     ): Long
     external fun uniffi_client_ffi_fn_free_core(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    external fun uniffi_client_ffi_fn_constructor_core_new(`identity`: Long,`sessionKeys`: RustBuffer.ByValue,`listener`: Long,`notifier`: Long,`http`: RustBuffer.ByValue,`dbPath`: RustBuffer.ByValue,`proxy`: RustBuffer.ByValue,`tor`: Byte,uniffi_out_err: UniffiRustCallStatus, 
+    external fun uniffi_client_ffi_fn_constructor_core_new(`identity`: Long,`sessionKeys`: RustBuffer.ByValue,`listener`: Long,`notifier`: Long,`http`: RustBuffer.ByValue,`dbPath`: RustBuffer.ByValue,`proxy`: RustBuffer.ByValue,`tor`: Byte,`deviceLabel`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Long
     external fun uniffi_client_ffi_fn_method_core_connection_view(`ptr`: Long,
     ): Long
@@ -1333,7 +1333,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_client_ffi_checksum_method_uniffisessionkeystore_save() and 0xFFFF) != 1939) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_client_ffi_checksum_constructor_core_new() and 0xFFFF) != 39996) {
+    if ((lib.uniffi_client_ffi_checksum_constructor_core_new() and 0xFFFF) != 27654) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1611,6 +1611,29 @@ public object FfiConverterUInt: FfiConverter<UInt, Int> {
 
     override fun write(value: UInt, buf: ByteBuffer) {
         buf.putInt(value.toInt())
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterInt: FfiConverter<Int, Int> {
+    override fun lift(value: Int): Int {
+        return value
+    }
+
+    override fun read(buf: ByteBuffer): Int {
+        return buf.getInt()
+    }
+
+    override fun lower(value: Int): Int {
+        return value
+    }
+
+    override fun allocationSize(value: Int) = 4UL
+
+    override fun write(value: Int, buf: ByteBuffer) {
+        buf.putInt(value)
     }
 }
 
@@ -1974,7 +1997,7 @@ open class Core: Disposable, AutoCloseable, CoreInterface
      * Hydration reads the whole local database, so this can take seconds on
      * a slow device: never call it on a UI or service main thread.
      */
-    constructor(`identity`: UniffiIdentitySigner, `sessionKeys`: UniffiSessionKeyStore?, `listener`: CoreListener, `notifier`: UniffiNotifier, `http`: UniffiHttpFetch?, `dbPath`: kotlin.String, `proxy`: kotlin.String?, `tor`: kotlin.Boolean) :
+    constructor(`identity`: UniffiIdentitySigner, `sessionKeys`: UniffiSessionKeyStore?, `listener`: CoreListener, `notifier`: UniffiNotifier, `http`: UniffiHttpFetch?, `dbPath`: kotlin.String, `proxy`: kotlin.String?, `tor`: kotlin.Boolean, `deviceLabel`: kotlin.String) :
         this(UniffiWithHandle, 
     uniffiRustCallWithError(CoreInitException) { _status ->
     UniffiLib.uniffi_client_ffi_fn_constructor_core_new(
@@ -1987,7 +2010,8 @@ open class Core: Disposable, AutoCloseable, CoreInterface
         FfiConverterOptionalTypeUniffiHttpFetch.lower(`http`),
         FfiConverterString.lower(`dbPath`),
         FfiConverterOptionalString.lower(`proxy`),
-        FfiConverterBoolean.lower(`tor`),_status)
+        FfiConverterBoolean.lower(`tor`),
+        FfiConverterString.lower(`deviceLabel`),_status)
 }
     )
 
@@ -5405,6 +5429,116 @@ public object FfiConverterTypeUniffiAgentStyle: FfiConverterRustBuffer<UniffiAge
 
 
 /**
+ * The terminal on screen.
+ */
+data class UniffiAttachedTerminal (
+    var `machine`: kotlin.String
+    , 
+    /**
+     * The bridge's id, absent while an open is still pending.
+     */
+    var `term`: kotlin.String?
+    , 
+    /**
+     * This phone's own id for a pending open, echoed by `terminal-opened`.
+     */
+    var `openId`: kotlin.String?
+    , 
+    var `shell`: kotlin.String?
+    , 
+    /**
+     * Whether this device's typing is the one the terminal takes. When
+     * false the screen is read-only until `TakeOverTerminal`.
+     */
+    var `writer`: kotlin.Boolean
+    , 
+    var `cols`: kotlin.UShort
+    , 
+    var `rows`: kotlin.UShort
+    , 
+    /**
+     * The next output byte offset the app should expect. The `offset` on
+     * each `CoreEvent.TerminalOutput` counts from the same origin.
+     */
+    var `expectedOffset`: kotlin.ULong
+    , 
+    /**
+     * Bytes typed and not yet sent — drawn dimmed at the cursor as the
+     * predicted echo until the real output replaces them.
+     */
+    var `waitingInput`: kotlin.ByteArray
+    , 
+    /**
+     * Set when a `terminal-open` was refused.
+     */
+    var `refusal`: UniffiTerminalRefusal?
+    , 
+    /**
+     * Set when the terminal ended.
+     */
+    var `ended`: UniffiTerminalEnded?
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiAttachedTerminal: FfiConverterRustBuffer<UniffiAttachedTerminal> {
+    override fun read(buf: ByteBuffer): UniffiAttachedTerminal {
+        return UniffiAttachedTerminal(
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterUShort.read(buf),
+            FfiConverterUShort.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterByteArray.read(buf),
+            FfiConverterOptionalTypeUniffiTerminalRefusal.read(buf),
+            FfiConverterOptionalTypeUniffiTerminalEnded.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiAttachedTerminal) = (
+            FfiConverterString.allocationSize(value.`machine`) +
+            FfiConverterOptionalString.allocationSize(value.`term`) +
+            FfiConverterOptionalString.allocationSize(value.`openId`) +
+            FfiConverterOptionalString.allocationSize(value.`shell`) +
+            FfiConverterBoolean.allocationSize(value.`writer`) +
+            FfiConverterUShort.allocationSize(value.`cols`) +
+            FfiConverterUShort.allocationSize(value.`rows`) +
+            FfiConverterULong.allocationSize(value.`expectedOffset`) +
+            FfiConverterByteArray.allocationSize(value.`waitingInput`) +
+            FfiConverterOptionalTypeUniffiTerminalRefusal.allocationSize(value.`refusal`) +
+            FfiConverterOptionalTypeUniffiTerminalEnded.allocationSize(value.`ended`)
+    )
+
+    override fun write(value: UniffiAttachedTerminal, buf: ByteBuffer) {
+            FfiConverterString.write(value.`machine`, buf)
+            FfiConverterOptionalString.write(value.`term`, buf)
+            FfiConverterOptionalString.write(value.`openId`, buf)
+            FfiConverterOptionalString.write(value.`shell`, buf)
+            FfiConverterBoolean.write(value.`writer`, buf)
+            FfiConverterUShort.write(value.`cols`, buf)
+            FfiConverterUShort.write(value.`rows`, buf)
+            FfiConverterULong.write(value.`expectedOffset`, buf)
+            FfiConverterByteArray.write(value.`waitingInput`, buf)
+            FfiConverterOptionalTypeUniffiTerminalRefusal.write(value.`refusal`, buf)
+            FfiConverterOptionalTypeUniffiTerminalEnded.write(value.`ended`, buf)
+    }
+}
+
+
+
+/**
  * A plugin a marketplace offers that is not installed.
  */
 data class UniffiAvailablePlugin (
@@ -8259,6 +8393,233 @@ public object FfiConverterTypeUniffiSlashCommand: FfiConverterRustBuffer<UniffiS
 
 
 
+data class UniffiTerminalEnded (
+    /**
+     * `exit`, `killed`, `closed`, `idle`, `limit`, `transport`, `restart`…
+     */
+    var `reason`: kotlin.String
+    , 
+    /**
+     * The shell's exit status, with `exit`.
+     */
+    var `code`: kotlin.Int?
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiTerminalEnded: FfiConverterRustBuffer<UniffiTerminalEnded> {
+    override fun read(buf: ByteBuffer): UniffiTerminalEnded {
+        return UniffiTerminalEnded(
+            FfiConverterString.read(buf),
+            FfiConverterOptionalInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiTerminalEnded) = (
+            FfiConverterString.allocationSize(value.`reason`) +
+            FfiConverterOptionalInt.allocationSize(value.`code`)
+    )
+
+    override fun write(value: UniffiTerminalEnded, buf: ByteBuffer) {
+            FfiConverterString.write(value.`reason`, buf)
+            FfiConverterOptionalInt.write(value.`code`, buf)
+    }
+}
+
+
+
+/**
+ * One terminal a machine lists — mirrors `protocol::events::TerminalInfo`.
+ */
+data class UniffiTerminalInfo (
+    /**
+     * The bridge's id, which every terminal message names.
+     */
+    var `term`: kotlin.String
+    , 
+    /**
+     * What runs in it (`/bin/bash`).
+     */
+    var `shell`: kotlin.String
+    , 
+    var `opened`: kotlin.ULong
+    , 
+    /**
+     * The device that opened it (an opaque id; `writer` names the one whose
+     * input it takes now).
+     */
+    var `device`: kotlin.String
+    , 
+    /**
+     * That device's name, when its user gave one.
+     */
+    var `name`: kotlin.String?
+    , 
+    var `writer`: kotlin.String
+    , 
+    var `cols`: kotlin.UShort
+    , 
+    var `rows`: kotlin.UShort
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiTerminalInfo: FfiConverterRustBuffer<UniffiTerminalInfo> {
+    override fun read(buf: ByteBuffer): UniffiTerminalInfo {
+        return UniffiTerminalInfo(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterUShort.read(buf),
+            FfiConverterUShort.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiTerminalInfo) = (
+            FfiConverterString.allocationSize(value.`term`) +
+            FfiConverterString.allocationSize(value.`shell`) +
+            FfiConverterULong.allocationSize(value.`opened`) +
+            FfiConverterString.allocationSize(value.`device`) +
+            FfiConverterOptionalString.allocationSize(value.`name`) +
+            FfiConverterString.allocationSize(value.`writer`) +
+            FfiConverterUShort.allocationSize(value.`cols`) +
+            FfiConverterUShort.allocationSize(value.`rows`)
+    )
+
+    override fun write(value: UniffiTerminalInfo, buf: ByteBuffer) {
+            FfiConverterString.write(value.`term`, buf)
+            FfiConverterString.write(value.`shell`, buf)
+            FfiConverterULong.write(value.`opened`, buf)
+            FfiConverterString.write(value.`device`, buf)
+            FfiConverterOptionalString.write(value.`name`, buf)
+            FfiConverterString.write(value.`writer`, buf)
+            FfiConverterUShort.write(value.`cols`, buf)
+            FfiConverterUShort.write(value.`rows`, buf)
+    }
+}
+
+
+
+data class UniffiTerminalRefusal (
+    /**
+     * A `terminal-exited` reason (`not-allowed`, `limit`, `disabled`, …);
+     * an unknown one reads as `unknown`.
+     */
+    var `reason`: kotlin.String
+    , 
+    /**
+     * The device the open was refused for, for `not-allowed`.
+     */
+    var `device`: kotlin.String?
+    , 
+    /**
+     * That device's name, when one was ever seen for it.
+     */
+    var `name`: kotlin.String?
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiTerminalRefusal: FfiConverterRustBuffer<UniffiTerminalRefusal> {
+    override fun read(buf: ByteBuffer): UniffiTerminalRefusal {
+        return UniffiTerminalRefusal(
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiTerminalRefusal) = (
+            FfiConverterString.allocationSize(value.`reason`) +
+            FfiConverterOptionalString.allocationSize(value.`device`) +
+            FfiConverterOptionalString.allocationSize(value.`name`)
+    )
+
+    override fun write(value: UniffiTerminalRefusal, buf: ByteBuffer) {
+            FfiConverterString.write(value.`reason`, buf)
+            FfiConverterOptionalString.write(value.`device`, buf)
+            FfiConverterOptionalString.write(value.`name`, buf)
+    }
+}
+
+
+
+/**
+ * The terminals each machine lists, and the one this phone has on screen.
+ */
+data class UniffiTerminalsView (
+    /**
+     * machine pubkey -> the terminals its heartbeat lists, oldest opened
+     * first. Each carries the bridge's `term`, its shell, the device that
+     * opened it and the device whose input it takes now.
+     */
+    var `byMachine`: Map<kotlin.String, List<UniffiTerminalInfo>>
+    , 
+    var `attached`: UniffiAttachedTerminal?
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUniffiTerminalsView: FfiConverterRustBuffer<UniffiTerminalsView> {
+    override fun read(buf: ByteBuffer): UniffiTerminalsView {
+        return UniffiTerminalsView(
+            FfiConverterMapStringSequenceTypeUniffiTerminalInfo.read(buf),
+            FfiConverterOptionalTypeUniffiAttachedTerminal.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UniffiTerminalsView) = (
+            FfiConverterMapStringSequenceTypeUniffiTerminalInfo.allocationSize(value.`byMachine`) +
+            FfiConverterOptionalTypeUniffiAttachedTerminal.allocationSize(value.`attached`)
+    )
+
+    override fun write(value: UniffiTerminalsView, buf: ByteBuffer) {
+            FfiConverterMapStringSequenceTypeUniffiTerminalInfo.write(value.`byMachine`, buf)
+            FfiConverterOptionalTypeUniffiAttachedTerminal.write(value.`attached`, buf)
+    }
+}
+
+
+
 /**
  * A session's grouped transcript as a change against the one the caller
  * already has. Streaming appends a row (or grows the last one) many times a
@@ -8390,6 +8751,12 @@ data class UniffiUiView (
      * Present while a delete's undo window is open.
      */
     var `undoToast`: UniffiUndoToast?
+    , 
+    /**
+     * The terminals, low-frequency state only — output frames arrive on
+     * `CoreListener.on_event(CoreEvent.TerminalOutput)`, never here.
+     */
+    var `terminals`: UniffiTerminalsView
     
 ){
     
@@ -8414,6 +8781,7 @@ public object FfiConverterTypeUniffiUiView: FfiConverterRustBuffer<UniffiUiView>
             FfiConverterMapStringTypeUniffiCredentialsAck.read(buf),
             FfiConverterMapStringTypeUniffiProviderProfileAck.read(buf),
             FfiConverterOptionalTypeUniffiUndoToast.read(buf),
+            FfiConverterTypeUniffiTerminalsView.read(buf),
         )
     }
 
@@ -8425,7 +8793,8 @@ public object FfiConverterTypeUniffiUiView: FfiConverterRustBuffer<UniffiUiView>
             FfiConverterMapStringString.allocationSize(value.`planApprovalChoices`) +
             FfiConverterMapStringTypeUniffiCredentialsAck.allocationSize(value.`credentialsStatus`) +
             FfiConverterMapStringTypeUniffiProviderProfileAck.allocationSize(value.`providerProfileStatus`) +
-            FfiConverterOptionalTypeUniffiUndoToast.allocationSize(value.`undoToast`)
+            FfiConverterOptionalTypeUniffiUndoToast.allocationSize(value.`undoToast`) +
+            FfiConverterTypeUniffiTerminalsView.allocationSize(value.`terminals`)
     )
 
     override fun write(value: UniffiUiView, buf: ByteBuffer) {
@@ -8437,6 +8806,7 @@ public object FfiConverterTypeUniffiUiView: FfiConverterRustBuffer<UniffiUiView>
             FfiConverterMapStringTypeUniffiCredentialsAck.write(value.`credentialsStatus`, buf)
             FfiConverterMapStringTypeUniffiProviderProfileAck.write(value.`providerProfileStatus`, buf)
             FfiConverterOptionalTypeUniffiUndoToast.write(value.`undoToast`, buf)
+            FfiConverterTypeUniffiTerminalsView.write(value.`terminals`, buf)
     }
 }
 
@@ -9906,6 +10276,125 @@ sealed class UniffiIntent {
         companion object
     }
     
+    /**
+     * Open a real shell on `machine` — one whose heartbeat advertises the
+     * `terminal` capability. `session` starts it in that session's
+     * directory; the phone never names a path. The answer lands in
+     * `UniffiUiView.terminals.attached` (`terminal-opened`, or a refusal).
+     */
+    data class OpenTerminal(
+        val `machine`: kotlin.String, 
+        val `session`: kotlin.String?, 
+        val `cols`: kotlin.UShort, 
+        val `rows`: kotlin.UShort) : UniffiIntent()
+        
+    {
+        
+
+        companion object
+    }
+    
+    /**
+     * Put a terminal the machine's list names on screen, read-only,
+     * replaying what the bridge still holds. Output arrives on
+     * `CoreListener.on_event(CoreEvent.TerminalOutput)`.
+     */
+    data class AttachTerminal(
+        val `machine`: kotlin.String, 
+        val `term`: kotlin.String) : UniffiIntent()
+        
+    {
+        
+
+        companion object
+    }
+    
+    /**
+     * Leave the terminal on screen: the bridge stops sending its output. The
+     * shell keeps running.
+     */
+    data class DetachTerminal(
+        val `machine`: kotlin.String) : UniffiIntent()
+        
+    {
+        
+
+        companion object
+    }
+    
+    /**
+     * Type into the terminal on screen. `alternate_screen` is what the
+     * emulator reports: on the normal screen printable bytes wait for a key
+     * a program acts on (or a pause), on the alternate screen they go after
+     * a short window. Pacing, sequencing and retries are the core's.
+     */
+    data class TerminalInput(
+        val `machine`: kotlin.String, 
+        val `term`: kotlin.String, 
+        val `bytes`: kotlin.ByteArray, 
+        val `alternateScreen`: kotlin.Boolean) : UniffiIntent()
+        
+    {
+        
+
+        companion object
+    }
+    
+    /**
+     * Paste: the bytes go as one event.
+     */
+    data class TerminalPaste(
+        val `machine`: kotlin.String, 
+        val `term`: kotlin.String, 
+        val `bytes`: kotlin.ByteArray) : UniffiIntent()
+        
+    {
+        
+
+        companion object
+    }
+    
+    /**
+     * The emulator's window changed; only the writer's size counts.
+     */
+    data class ResizeTerminal(
+        val `machine`: kotlin.String, 
+        val `term`: kotlin.String, 
+        val `cols`: kotlin.UShort, 
+        val `rows`: kotlin.UShort) : UniffiIntent()
+        
+    {
+        
+
+        companion object
+    }
+    
+    /**
+     * Become the terminal's writer, so its input is this device's.
+     */
+    data class TakeOverTerminal(
+        val `machine`: kotlin.String, 
+        val `term`: kotlin.String) : UniffiIntent()
+        
+    {
+        
+
+        companion object
+    }
+    
+    /**
+     * Hang up the shell.
+     */
+    data class CloseTerminal(
+        val `machine`: kotlin.String, 
+        val `term`: kotlin.String) : UniffiIntent()
+        
+    {
+        
+
+        companion object
+    }
+    
 
     
 
@@ -10183,6 +10672,44 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
             59 -> UniffiIntent.BackupNow
             60 -> UniffiIntent.DisableBackup(
                 FfiConverterBoolean.read(buf),
+                )
+            61 -> UniffiIntent.OpenTerminal(
+                FfiConverterString.read(buf),
+                FfiConverterOptionalString.read(buf),
+                FfiConverterUShort.read(buf),
+                FfiConverterUShort.read(buf),
+                )
+            62 -> UniffiIntent.AttachTerminal(
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                )
+            63 -> UniffiIntent.DetachTerminal(
+                FfiConverterString.read(buf),
+                )
+            64 -> UniffiIntent.TerminalInput(
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                FfiConverterByteArray.read(buf),
+                FfiConverterBoolean.read(buf),
+                )
+            65 -> UniffiIntent.TerminalPaste(
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                FfiConverterByteArray.read(buf),
+                )
+            66 -> UniffiIntent.ResizeTerminal(
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                FfiConverterUShort.read(buf),
+                FfiConverterUShort.read(buf),
+                )
+            67 -> UniffiIntent.TakeOverTerminal(
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                )
+            68 -> UniffiIntent.CloseTerminal(
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
                 )
             else -> throw RuntimeException("invalid enum value, something is very wrong!!")
         }
@@ -10695,6 +11222,76 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 + FfiConverterBoolean.allocationSize(value.`delete`)
             )
         }
+        is UniffiIntent.OpenTerminal -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`machine`)
+                + FfiConverterOptionalString.allocationSize(value.`session`)
+                + FfiConverterUShort.allocationSize(value.`cols`)
+                + FfiConverterUShort.allocationSize(value.`rows`)
+            )
+        }
+        is UniffiIntent.AttachTerminal -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`machine`)
+                + FfiConverterString.allocationSize(value.`term`)
+            )
+        }
+        is UniffiIntent.DetachTerminal -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`machine`)
+            )
+        }
+        is UniffiIntent.TerminalInput -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`machine`)
+                + FfiConverterString.allocationSize(value.`term`)
+                + FfiConverterByteArray.allocationSize(value.`bytes`)
+                + FfiConverterBoolean.allocationSize(value.`alternateScreen`)
+            )
+        }
+        is UniffiIntent.TerminalPaste -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`machine`)
+                + FfiConverterString.allocationSize(value.`term`)
+                + FfiConverterByteArray.allocationSize(value.`bytes`)
+            )
+        }
+        is UniffiIntent.ResizeTerminal -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`machine`)
+                + FfiConverterString.allocationSize(value.`term`)
+                + FfiConverterUShort.allocationSize(value.`cols`)
+                + FfiConverterUShort.allocationSize(value.`rows`)
+            )
+        }
+        is UniffiIntent.TakeOverTerminal -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`machine`)
+                + FfiConverterString.allocationSize(value.`term`)
+            )
+        }
+        is UniffiIntent.CloseTerminal -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`machine`)
+                + FfiConverterString.allocationSize(value.`term`)
+            )
+        }
     }
 
     override fun write(value: UniffiIntent, buf: ByteBuffer) {
@@ -11085,6 +11682,60 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 FfiConverterBoolean.write(value.`delete`, buf)
                 Unit
             }
+            is UniffiIntent.OpenTerminal -> {
+                buf.putInt(61)
+                FfiConverterString.write(value.`machine`, buf)
+                FfiConverterOptionalString.write(value.`session`, buf)
+                FfiConverterUShort.write(value.`cols`, buf)
+                FfiConverterUShort.write(value.`rows`, buf)
+                Unit
+            }
+            is UniffiIntent.AttachTerminal -> {
+                buf.putInt(62)
+                FfiConverterString.write(value.`machine`, buf)
+                FfiConverterString.write(value.`term`, buf)
+                Unit
+            }
+            is UniffiIntent.DetachTerminal -> {
+                buf.putInt(63)
+                FfiConverterString.write(value.`machine`, buf)
+                Unit
+            }
+            is UniffiIntent.TerminalInput -> {
+                buf.putInt(64)
+                FfiConverterString.write(value.`machine`, buf)
+                FfiConverterString.write(value.`term`, buf)
+                FfiConverterByteArray.write(value.`bytes`, buf)
+                FfiConverterBoolean.write(value.`alternateScreen`, buf)
+                Unit
+            }
+            is UniffiIntent.TerminalPaste -> {
+                buf.putInt(65)
+                FfiConverterString.write(value.`machine`, buf)
+                FfiConverterString.write(value.`term`, buf)
+                FfiConverterByteArray.write(value.`bytes`, buf)
+                Unit
+            }
+            is UniffiIntent.ResizeTerminal -> {
+                buf.putInt(66)
+                FfiConverterString.write(value.`machine`, buf)
+                FfiConverterString.write(value.`term`, buf)
+                FfiConverterUShort.write(value.`cols`, buf)
+                FfiConverterUShort.write(value.`rows`, buf)
+                Unit
+            }
+            is UniffiIntent.TakeOverTerminal -> {
+                buf.putInt(67)
+                FfiConverterString.write(value.`machine`, buf)
+                FfiConverterString.write(value.`term`, buf)
+                Unit
+            }
+            is UniffiIntent.CloseTerminal -> {
+                buf.putInt(68)
+                FfiConverterString.write(value.`machine`, buf)
+                FfiConverterString.write(value.`term`, buf)
+                Unit
+            }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
     }
 }
@@ -11451,6 +12102,38 @@ public object FfiConverterOptionalUInt: FfiConverterRustBuffer<kotlin.UInt?> {
 /**
  * @suppress
  */
+public object FfiConverterOptionalInt: FfiConverterRustBuffer<kotlin.Int?> {
+    override fun read(buf: ByteBuffer): kotlin.Int? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterInt.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.Int?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterInt.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.Int?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterInt.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterOptionalULong: FfiConverterRustBuffer<kotlin.ULong?> {
     override fun read(buf: ByteBuffer): kotlin.ULong? {
         if (buf.get().toInt() == 0) {
@@ -11665,6 +12348,38 @@ public object FfiConverterOptionalTypeUniffiAgentStyle: FfiConverterRustBuffer<U
         } else {
             buf.put(1)
             FfiConverterTypeUniffiAgentStyle.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeUniffiAttachedTerminal: FfiConverterRustBuffer<UniffiAttachedTerminal?> {
+    override fun read(buf: ByteBuffer): UniffiAttachedTerminal? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeUniffiAttachedTerminal.read(buf)
+    }
+
+    override fun allocationSize(value: UniffiAttachedTerminal?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeUniffiAttachedTerminal.allocationSize(value)
+        }
+    }
+
+    override fun write(value: UniffiAttachedTerminal?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeUniffiAttachedTerminal.write(value, buf)
         }
     }
 }
@@ -12049,6 +12764,70 @@ public object FfiConverterOptionalTypeUniffiSignIn: FfiConverterRustBuffer<Uniff
         } else {
             buf.put(1)
             FfiConverterTypeUniffiSignIn.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeUniffiTerminalEnded: FfiConverterRustBuffer<UniffiTerminalEnded?> {
+    override fun read(buf: ByteBuffer): UniffiTerminalEnded? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeUniffiTerminalEnded.read(buf)
+    }
+
+    override fun allocationSize(value: UniffiTerminalEnded?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeUniffiTerminalEnded.allocationSize(value)
+        }
+    }
+
+    override fun write(value: UniffiTerminalEnded?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeUniffiTerminalEnded.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeUniffiTerminalRefusal: FfiConverterRustBuffer<UniffiTerminalRefusal?> {
+    override fun read(buf: ByteBuffer): UniffiTerminalRefusal? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeUniffiTerminalRefusal.read(buf)
+    }
+
+    override fun allocationSize(value: UniffiTerminalRefusal?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeUniffiTerminalRefusal.allocationSize(value)
+        }
+    }
+
+    override fun write(value: UniffiTerminalRefusal?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeUniffiTerminalRefusal.write(value, buf)
         }
     }
 }
@@ -13427,6 +14206,34 @@ public object FfiConverterSequenceTypeUniffiSlashCommand: FfiConverterRustBuffer
 /**
  * @suppress
  */
+public object FfiConverterSequenceTypeUniffiTerminalInfo: FfiConverterRustBuffer<List<UniffiTerminalInfo>> {
+    override fun read(buf: ByteBuffer): List<UniffiTerminalInfo> {
+        val len = buf.getInt()
+        return List<UniffiTerminalInfo>(len) {
+            FfiConverterTypeUniffiTerminalInfo.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<UniffiTerminalInfo>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeUniffiTerminalInfo.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<UniffiTerminalInfo>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeUniffiTerminalInfo.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceTypeUniffiUsageWindow: FfiConverterRustBuffer<List<UniffiUsageWindow>> {
     override fun read(buf: ByteBuffer): List<UniffiUsageWindow> {
         val len = buf.getInt()
@@ -13640,6 +14447,45 @@ public object FfiConverterMapStringSequenceString: FfiConverterRustBuffer<Map<ko
         value.forEach { (k, v) ->
             FfiConverterString.write(k, buf)
             FfiConverterSequenceString.write(v, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterMapStringSequenceTypeUniffiTerminalInfo: FfiConverterRustBuffer<Map<kotlin.String, List<UniffiTerminalInfo>>> {
+    override fun read(buf: ByteBuffer): Map<kotlin.String, List<UniffiTerminalInfo>> {
+        val len = buf.getInt()
+        return buildMap<kotlin.String, List<UniffiTerminalInfo>>(len) {
+            repeat(len) {
+                val k = FfiConverterString.read(buf)
+                val v = FfiConverterSequenceTypeUniffiTerminalInfo.read(buf)
+                this[k] = v
+            }
+        }
+    }
+
+    override fun allocationSize(value: Map<kotlin.String, List<UniffiTerminalInfo>>): ULong {
+        val spaceForMapSize = 4UL
+        val spaceForChildren = value.map { (k, v) ->
+            FfiConverterString.allocationSize(k) +
+            FfiConverterSequenceTypeUniffiTerminalInfo.allocationSize(v)
+        }.sum()
+        return spaceForMapSize + spaceForChildren
+    }
+
+    override fun write(value: Map<kotlin.String, List<UniffiTerminalInfo>>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        // The parens on `(k, v)` here ensure we're calling the right method,
+        // which is important for compatibility with older android devices.
+        // Ref https://blog.danlew.net/2017/03/16/kotlin-puzzler-whose-line-is-it-anyways/
+        value.forEach { (k, v) ->
+            FfiConverterString.write(k, buf)
+            FfiConverterSequenceTypeUniffiTerminalInfo.write(v, buf)
         }
     }
 }

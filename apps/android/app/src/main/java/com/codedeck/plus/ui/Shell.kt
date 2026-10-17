@@ -32,6 +32,7 @@ import com.codedeck.plus.ui.screens.PermissionRulesScreen
 import com.codedeck.plus.ui.screens.PluginsScreen
 import com.codedeck.plus.ui.screens.ProvidersScreen
 import com.codedeck.plus.ui.screens.SettingsScreen
+import com.codedeck.plus.ui.screens.TerminalScreen
 import com.codedeck.plus.ui.session.SessionScreen
 import com.codedeck.plus.ui.theme.Tokens
 import kotlinx.coroutines.delay
@@ -57,6 +58,11 @@ private sealed interface Screen {
     data class Mcp(val machine: String, val agent: String) : Screen
     data class PermissionRules(val machine: String, val agent: String) : Screen
     data class Providers(val machine: String, val agent: String) : Screen
+    /**
+     * A terminal on [machine]: [term] attaches to a running one, null opens
+     * a new one — in [session]'s directory when opened from a session.
+     */
+    data class Terminal(val machine: String, val term: String?, val session: String?) : Screen
 }
 
 /** [Screen] as a flat string list: what [ScreenSaver] stores, and (joined)
@@ -74,6 +80,7 @@ private fun Screen.parts(): List<String> = when (this) {
     is Screen.Mcp -> listOf("mcp", machine, agent)
     is Screen.PermissionRules -> listOf("permission-rules", machine, agent)
     is Screen.Providers -> listOf("providers", machine, agent)
+    is Screen.Terminal -> listOf("terminal", machine, term.orEmpty(), session.orEmpty())
 }
 
 private fun Screen.stateKey(): String = parts().joinToString("/")
@@ -82,7 +89,7 @@ private fun Screen.stateKey(): String = parts().joinToString("/")
  *  shallower one. */
 private fun Screen.depth(): Int = when (this) {
     Screen.Sessions -> 0
-    Screen.Logs, is Screen.Agent -> 2
+    Screen.Logs, is Screen.Agent, is Screen.Terminal -> 2
     is Screen.Plugins, is Screen.Mcp, is Screen.PermissionRules, is Screen.Providers -> 3
     else -> 1
 }
@@ -104,6 +111,7 @@ private val ScreenSaver = listSaver<Screen, String>(
             "mcp" -> Screen.Mcp(saved[1], saved[2])
             "permission-rules" -> Screen.PermissionRules(saved[1], saved[2])
             "providers" -> Screen.Providers(saved[1], saved[2])
+            "terminal" -> Screen.Terminal(saved[1], saved[2].ifEmpty { null }, saved[3].ifEmpty { null })
             else -> Screen.Sessions
         }
     },
@@ -180,6 +188,13 @@ fun Shell(
         scope.launch { core.dispatch(UniffiIntent.SelectSession(machine, sessionId)) }
     }
 
+    // A terminal opened from a session goes back to it — selected again, as
+    // any open of a session is — and one opened from its machine's page there.
+    fun leaveTerminal(terminal: Screen.Terminal) {
+        val session = terminal.session
+        if (session != null) openSession(terminal.machine, session) else go(Screen.Machine(terminal.machine))
+    }
+
     // The app always starts on the sessions list, paired or not: pairing
     // opens only when the user asks for it (the list's pair button, its empty
     // state) or a pairing link is in progress. Guessing "first run" from an
@@ -252,6 +267,7 @@ fun Shell(
         // there.
         if (screen != Screen.Sessions) {
             BackHandler {
+                (screen as? Screen.Terminal)?.let { leaveTerminal(it); return@BackHandler }
                 go(
                     when (val current = screen) {
                         Screen.Logs -> Screen.Settings
@@ -281,6 +297,14 @@ fun Shell(
                     current.machine,
                     onBack = { go(Screen.Sessions) },
                     onOpenAgent = { agent -> go(Screen.Agent(current.machine, agent)) },
+                    onOpenTerminal = { term -> go(Screen.Terminal(current.machine, term, session = null)) },
+                )
+                is Screen.Terminal -> TerminalScreen(
+                    core,
+                    current.machine,
+                    current.term,
+                    current.session,
+                    onBack = { leaveTerminal(current) },
                 )
                 is Screen.Agent -> AgentSettingsScreen(
                     core,
@@ -312,6 +336,7 @@ fun Shell(
                     current.machine,
                     current.sessionId,
                     onBack = { go(Screen.Sessions) },
+                    onOpenTerminal = { go(Screen.Terminal(current.machine, term = null, session = current.sessionId)) },
                     modifier = Modifier.fillMaxSize().background(Tokens.Bg),
                 )
                 Screen.Sessions -> SessionsScreen(

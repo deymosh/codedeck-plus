@@ -68,6 +68,10 @@ class CoreHost(
     dbPath: String,
     proxy: String?,
     tor: Boolean,
+    /** This phone's name for the bridge, built by the top-level `deviceLabel`
+     *  function. Sent on every session-key grant, shown in the bridge's
+     *  terminal allowlist and in a refusal to open a terminal. */
+    deviceLabel: String,
 ) : CoreListener {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -90,6 +94,18 @@ class CoreHost(
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
     val events: SharedFlow<CoreEvent> = _events.asSharedFlow()
+
+    /**
+     * Where the terminal on screen takes its output (`CoreEvent.TerminalOutput`),
+     * called on the core's thread. Kept off [events] on purpose: a shell can
+     * send a frame every 16 ms, which would push every other event out of
+     * that flow's small buffer, and dropping a terminal frame there would
+     * leave a hole in the screen that no offset check could see. Set by the
+     * terminal screen before it opens or attaches, so a replay that answers
+     * at once is not missed; null while no terminal is on screen.
+     */
+    @Volatile
+    var terminalOutput: ((CoreEvent.TerminalOutput) -> Unit)? = null
 
     private val _machines = MutableStateFlow<UniffiMachinesView?>(null)
     val machines: StateFlow<UniffiMachinesView?> = _machines.asStateFlow()
@@ -161,7 +177,7 @@ class CoreHost(
     // Constructed last: `Core` holds `this` as its listener and may call back
     // from its own thread straight away, so every field a callback touches
     // (the refreshers above) must already be initialized.
-    private val core: Core = Core(identity, sessionKeys, this, notifier, CoreHttpFetch(), dbPath, proxy, tor)
+    private val core: Core = Core(identity, sessionKeys, this, notifier, CoreHttpFetch(), dbPath, proxy, tor, deviceLabel)
 
     fun start() {
         core.start()
@@ -216,6 +232,15 @@ class CoreHost(
             // The intent's kind only: its fields may hold secrets.
             Log.w("codedeck", "intent ${intent::class.simpleName} refused: ${e::class.simpleName}: ${e.message?.take(160)}")
         }
+    }
+
+    /**
+     * [dispatch] on the host's own scope, for a caller whose scope is going
+     * away — a screen telling the core it closed, from its `onDispose`, where
+     * a launch on the composition's scope would be cancelled before it ran.
+     */
+    fun dispatchDetached(intent: UniffiIntent) {
+        scope.launch { dispatch(intent) }
     }
 
     /**
@@ -289,6 +314,10 @@ class CoreHost(
     }
 
     override fun onEvent(event: CoreEvent) {
+        if (event is CoreEvent.TerminalOutput) {
+            terminalOutput?.invoke(event)
+            return
+        }
         _events.tryEmit(event)
         when (event) {
             is CoreEvent.StateChanged -> when (event.slice) {
@@ -326,3 +355,31 @@ class CoreHost(
 
     private fun refreshPairing() = pairingRefresher.request()
 }
+
+/**
+ * This phone's name for the bridge's terminal allowlist and its refusal
+ * message, built from the platform's own model string ([model]) and the
+ * manufacturer. The make is added only when the model does not already name
+ * it: a "Google Pixel 8a" says nothing "Pixel 8a" does not, while a bare
+ * model code like "SM-S918B" names no make on its own. The manufacturer is
+ * capitalized because `Build.MANUFACTURER` is often lowercase ("samsung").
+ *
+ * The bridge sanitizes and caps the name before showing it (see
+ * `CoreConfig::device_label`), so a name that is empty here is simply no
+ * name.
+ */
+internal fun deviceLabel(manufacturer: String, model: String): String {
+    val make = capitalizeAscii(manufacturer.trim())
+    val name = model.trim()
+    return when {
+        name.isEmpty() -> make
+        make.isEmpty() -> name
+        // Already names its make: either it starts with the make, or it reads
+        // as a product name (it carries lowercase) rather than a model code.
+        name.startsWith(make, ignoreCase = true) || name.any { it.isLowerCase() } -> name
+        else -> "$make $name"
+    }.ifBlank { "Android device" }
+}
+
+private fun capitalizeAscii(value: String): String =
+    if (value.isEmpty()) "" else value.take(1).uppercase() + value.drop(1)

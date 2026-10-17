@@ -29,7 +29,7 @@ use protocol::nostr_event::SignedEvent;
 use protocol::codec::{encode_phone_to_bridge, DecodeError};
 use protocol::commands::PhoneToBridge;
 use protocol::events::BridgeToPhone;
-use protocol::kinds::{COMMAND_EXPIRY_SECONDS, COMMAND_KIND};
+use protocol::kinds::{COMMAND_EXPIRY_SECONDS, COMMAND_KIND, LIVE_KIND};
 
 /// Most-recent invalid-payload records kept for diagnostics (older ones drop).
 const INVALID_RECORDS_CAP: usize = 100;
@@ -39,12 +39,20 @@ const INVALID_RECORDS_CAP: usize = 100;
 /// Which Nostr kind a phone→bridge command rides.
 ///
 /// Unlike bridge→phone traffic — split three ways by storage class, see
-/// `client_runtime::nostr_client` — every phone→bridge command is a stored
+/// `client_runtime::nostr_client` — a phone→bridge command is a stored
 /// [`COMMAND_KIND`] event: a briefly-offline bridge still receives it on
 /// resubscribe, and NIP-40 expires it after [`COMMAND_EXPIRY_SECONDS`]. This
 /// function is the single place that policy is stated.
-pub fn kind_for_message(_msg: &PhoneToBridge) -> u16 {
-    COMMAND_KIND
+///
+/// The one exception is `terminal-input`: keystrokes are never stored on a
+/// relay, even encrypted, since timing and size alone leak what was typed
+/// (see `docs/TERMINAL.md`, "Transport"). It rides [`LIVE_KIND`], whose loss
+/// is already tolerated — the terminal's own `seq` says what to resend.
+pub fn kind_for_message(msg: &PhoneToBridge) -> u16 {
+    match msg {
+        PhoneToBridge::TerminalInput(_) => LIVE_KIND,
+        _ => COMMAND_KIND,
+    }
 }
 
 /// Why a command could not be built. Every variant is a caller error surfaced at
@@ -88,12 +96,16 @@ pub fn command_event(
         PublicKey::from_hex(machine_pubkey_hex).map_err(|_| CryptoError::InvalidKey)?;
     let author_pk = PublicKey::from_hex(author_pubkey_hex).map_err(|_| CryptoError::InvalidKey)?;
     let created_at = now_ms / 1000;
-    let expiration = created_at + COMMAND_EXPIRY_SECONDS;
-    let mut event = EventBuilder::new(Kind::Custom(kind_for_message(msg)), content)
-        .tags([
-            Tag::public_key(machine_pk),
-            Tag::expiration(Timestamp::from(expiration)),
-        ])
+    let kind = kind_for_message(msg);
+    let mut tags = vec![Tag::public_key(machine_pk)];
+    // An expiration tag says nothing about an ephemeral event (a relay never
+    // stores it); it is added only where it is what keeps a stored command
+    // from outliving its use.
+    if kind == COMMAND_KIND {
+        tags.push(Tag::expiration(Timestamp::from(created_at + COMMAND_EXPIRY_SECONDS)));
+    }
+    let mut event = EventBuilder::new(Kind::Custom(kind), content)
+        .tags(tags)
         .custom_created_at(Timestamp::from(created_at))
         .build(author_pk);
     event.ensure_id();
@@ -373,10 +385,13 @@ mod tests {
     // --- outbound -----------------------------------------------------------
 
     #[test]
-    fn kind_for_message_is_always_command_kind() {
+    fn every_command_rides_the_command_kind_but_terminal_input_rides_the_live_one() {
         let msg =
             decode_phone_to_bridge(r#"{"v":12,"type":"input","sessionId":"s","text":"hi"}"#).unwrap();
         assert_eq!(kind_for_message(&msg), COMMAND_KIND);
+        let keys = decode_phone_to_bridge(r#"{"v":12,"type":"terminal-input","term":"t","seq":1,"data":"aGk="}"#)
+            .unwrap();
+        assert_eq!(kind_for_message(&keys), LIVE_KIND);
     }
 
     #[test]

@@ -18,7 +18,6 @@ use crate::catalog::{is_effort, is_mode};
 use crate::io::{Addressee, Effect, InboundEvent, Via};
 use crate::registry::{project_of, SessionRecord};
 use crate::session::{option_answer, permission_summary, CardKind, Phase, Runner, Session, StartKind};
-
 /// The wire name of a command, for logs. (Commands can carry secrets, so
 /// they are never logged whole.)
 fn type_name(msg: &PhoneToBridge) -> &'static str {
@@ -59,6 +58,12 @@ fn type_name(msg: &PhoneToBridge) -> &'static str {
         PhoneToBridge::ProviderProfilesRequest(_) => "provider-profiles-request",
         PhoneToBridge::SessionKey(_) => "session-key",
         PhoneToBridge::Presence(_) => "presence",
+        PhoneToBridge::TerminalOpen(_) => "terminal-open",
+        PhoneToBridge::TerminalInput(_) => "terminal-input",
+        PhoneToBridge::TerminalResize(_) => "terminal-resize",
+        PhoneToBridge::TerminalReplay(_) => "terminal-replay",
+        PhoneToBridge::TerminalTakeover(_) => "terminal-takeover",
+        PhoneToBridge::TerminalClose(_) => "terminal-close",
     }
 }
 
@@ -75,18 +80,36 @@ impl Engine {
                     self.on_pair_request(req, &event.pubkey);
                 }
             }
-            Via::Commands => {
+            // Every way a command can reach the bridge: over a relay, or over
+            // the bridge's own link (directly, or with Tor in front of it).
+            Via::Relay | Via::Direct | Via::Onion => {
                 if !self.paired.iter().any(|p| p.pubkey_hex == event.pubkey) {
                     log::info!("[Engine] Ignoring event from unknown pubkey: {}...", short(&event.pubkey));
                     return;
                 }
                 let keys = self.payload_keys(&event.pubkey, now_secs);
-                let Some((msg, key)) = self.ingest.accept(event, &self.config.keys, &keys, now_secs) else { return };
+                // A phone's keystrokes ride the live kind. Their per-terminal
+                // `seq` is what keeps a replayed one from typing twice, so
+                // they must not take a slot in the command dedup set: a burst
+                // of typing would push command ids out of it and reopen the
+                // replay window that remembering them closes.
+                let accepted = if event.kind == protocol::kinds::LIVE_KIND {
+                    self.ingest.accept_live(event, &self.config.keys, &keys, now_secs)
+                } else {
+                    self.ingest.accept(event, &self.config.keys, &keys, now_secs)
+                };
+                let Some((msg, key)) = accepted else { return };
+                // The live kind carries terminal input from a phone and
+                // nothing else.
+                if event.kind == protocol::kinds::LIVE_KIND && !matches!(msg, PhoneToBridge::TerminalInput(_)) {
+                    log::info!("[Engine] Ignoring a live event that is not terminal input");
+                    return;
+                }
                 log::info!("[Engine] Received {} from {}...", type_name(&msg), short(&event.pubkey));
                 let client = Addressee { phone: event.pubkey.clone(), key: key.clone() };
                 // Any command says its client is running; a `presence` also
-                // says whether it still wants the shared updates and which
-                // session it watches.
+                // says whether it still wants the shared updates, which
+                // session it watches and which terminal it shows.
                 if self.note_presence(&event.pubkey, &key, &msg) {
                     self.want_list(client.clone());
                 }
@@ -96,14 +119,14 @@ impl Engine {
                         self.grant_session_key(&event.pubkey, m.session_key, &key);
                     }
                     PhoneToBridge::Presence(_) => {}
-                    msg => self.dispatch(msg, &event.pubkey),
+                    msg => self.dispatch(msg, &event.pubkey, via),
                 }
                 self.requester = None;
             }
         }
     }
 
-    fn dispatch(&mut self, msg: PhoneToBridge, phone: &str) {
+    fn dispatch(&mut self, msg: PhoneToBridge, phone: &str, via: Via) {
         match msg {
             PhoneToBridge::Input(m) => self.on_input(m),
             PhoneToBridge::PermissionResponse(m) => self.on_permission_response(m),
@@ -163,6 +186,14 @@ impl Engine {
                 let msg = self.provider_profiles_msg();
                 self.publish_to(phone, msg);
             }
+            // Terminals: the engine decides, the runtime runs their shells
+            // (see the `terminal` module).
+            PhoneToBridge::TerminalOpen(m) => self.on_terminal_open(m, super::terminal::via_of(via)),
+            PhoneToBridge::TerminalInput(m) => self.on_terminal_input(m, super::terminal::via_of(via)),
+            PhoneToBridge::TerminalResize(m) => self.on_terminal_resize(m, super::terminal::via_of(via)),
+            PhoneToBridge::TerminalReplay(m) => self.on_terminal_replay(m, super::terminal::via_of(via)),
+            PhoneToBridge::TerminalTakeover(m) => self.on_terminal_takeover(m, super::terminal::via_of(via)),
+            PhoneToBridge::TerminalClose(m) => self.on_terminal_close(m, super::terminal::via_of(via)),
         }
     }
 

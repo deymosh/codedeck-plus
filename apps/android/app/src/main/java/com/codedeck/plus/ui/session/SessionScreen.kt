@@ -79,6 +79,7 @@ import com.codedeck.plus.core.CoreHost
 import com.codedeck.plus.ui.components.PickerOption
 import com.codedeck.plus.ui.components.SelectField
 import com.codedeck.plus.ui.components.pulsingAlpha
+import com.codedeck.plus.ui.screens.TERMINAL_CAPABILITY
 import com.codedeck.plus.ui.theme.Tokens
 import com.codedeck.plus.ui.transcript.ActivityView
 import com.codedeck.plus.ui.transcript.DisplayEntry
@@ -199,6 +200,8 @@ fun SessionScreen(
     sessionId: String,
     modifier: Modifier = Modifier,
     onBack: (() -> Unit)? = null,
+    /** Opens a terminal in this session's directory; offered only by a machine that runs terminals. */
+    onOpenTerminal: () -> Unit,
 ) {
     val machinesView by core.machines.collectAsState()
     val uiView by core.ui.collectAsState()
@@ -756,6 +759,7 @@ fun SessionScreen(
                 personas = session?.personas?.personas?.takeIf { supportsPersonas }.orEmpty(),
                 persona = session?.persona,
                 defaultPersona = agent?.defaultPersona,
+                terminal = machineSummary?.capabilities?.contains(TERMINAL_CAPABILITY) == true,
             )
             var optionsSheetOpen by remember(machine, sessionId) { mutableStateOf(false) }
             LaunchedEffect(optionsSheetOpen) { if (optionsSheetOpen) requestPersonas() }
@@ -782,6 +786,10 @@ fun SessionScreen(
                     onMcpOpen = ::requestMcp,
                     onMcpToggle = { name, enabled ->
                         dispatch(UniffiIntent.ToggleSessionMcp(machine = machine, sessionId = sessionId, name = name, enabled = enabled))
+                    },
+                    onTerminal = {
+                        optionsSheetOpen = false
+                        onOpenTerminal()
                     },
                     onDismiss = { optionsSheetOpen = false },
                 )

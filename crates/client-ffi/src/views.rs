@@ -1270,6 +1270,82 @@ pub struct UniffiUiView {
     pub provider_profile_status: HashMap<String, UniffiProviderProfileAck>,
     /// Present while a delete's undo window is open.
     pub undo_toast: Option<UniffiUndoToast>,
+    /// The terminals, low-frequency state only — output frames arrive on
+    /// `CoreListener.on_event(CoreEvent.TerminalOutput)`, never here.
+    pub terminals: UniffiTerminalsView,
+}
+
+/// The terminals each machine lists, and the one this phone has on screen.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiTerminalsView {
+    /// machine pubkey -> the terminals its heartbeat lists, oldest opened
+    /// first. Each carries the bridge's `term`, its shell, the device that
+    /// opened it and the device whose input it takes now.
+    pub by_machine: HashMap<String, Vec<UniffiTerminalInfo>>,
+    pub attached: Option<UniffiAttachedTerminal>,
+}
+
+/// One terminal a machine lists — mirrors `protocol::events::TerminalInfo`.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiTerminalInfo {
+    /// The bridge's id, which every terminal message names.
+    pub term: String,
+    /// What runs in it (`/bin/bash`).
+    pub shell: String,
+    pub opened: u64,
+    /// The device that opened it (an opaque id; `writer` names the one whose
+    /// input it takes now).
+    pub device: String,
+    /// That device's name, when its user gave one.
+    pub name: Option<String>,
+    pub writer: String,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+/// The terminal on screen.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiAttachedTerminal {
+    pub machine: String,
+    /// The bridge's id, absent while an open is still pending.
+    pub term: Option<String>,
+    /// This phone's own id for a pending open, echoed by `terminal-opened`.
+    pub open_id: Option<String>,
+    pub shell: Option<String>,
+    /// Whether this device's typing is the one the terminal takes. When
+    /// false the screen is read-only until `TakeOverTerminal`.
+    pub writer: bool,
+    pub cols: u16,
+    pub rows: u16,
+    /// The next output byte offset the app should expect. The `offset` on
+    /// each `CoreEvent.TerminalOutput` counts from the same origin.
+    pub expected_offset: u64,
+    /// Bytes typed and not yet sent — drawn dimmed at the cursor as the
+    /// predicted echo until the real output replaces them.
+    pub waiting_input: Vec<u8>,
+    /// Set when a `terminal-open` was refused.
+    pub refusal: Option<UniffiTerminalRefusal>,
+    /// Set when the terminal ended.
+    pub ended: Option<UniffiTerminalEnded>,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiTerminalRefusal {
+    /// A `terminal-exited` reason (`not-allowed`, `limit`, `disabled`, …);
+    /// an unknown one reads as `unknown`.
+    pub reason: String,
+    /// The device the open was refused for, for `not-allowed`.
+    pub device: Option<String>,
+    /// That device's name, when one was ever seen for it.
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct UniffiTerminalEnded {
+    /// `exit`, `killed`, `closed`, `idle`, `limit`, `transport`, `restart`…
+    pub reason: String,
+    /// The shell's exit status, with `exit`.
+    pub code: Option<i32>,
 }
 
 pub fn build_uniffi_ui_view(v: &UiView) -> UniffiUiView {
@@ -1323,6 +1399,50 @@ pub fn build_uniffi_ui_view(v: &UiView) -> UniffiUiView {
             session_id: t.session_id,
             label: t.label,
         }),
+        terminals: UniffiTerminalsView {
+            by_machine: v
+                .terminals
+                .by_machine
+                .iter()
+                .map(|(machine, list)| {
+                    (
+                        machine.clone(),
+                        list.iter()
+                            .map(|t| UniffiTerminalInfo {
+                                term: t.term.clone(),
+                                shell: t.shell.clone(),
+                                opened: t.opened,
+                                device: t.device.clone(),
+                                name: t.name.clone(),
+                                writer: t.writer.clone(),
+                                cols: t.cols,
+                                rows: t.rows,
+                            })
+                            .collect(),
+                    )
+                })
+                .collect(),
+            attached: v.terminals.attached.as_ref().map(|a| UniffiAttachedTerminal {
+                machine: a.machine.clone(),
+                term: a.term.clone(),
+                open_id: a.open_id.clone(),
+                shell: a.shell.clone(),
+                writer: a.writer,
+                cols: a.cols,
+                rows: a.rows,
+                expected_offset: a.expected_offset,
+                waiting_input: a.waiting_input.clone(),
+                refusal: a.refusal.as_ref().map(|r| UniffiTerminalRefusal {
+                    reason: wire_str(&r.reason),
+                    device: r.device.clone(),
+                    name: r.name.clone(),
+                }),
+                ended: a.ended.as_ref().map(|e| UniffiTerminalEnded {
+                    reason: wire_str(&e.reason),
+                    code: e.code,
+                }),
+            }),
+        },
     }
 }
 

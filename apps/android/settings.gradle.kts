@@ -17,3 +17,7 @@ dependencyResolutionManagement {
 }
 rootProject.name = "CodeDeckAndroid"
 include(":app")
+// Vendored Termux terminal emulator + view (Apache-2.0) — see
+// terminal-view/README.md.
+include(":terminal-emulator")
+include(":terminal-view")

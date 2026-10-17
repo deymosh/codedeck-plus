@@ -26,6 +26,9 @@ pub struct Flags {
     pub agent_host: Option<PathBuf>,
     pub service: bool,
     pub test_mode: bool,
+    /// `--terminal`: run terminals on this bridge. Never switched from a
+    /// phone — the machine's owner decides.
+    pub terminal: bool,
     pub direct_listen: Option<String>,
     pub direct_onion_listen: Option<String>,
     pub direct_endpoints: Vec<String>,
@@ -52,6 +55,8 @@ struct FileConfig {
     agent_host_path: Option<String>,
     node_path: Option<String>,
     direct: Option<FileDirect>,
+    terminal: Option<FileTerminal>,
+    audit: Option<FileAudit>,
     /// Keys this bridge does not know, kept only to warn about them.
     #[serde(flatten)]
     unknown: BTreeMap<String, serde_json::Value>,
@@ -67,12 +72,47 @@ struct FileDirect {
     unknown: BTreeMap<String, serde_json::Value>,
 }
 
+/// The `terminal` object: whether this machine runs terminals, who may open
+/// one, and what runs in it. Off unless the owner turns it on.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FileTerminal {
+    enabled: Option<bool>,
+    /// Whether a terminal may open over a relay as well as the direct link.
+    relays: Option<bool>,
+    /// How long a terminal with no client attached lives. 0 keeps it until it
+    /// ends on its own.
+    idle_minutes: Option<u64>,
+    max_terminals: Option<usize>,
+    /// The program to run in a terminal, when the owner wants a fixed one.
+    command: Option<Vec<String>>,
+    #[serde(flatten)]
+    unknown: BTreeMap<String, serde_json::Value>,
+}
+
+/// The `audit` object: how long recordings are kept and whether each audit
+/// line is also copied to the system log.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FileAudit {
+    max_days: Option<u64>,
+    max_bytes: Option<u64>,
+    syslog: Option<bool>,
+    #[serde(flatten)]
+    unknown: BTreeMap<String, serde_json::Value>,
+}
+
 /// The keys in `config.json` this bridge does not know (a typo, or a flat
 /// `"direct.listen"` for the nested `"direct": {"listen": …}`), which it
 /// would otherwise ignore without a word.
 fn unknown_keys(file: &FileConfig) -> Vec<String> {
-    let nested = file.direct.iter().flat_map(|d| d.unknown.keys().map(|k| format!("direct.{k}")));
-    file.unknown.keys().cloned().chain(nested).collect()
+    let nested = |prefix: &str, keys: std::collections::btree_map::Keys<'_, String, serde_json::Value>| {
+        keys.map(|k| format!("{prefix}.{k}")).collect::<Vec<_>>()
+    };
+    let direct = file.direct.iter().flat_map(|d| nested("direct", d.unknown.keys()));
+    let terminal = file.terminal.iter().flat_map(|t| nested("terminal", t.unknown.keys()));
+    let audit = file.audit.iter().flat_map(|a| nested("audit", a.unknown.keys()));
+    file.unknown.keys().cloned().chain(direct).chain(terminal).chain(audit).collect()
 }
 
 /// The direct link (see `crate::direct`): where to listen, and what to
@@ -141,6 +181,90 @@ fn direct_config(flags: &Flags, file: Option<FileDirect>) -> Result<DirectConfig
     Ok(DirectConfig { listen, onion_listen, endpoints })
 }
 
+/// How long an unattended terminal lives by default, and the longest the
+/// owner may make it: a terminal is a shell as the bridge's own user, so an
+/// abandoned one must not run for ever.
+pub const DEFAULT_TERMINAL_IDLE_MINUTES: u64 = 60;
+pub const MAX_TERMINAL_IDLE_MINUTES: u64 = 24 * 60;
+/// How long recordings are kept and how large the audit directory may grow,
+/// by default.
+pub const DEFAULT_AUDIT_MAX_DAYS: u64 = 90;
+pub const DEFAULT_AUDIT_MAX_BYTES: u64 = 1 << 30;
+
+/// Whether this machine runs terminals, who may open one, and what runs in it
+/// — the `terminal` object, resolved. The engine gets a
+/// [`TerminalConfig`](bridge_core::TerminalConfig) built from this at start.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerminalSettings {
+    pub enabled: bool,
+    pub relays_allowed: bool,
+    /// 0 keeps an unattended terminal alive until it ends on its own.
+    pub idle_minutes: u64,
+    pub max_terminals: usize,
+    /// The program a terminal runs instead of the user's shell, when set.
+    pub command: Option<Vec<String>>,
+}
+
+impl Default for TerminalSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            relays_allowed: false,
+            idle_minutes: DEFAULT_TERMINAL_IDLE_MINUTES,
+            max_terminals: bridge_core::TerminalConfig::default().max_terminals,
+            command: None,
+        }
+    }
+}
+
+/// How the terminal audit is kept: how long recordings live, how large the
+/// audit directory may grow, and whether each line is also copied to the
+/// system log. 0 for `max_days` / `max_bytes` means no limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AuditSettings {
+    pub max_days: u64,
+    pub max_bytes: u64,
+    pub syslog: bool,
+}
+
+impl Default for AuditSettings {
+    fn default() -> Self {
+        Self { max_days: DEFAULT_AUDIT_MAX_DAYS, max_bytes: DEFAULT_AUDIT_MAX_BYTES, syslog: false }
+    }
+}
+
+fn terminal_settings(flags: &Flags, file: Option<FileTerminal>) -> TerminalSettings {
+    let file = file.unwrap_or_default();
+    // Flags win, then the environment, then the file, then the default. The
+    // `--terminal` flag can only switch terminals on; `CODEDECK_TERMINAL`
+    // carries a boolean, so it overrides the file in either direction.
+    let enabled = if flags.terminal {
+        true
+    } else if let Some(v) = env_bool("CODEDECK_TERMINAL") {
+        v
+    } else {
+        file.enabled.unwrap_or(false)
+    };
+    let defaults = TerminalSettings::default();
+    TerminalSettings {
+        enabled,
+        relays_allowed: file.relays.unwrap_or(defaults.relays_allowed),
+        idle_minutes: file.idle_minutes.unwrap_or(defaults.idle_minutes).min(MAX_TERMINAL_IDLE_MINUTES),
+        max_terminals: file.max_terminals.unwrap_or(defaults.max_terminals),
+        command: file.command.filter(|c| !c.is_empty()),
+    }
+}
+
+fn audit_settings(file: Option<FileAudit>) -> AuditSettings {
+    let file = file.unwrap_or_default();
+    let defaults = AuditSettings::default();
+    AuditSettings {
+        max_days: file.max_days.unwrap_or(defaults.max_days),
+        max_bytes: file.max_bytes.unwrap_or(defaults.max_bytes),
+        syslog: file.syslog.unwrap_or(defaults.syslog),
+    }
+}
+
 /// An admin endpoint that registers a paired phone's pubkey.
 #[derive(Clone)]
 pub struct RegisterEndpoint {
@@ -177,6 +301,11 @@ pub struct Config {
     /// Environment handed to the agent host (driver settings).
     pub host_env: BTreeMap<String, String>,
     pub direct: DirectConfig,
+    /// Terminals on this machine: whether they run, who may have one, and what
+    /// runs in one.
+    pub terminal: TerminalSettings,
+    /// How the terminal audit is kept.
+    pub audit: AuditSettings,
 }
 
 /// Read an env var; empty counts as unset (Compose's `${VAR:-}` defines every
@@ -382,6 +511,8 @@ pub fn load(flags: &Flags) -> Result<Config, String> {
     put("CODEDECK_DEEPSEEK_HOME", Some(home.join("dsh").to_string_lossy().into_owned()));
 
     let direct = direct_config(flags, file.direct)?;
+    let terminal = terminal_settings(flags, file.terminal);
+    let audit = audit_settings(file.audit);
 
     let agent_host_path = flags
         .agent_host
@@ -409,6 +540,8 @@ pub fn load(flags: &Flags) -> Result<Config, String> {
         test_mode,
         host_env,
         direct,
+        terminal,
+        audit,
         home,
     })
 }
@@ -456,6 +589,8 @@ mod tests {
             agent_host_path,
             node_path,
             direct,
+            terminal,
+            audit,
             unknown: _,
         } = file;
         let set = [
@@ -485,6 +620,65 @@ mod tests {
         let direct = FileDirect { listen, onion_listen, endpoints, unknown: Default::default() };
         direct_config(&Flags::default(), Some(direct)).expect("the example's direct section is valid");
         proxy_host_port(&tor_proxy_url.unwrap()).expect("the example's proxy URL is valid");
+
+        let FileTerminal { enabled, relays, idle_minutes, max_terminals, command, unknown: _ } =
+            terminal.expect("config.example.json sets terminal");
+        assert!(
+            enabled.is_some() && relays.is_some() && idle_minutes.is_some() && max_terminals.is_some() && command.is_some(),
+            "config.example.json sets every terminal key"
+        );
+        let FileAudit { max_days, max_bytes, syslog, unknown: _ } = audit.expect("config.example.json sets audit");
+        assert!(max_days.is_some() && max_bytes.is_some() && syslog.is_some(), "config.example.json sets every audit key");
+    }
+
+    #[test]
+    fn terminal_settings_read_the_file_and_the_flag_wins() {
+        // Defaults: terminals off, the engine's own limits. (Only when the
+        // environment does not itself switch them on.)
+        if env("CODEDECK_TERMINAL").is_none() {
+            assert_eq!(terminal_settings(&Flags::default(), None), TerminalSettings::default());
+        }
+
+        let file: FileTerminal = serde_json::from_str(
+            r#"{"enabled":true,"relays":true,"idleMinutes":30,"maxTerminals":2,"command":["tmux","new"]}"#,
+        )
+        .unwrap();
+        let settings = terminal_settings(&Flags::default(), Some(file));
+        assert!(settings.enabled && settings.relays_allowed);
+        assert_eq!(settings.idle_minutes, 30);
+        assert_eq!(settings.max_terminals, 2);
+        assert_eq!(settings.command.as_deref(), Some(&["tmux".to_string(), "new".to_string()][..]));
+
+        // The flag turns terminals on whatever the file says.
+        let file: FileTerminal = serde_json::from_str(r#"{"enabled":false}"#).unwrap();
+        assert!(terminal_settings(&Flags { terminal: true, ..Default::default() }, Some(file)).enabled);
+
+        // An idle time is capped at a day, and an empty command is none.
+        let file: FileTerminal = serde_json::from_str(r#"{"idleMinutes":100000,"command":[]}"#).unwrap();
+        let settings = terminal_settings(&Flags::default(), Some(file));
+        assert_eq!(settings.idle_minutes, MAX_TERMINAL_IDLE_MINUTES);
+        assert_eq!(settings.command, None);
+    }
+
+    #[test]
+    fn audit_settings_read_the_file_with_defaults() {
+        assert_eq!(audit_settings(None), AuditSettings::default());
+        assert_eq!(AuditSettings::default().max_days, DEFAULT_AUDIT_MAX_DAYS);
+        assert_eq!(AuditSettings::default().max_bytes, DEFAULT_AUDIT_MAX_BYTES);
+        let file: FileAudit = serde_json::from_str(r#"{"maxDays":7,"maxBytes":1024,"syslog":true}"#).unwrap();
+        assert_eq!(audit_settings(Some(file)), AuditSettings { max_days: 7, max_bytes: 1024, syslog: true });
+    }
+
+    #[test]
+    fn unknown_keys_in_the_terminal_and_audit_objects_are_named() {
+        let file: FileConfig = serde_json::from_str(
+            r#"{"terminal":{"enabled":true,"idleMinute":30},"audit":{"maxDay":7},"terminal.enabled":true}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            unknown_keys(&file),
+            vec!["terminal.enabled".to_string(), "terminal.idleMinute".to_string(), "audit.maxDay".to_string()]
+        );
     }
 
     #[test]

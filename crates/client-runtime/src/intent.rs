@@ -15,18 +15,20 @@ use client_core::stores::outbox::OutboxState;
 use client_core::stores::pairing::{
     parse_manual_pair, parse_pairing_url, pairing_reducer, PairingEvent, PAIR_ACK_TIMEOUT_MS,
 };
+use client_core::stores::terminals::{InputStep, InputTransport};
 use client_core::stores::ui::{UiEffect, UndoToast};
 use protocol::commands::{
     AccountActionMsg, AccountsRequestMsg, AgentActionMsg, BareMsg, CreateFolderMsg, CreateSessionMsg, InputMsg, McpActionMsg, McpRequestMsg, ModelsRequestMsg, PermissionResponseMsg, PermissionRulesRemoveMsg, PermissionRulesRequestMsg, PersonasRequestMsg,
     PhoneToBridge, PlanResponseMsg, PluginActionMsg, PluginsRequestMsg, ProviderProfileWrite, QuestionAnswer,
     QuestionResponseMsg, SessionIdMsg, SessionMcpToggleMsg, SetCredentialsMsg, SetOptionMsg, SetProviderProfileMsg,
-    StopTaskMsg,
+    StopTaskMsg, TerminalIdMsg, TerminalResizeMsg,
 };
 use protocol::common::{AccountAction, AgentAction, CredentialValues, McpAction, McpServerSpec, PluginAction, SessionOption};
 use protocol::events::McpAckMsg;
 use serde::{Deserialize, Serialize};
 
 use crate::dispatch::{apply_pairing_effects, PairDeadline, Send, StoreId};
+use crate::runtime::TerminalFlush;
 use crate::signer::PhoneKeys;
 use crate::stores::CoreStores;
 
@@ -71,6 +73,10 @@ pub struct IntentCtx {
     pub now: u64,
     /// App visibility — `SelectSession` only clears unread while visible.
     pub visible: bool,
+    /// Where the machine terminal input is for is reached right now. Only the
+    /// terminal intents read it: the pause before bytes go, and the relay
+    /// rate cap, differ between the direct link and the relays.
+    pub terminal_transport: InputTransport,
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -106,6 +112,9 @@ pub struct IntentResult {
     /// (there: remote tombstones; here: `RemoveMachine` forgetting every
     /// session the machine had).
     pub transcript_removed: Vec<(String, String)>,
+    /// Typed terminal input is waiting: arm (or clear) the flush timer for
+    /// this absolute ms deadline.
+    pub terminal_flush: Option<TerminalFlush>,
 }
 
 impl IntentResult {
@@ -119,6 +128,22 @@ impl IntentResult {
         if !self.persist.contains(&id) {
             self.persist.push(id);
         }
+    }
+
+    /// A terminal input step: the events it produced, and when to come back
+    /// for the bytes it could not send. A step with no machine means nothing
+    /// is attached, so the timer is left alone.
+    fn terminal_step(&mut self, machine: &str, step: InputStep) {
+        if step.machine.is_none() {
+            return;
+        }
+        for msg in step.sends {
+            self.send(machine, PhoneToBridge::TerminalInput(msg));
+        }
+        self.terminal_flush = Some(match step.flush_at_ms {
+            Some(at_ms) => TerminalFlush::Arm { at_ms },
+            None => TerminalFlush::Clear,
+        });
     }
 }
 
@@ -466,6 +491,63 @@ pub enum Intent {
         card_id: String,
         key: String,
     },
+
+    // --- terminals (see `docs/TERMINAL.md`) ---
+    /// Open a real shell on `machine` (one advertising the `terminal`
+    /// capability). `session` starts it in that session's directory; the
+    /// phone never names a path. The bridge answers `terminal-opened` (or
+    /// refuses with `terminal-exited`).
+    OpenTerminal {
+        machine: String,
+        session: Option<String>,
+        cols: u16,
+        rows: u16,
+    },
+    /// Put a terminal the heartbeat lists on screen, read-only, replaying its
+    /// output from the start of what the bridge still holds.
+    AttachTerminal {
+        machine: String,
+        term: String,
+    },
+    /// Leave the terminal on screen: presence stops watching it, so the
+    /// bridge sends no more output. The shell itself keeps running.
+    DetachTerminal {
+        machine: String,
+    },
+    /// Type into the terminal on screen. `alternate_screen` is what the
+    /// emulator says it is showing: on the normal screen printable bytes wait
+    /// for a key a program acts on, on the alternate screen they go after the
+    /// short window. Paced and sequenced by the store, not sent per keystroke.
+    TerminalInput {
+        machine: String,
+        term: String,
+        bytes: Vec<u8>,
+        alternate_screen: bool,
+    },
+    /// Paste: the whole thing goes as one event.
+    TerminalPaste {
+        machine: String,
+        term: String,
+        bytes: Vec<u8>,
+    },
+    /// The emulator's window changed. Only the writer's size counts.
+    ResizeTerminal {
+        machine: String,
+        term: String,
+        cols: u16,
+        rows: u16,
+    },
+    /// Become the terminal's writer. Audited on the bridge; every present
+    /// client is told.
+    TakeOverTerminal {
+        machine: String,
+        term: String,
+    },
+    /// Hang up: the shell is asked to end, and killed if it does not.
+    CloseTerminal {
+        machine: String,
+        term: String,
+    },
 }
 
 pub fn apply(
@@ -586,6 +668,10 @@ pub fn apply(
                 }
                 // Unsent messages for sessions it no longer listed, too.
                 stores.outbox.forget_machine(&pubkey_hex);
+                // Its terminals went with it: a bridge that is gone lists
+                // none, and a terminal still on screen would be one nothing
+                // can answer for.
+                stores.terminals.forget_machine(&pubkey_hex);
                 r.persist(StoreId::Outbox);
                 r.ui_changed = true;
                 if stores.ui.selected_machine.as_deref() == Some(pubkey_hex.as_str()) {
@@ -967,6 +1053,65 @@ pub fn apply(
             stores.ui.set_plan_approval_choice(&card_id, &key);
             r.ui_changed = true;
         }
+
+        // --- terminals ---
+        Intent::OpenTerminal { machine, session, cols, rows } => {
+            // A bridge that does not advertise terminals never opens one, and
+            // the phone shows Terminal only against one that does: sending
+            // the command would wait on an answer that never comes.
+            let advertises = stores
+                .machines
+                .machine(&machine)
+                .is_some_and(|m| m.capabilities.iter().any(|c| c == protocol::capabilities::TERMINAL));
+            if !advertises {
+                return r;
+            }
+            let cmd = stores.terminals.begin_open(&machine, session, cols, rows);
+            r.send(&machine, PhoneToBridge::TerminalOpen(cmd));
+            r.ui_changed = true;
+        }
+        Intent::AttachTerminal { machine, term } => {
+            let cmd = stores.terminals.begin_attach(&machine, &term);
+            r.send(&machine, PhoneToBridge::TerminalReplay(cmd));
+            r.ui_changed = true;
+        }
+        Intent::DetachTerminal { machine } => {
+            // Whatever was typed but unsent goes first: the terminal outlives
+            // this phone's screen.
+            for msg in stores.terminals.detach(ctx.now) {
+                r.send(&machine, PhoneToBridge::TerminalInput(msg));
+            }
+            r.terminal_flush = Some(TerminalFlush::Clear);
+            r.ui_changed = true;
+        }
+        Intent::TerminalInput { machine, term, bytes, alternate_screen } => {
+            let waiting = stores.terminals.waiting_input();
+            let step = stores
+                .terminals
+                .input(&machine, &term, &bytes, alternate_screen, ctx.terminal_transport, ctx.now);
+            r.terminal_step(&machine, step);
+            // The app draws the bytes held back as the predicted echo; without
+            // a redraw a key shows only once the shell echoes it, a pause and
+            // a round trip later.
+            r.ui_changed |= stores.terminals.waiting_input() != waiting;
+        }
+        Intent::TerminalPaste { machine, term, bytes } => {
+            let waiting = stores.terminals.waiting_input();
+            let step = stores
+                .terminals
+                .paste(&machine, &term, &bytes, ctx.terminal_transport, ctx.now);
+            r.terminal_step(&machine, step);
+            r.ui_changed |= stores.terminals.waiting_input() != waiting;
+        }
+        Intent::ResizeTerminal { machine, term, cols, rows } => {
+            r.send(&machine, PhoneToBridge::TerminalResize(TerminalResizeMsg { term, cols, rows }));
+        }
+        Intent::TakeOverTerminal { machine, term } => {
+            r.send(&machine, PhoneToBridge::TerminalTakeover(TerminalIdMsg { term }));
+        }
+        Intent::CloseTerminal { machine, term } => {
+            r.send(&machine, PhoneToBridge::TerminalClose(TerminalIdMsg { term }));
+        }
     }
     r
 }
@@ -1077,13 +1222,14 @@ mod tests {
         let h = hydrate(&kv, &ts, &StoresConfig::default()).await;
         let identity = protocol::crypto::generate_keypair();
         let (ring, _) = client_core::stores::session_key::SessionKeyRing::load(None, 1_000);
-        (h.stores, PhoneKeys::new(&identity.pubkey_hex, &ring.current))
+        (h.stores, PhoneKeys::new(&identity.pubkey_hex, &ring.current, None))
     }
 
     fn ctx() -> IntentCtx {
         IntentCtx {
             now: 1_000,
             visible: true,
+            terminal_transport: InputTransport::Direct,
         }
     }
 
@@ -1567,7 +1713,7 @@ mod tests {
                 Intent::RequestProviderProfiles { machine: "m".into() },
                 Intent::RequestModels { machine: "m".into(), agent: "claude".into() },
             ] {
-                sent += apply(s, intent, &kp, IntentCtx { now, visible: true }).sends.len();
+                sent += apply(s, intent, &kp, IntentCtx { now, visible: true, terminal_transport: InputTransport::Direct }).sends.len();
             }
             std::mem::take(&mut sent)
         };

@@ -25,6 +25,7 @@ import androidx.lifecycle.ProcessLifecycleOwner
 import com.codedeck.plus.MainActivity
 import com.codedeck.plus.R
 import com.codedeck.plus.core.CoreHost
+import com.codedeck.plus.core.deviceLabel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -245,6 +246,10 @@ class StayConnectedService : Service() {
             // live Tor toggle has an address to switch back to.
             proxy = "127.0.0.1:9050",
             tor = torProxyEnabled,
+            // This phone's name for the bridge (its terminal allowlist and a
+            // refusal to open a terminal) — the platform's model string, with
+            // the manufacturer added only when the model does not name it.
+            deviceLabel = deviceLabel(Build.MANUFACTURER, Build.MODEL),
         )
     }
 

@@ -21,6 +21,7 @@ use client_core::stores::pairing::{
 };
 use client_core::stores::fetches::Fetch;
 use client_core::stores::live_text::LiveChange;
+use client_core::stores::terminals::{InputTransport, InputStep};
 use client_core::stores::transcript::SyncEffect;
 use client_core::stores::ui::{CredentialsAckInput, ProviderProfileAckInput};
 use protocol::commands::{
@@ -30,9 +31,20 @@ use protocol::common::{EntryBody, SessionOption, SessionState, SignInStatus};
 use protocol::events::BridgeToPhone;
 
 use crate::ports::{TranscriptRow, TranscriptStore};
+use crate::runtime::TerminalFlush;
 use crate::signer::PhoneKeys;
 use crate::stores::CoreStores;
 use client_core::stores::ui::UiEffect;
+
+/// One terminal output frame the host emits as its own event, raw bytes and
+/// all — never through a view snapshot (see `docs/TERMINAL.md`, "Transport").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerminalOutputEvent {
+    pub machine: String,
+    pub term: String,
+    pub offset: u64,
+    pub data: Vec<u8>,
+}
 
 /// A `client_core` store the runtime must re-serialize to the `Kv` after a
 /// route mutated it.
@@ -108,6 +120,12 @@ pub struct RouteResult {
     pub folder_ack: Option<protocol::events::FolderAckMsg>,
     /// Effects of sessions gone: cancel what was notified for them.
     pub ui_effects: Vec<UiEffect>,
+    /// Terminal output frames for the terminal on screen — raw bytes, on
+    /// their own path so a busy shell never re-renders a view.
+    pub terminal_output: Vec<TerminalOutputEvent>,
+    /// A `terminal-input-from` was answered: arm or clear the flush timer for
+    /// whatever is still waiting.
+    pub terminal_flush: Option<TerminalFlush>,
 }
 
 impl RouteResult {
@@ -121,6 +139,21 @@ impl RouteResult {
         self.sends.push(Send {
             machine: machine.to_string(),
             msg,
+        });
+    }
+
+    /// A terminal input step: the events it produced, and when to come back
+    /// for the bytes it could not send.
+    fn terminal_step(&mut self, machine: &str, step: InputStep) {
+        if step.machine.is_none() {
+            return;
+        }
+        for msg in step.sends {
+            self.send(machine, PhoneToBridge::TerminalInput(msg));
+        }
+        self.terminal_flush = Some(match step.flush_at_ms {
+            Some(at_ms) => TerminalFlush::Arm { at_ms },
+            None => TerminalFlush::Clear,
         });
     }
 }
@@ -137,6 +170,9 @@ pub struct Router<'a> {
     pub notify_enabled: bool,
     /// A build with an in-app chime seam.
     pub ping_available: bool,
+    /// Where the routing machine is reached right now: terminal input is
+    /// paced differently over the direct link and over the relays.
+    pub terminal_transport: InputTransport,
 }
 
 impl<'a> Router<'a> {
@@ -156,6 +192,7 @@ impl<'a> Router<'a> {
             visible: true,
             notify_enabled: true,
             ping_available: false,
+            terminal_transport: InputTransport::Direct,
         }
     }
 
@@ -492,6 +529,55 @@ impl<'a> Router<'a> {
                 );
                 r.ui_changed = true;
             }
+            // --- terminals (see `docs/TERMINAL.md`) ---
+            //
+            // Only the terminal on screen is acted on: output for another
+            // terminal is not sent to this client anyway (the bridge sends it
+            // only to watchers), and input is dropped by the store unless it
+            // names that terminal.
+            BridgeToPhone::TerminalOpened(m) => {
+                if self.stores.terminals.opened(machine, &m.open_id, &m.term, &m.shell, self.now) {
+                    r.ui_changed = true;
+                }
+            }
+            BridgeToPhone::TerminalOutput(m) => {
+                if let Some(frame) = self.stores.terminals.output(machine, m) {
+                    if let Some(from) = frame.replay_from {
+                        r.send(
+                            machine,
+                            PhoneToBridge::TerminalReplay(protocol::commands::TerminalReplayMsg {
+                                term: m.term.clone(),
+                                from,
+                            }),
+                        );
+                    }
+                    if !frame.data.is_empty() {
+                        r.terminal_output.push(TerminalOutputEvent {
+                            machine: machine.to_string(),
+                            term: m.term.clone(),
+                            offset: frame.offset,
+                            data: frame.data,
+                        });
+                    }
+                }
+            }
+            BridgeToPhone::TerminalInputFrom(m) => {
+                let step = self
+                    .stores
+                    .terminals
+                    .input_from(machine, m, self.terminal_transport, self.now);
+                r.terminal_step(machine, step);
+            }
+            BridgeToPhone::TerminalExited(m) => {
+                if self.stores.terminals.exited(machine, m) {
+                    r.ui_changed = true;
+                }
+            }
+            BridgeToPhone::TerminalEvent(m) => {
+                if self.stores.terminals.event(machine, m) {
+                    r.ui_changed = true;
+                }
+            }
         }
         r
     }
@@ -611,6 +697,17 @@ impl<'a> Router<'a> {
         let unclosed = self.stores.machines.apply_session_list(machine, m, self.now);
         r.persist(StoreId::Machines);
         r.heartbeat = Some((machine.to_string(), self.now));
+        // The terminals this identity owns on the bridge. Absent means it
+        // owns none (the bridge sends one shared list to everyone without
+        // one), so the list empties — and a terminal the phone still shows,
+        // which the bridge no longer runs, goes with it.
+        if self
+            .stores
+            .terminals
+            .apply_list(machine, m.terminals.as_deref().unwrap_or(&[]))
+        {
+            r.ui_changed = true;
+        }
         // The session on screen may have opened before this catalog named its
         // agent's style, or its agent may have changed version.
         let on_screen = self.stores.ui.selected_session.clone().filter(|s| self.viewing_session(machine, s));
@@ -934,6 +1031,7 @@ mod tests {
             removed_sessions: None,
             machine_offline: None,
             direct: None,
+            terminals: None,
             rev: None,
         }
     }
@@ -944,7 +1042,7 @@ mod tests {
         let h = hydrate(&kv, &ts, &StoresConfig::default()).await;
         let identity = protocol::crypto::generate_keypair();
         let (ring, _) = client_core::stores::session_key::SessionKeyRing::load(None, 1_000);
-        (h.stores, ts, PhoneKeys::new(&identity.pubkey_hex, &ring.current))
+        (h.stores, ts, PhoneKeys::new(&identity.pubkey_hex, &ring.current, None))
     }
 
     fn text_entry(content: &str) -> OutputEntry {
@@ -1083,7 +1181,7 @@ mod tests {
         let ts = MemoryTranscriptStore::new();
         let identity = protocol::crypto::generate_keypair();
         let (ring, _) = client_core::stores::session_key::SessionKeyRing::load(None, 1_000);
-        let kp = PhoneKeys::new(&identity.pubkey_hex, &ring.current);
+        let kp = PhoneKeys::new(&identity.pubkey_hex, &ring.current, None);
 
         // Deleted (and acked: no rows left), then the app was killed.
         let mut before = hydrate(&kv, &ts, &StoresConfig::default()).await.stores;

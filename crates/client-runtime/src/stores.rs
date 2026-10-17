@@ -24,6 +24,7 @@ use protocol::commands::{AgentStyleRequestMsg, PhoneToBridge};
 use client_core::stores::agent_styles::{hydrate_agent_styles, serialize_agent_styles, AgentStyles};
 use client_core::stores::backup::{hydrate_backup_config, serialize_backup_config, BackupConfig, BACKUP_STORAGE_KEY};
 use client_core::stores::settings::{hydrate_settings, serialize_settings, SettingsState};
+use client_core::stores::terminals::TerminalsState;
 
 use crate::backup::BackupStatus;
 use client_core::stores::transcript::TranscriptState;
@@ -83,6 +84,11 @@ pub struct CoreStores {
     pub delete_controller: DeleteController,
     /// Replies still being written: never persisted.
     pub live_text: LiveTextState,
+    /// The terminals each machine lists and the one on screen. Never
+    /// persisted: the list is the bridge's heartbeat and the attached
+    /// terminal is this phone's own screen, both meaningless after a restart
+    /// (a terminal that outlived it is attached again from the heartbeat).
+    pub terminals: TerminalsState,
 }
 
 /// What [`CoreStores::forget_session`] dropped: anything of the UI's (a dot,
@@ -269,6 +275,7 @@ pub async fn hydrate(
             notifications: NotificationCoordinator::default(),
             delete_controller: DeleteController::default(),
             live_text: LiveTextState::default(),
+            terminals: TerminalsState::default(),
         },
         last_stored_seen,
     }

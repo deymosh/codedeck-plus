@@ -137,6 +137,9 @@ install runbook.
 | `folders` | The project folders a phone can start sessions in. |
 | `agents list` | Every agent and where it stands on this machine: ready (and from where), not installed, or removed. |
 | `agents install <agent>…` / `agents remove <agent>…` | Install agents at the version this build pins, or remove what CodeDeck installed of them. A running bridge sees the change once its agent host restarts; the phone's Install and Remove take effect at once. |
+| `terminal pending` | The devices that asked for a terminal and were refused, with their id, name and when they were last seen. |
+| `terminal allow <id>` / `terminal disallow <id>` | Approve a device for a terminal, or withdraw it (an unambiguous id prefix works). These edit the allowlist file directly, so they work while the bridge runs; a withdrawn device's terminals close at once. |
+| `audit verify` | Recompute the terminal audit's hash chain; prints the line count and the head hash (compare it with the syslog copy or a value noted earlier), or the first broken line and exits non-zero. |
 | `version` | The bridge version and protocol version. |
 
 `--test-mode` (or `CODEDECK_TEST_MODE=1`) makes the agents answer canned
@@ -167,6 +170,9 @@ you need.
 | `direct.listen` | `CODEDECK_DIRECT_LISTEN` / `--direct-listen` | Serve phones directly over `wss://` on this `ip:port` (e.g. `0.0.0.0:7447`); off by default |
 | `direct.onionListen` | `CODEDECK_DIRECT_ONION_LISTEN` / `--direct-onion-listen` | A plain `ws://` listener for an onion service to forward to; loopback only (e.g. `127.0.0.1:7448`) |
 | `direct.endpoints` | `CODEDECK_DIRECT_ENDPOINTS` / `--direct-endpoint` | The URLs phones dial, in order: `wss://host:port`, or `ws://<name>.onion:port` (default: the `wss://` listener's LAN address; none in a container, which only sees its own) |
+| `terminal.enabled` | `CODEDECK_TERMINAL` / `--terminal` | Run terminals on this bridge — see [Terminal](#terminal) (default: off) |
+| `terminal.relays`, `terminal.idleMinutes`, `terminal.maxTerminals`, `terminal.command` | — | Whether a terminal may open over a relay, how long an unattended one lives (default 60, up to 1440 minutes, 0 keeps it), how many run at once (default 4), and a fixed program to run instead of the user's shell |
+| `audit.maxDays`, `audit.maxBytes`, `audit.syslog` | — | Terminal recording retention (default 90 days / 1 GiB, 0 = no limit) and whether each audit line is also copied to the system log (default: off) |
 
 When a Tor proxy is set, all Nostr traffic goes through it: relay
 connections, file downloads from a Blossom server, and pubkey registration on
@@ -215,6 +221,63 @@ the heartbeat): add the host's addresses to `direct.endpoints`, or on the
 phone, in the machine's settings. To turn the link off, remove `direct` from
 `config.json`.
 
+## Terminal
+
+A phone can open a real terminal on the bridge: a shell in a pseudo-terminal
+as the bridge's own user, drawn by the app's terminal emulator, so an editor,
+`htop` or `git add -p` work as they would over SSH. It is strictly more than
+an agent in its most permissive mode, so it is off until the owner turns it on
+and every device must be approved. The full design is in
+[`TERMINAL.md`](TERMINAL.md).
+
+**Enable it** with `terminal.enabled` in `config.json`, `--terminal`, or
+`CODEDECK_TERMINAL=1`. The bridge then advertises the capability and the phone
+shows Terminal. With it off, every terminal message is refused. Terminals take
+the direct link by default (LAN, VPN, or an onion endpoint through Orbot);
+`terminal.relays: true` also lets them fall back to a relay, at the cost of a
+relay seeing each event's size and timing.
+
+**Approve devices.** The identity key is shared by every client of an
+identity, so a device is named by the first session key it granted this bridge
+(an id that survives rotation) and approved on the machine. When a device that
+is not approved asks, the bridge refuses it and records it; the phone shows
+the id and name and the command to run:
+
+```sh
+codedeck-bridge terminal pending          # refused devices: id, name, last seen
+codedeck-bridge terminal allow 1a2b3c4d   # approve (an unambiguous id prefix works)
+codedeck-bridge terminal disallow 1a2b3c4d
+```
+
+These edit `<home>/terminal-allow.json` (owner-only, written atomically) and
+work while the bridge runs: it re-reads the file — cached by its modification
+time — on the next terminal message and within a few seconds otherwise.
+**Withdrawing a device closes its terminals at once**, the kill switch for a
+lost phone.
+
+**What is recorded.** Under `<home>/audit/` (`0700`, files `0600`):
+
+- `terminal.jsonl` — one JSON line per event (opened, attached, takeover,
+  resized, closed, exited, refused), each with the device, identity, transport
+  and reason. Every line carries `prev`, the SHA-256 of the line before it (the
+  first line's is all zeros), so an edited or deleted line breaks the chain:
+  `codedeck-bridge audit verify` recomputes it and prints the line count and
+  the head (the last line's SHA-256), or the first broken line, exiting
+  non-zero. The chain catches an edit or a deletion in the middle; the last
+  line and a truncation need the syslog copy or a noted head hash. The honest
+  limit: anyone running as the bridge's user can rewrite the whole file, chain
+  and all. The chain catches tampering that is not that thorough;
+  `audit.syslog: true` also copies each line to the log target `audit`
+  (journald / rsyslog, if a handler forwards it), which survives even that.
+- `term-<id>.cast` — a full recording of each terminal in asciicast v2
+  (replayable with `asciinema play`). Input typed at a password prompt is
+  recorded as a byte count, never the bytes.
+
+**Retention** removes the oldest whole recordings under `audit/` when they are
+older than `audit.maxDays` (default 90) or while the directory is larger than
+`audit.maxBytes` (default 1 GiB); 0 means no limit. `terminal.jsonl` is kept —
+it is small and is the record of who opened what.
+
 ## Files
 
 In `<home>`:
@@ -229,6 +292,10 @@ In `<home>`:
 - `direct/cert.der`, `direct/key.der` — the direct link's certificate and its
   key (0600). Deleting them makes a new one; phones pick up the new pin from
   the next heartbeat.
+- `terminal-allow.json` — the devices approved for a terminal, and the ones
+  refused (0600). See [Terminal](#terminal).
+- `audit/` — the terminal audit: `terminal.jsonl` and the `term-*.cast`
+  recordings (0700, files 0600).
 
 ## Build from source
 

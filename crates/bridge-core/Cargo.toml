@@ -17,6 +17,9 @@ protocol = { path = "../protocol" }
 agent-protocol = { path = "../agent-protocol" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The base64 a phone types into a terminal in, decoded before it reaches a
+# pty: the same crate and version the protocol encodes it with.
+base64 = "0.22"
 # Facade only: the runtime installs the backend.
 log = "0.4"
 regex = "1"

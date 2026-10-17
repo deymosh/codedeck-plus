@@ -12,5 +12,6 @@ pub mod pairing;
 pub mod pending_sessions;
 pub mod quick_prompts;
 pub mod settings;
+pub mod terminals;
 pub mod transcript;
 pub mod ui;

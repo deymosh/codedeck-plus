@@ -6,6 +6,7 @@
 //! The engine decides; this crate only carries out its effects and feeds it
 //! what happened.
 
+pub mod audit;
 pub mod config;
 pub mod direct;
 pub mod host;
@@ -14,6 +15,8 @@ pub mod qr;
 pub mod relay;
 pub mod runtime;
 pub mod state;
+pub mod terminal;
+pub mod terminal_allow;
 pub mod transcripts;
 pub mod work;
 pub mod workspace;

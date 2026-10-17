@@ -45,6 +45,9 @@ tink = "1.23.0"
 # launch to read one QR code. Neither is covered by the Compose BOM.
 camerax = "1.6.2"
 zxing = "3.5.4"
+# The vendored Termux terminal-view module annotates a few parameters and
+# methods with androidx.annotation; nothing else in the app pulls it directly.
+androidxAnnotation = "1.11.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -77,6 +80,7 @@ androidx-camera-camera2 = { group = "androidx.camera", name = "camera-camera2", 
 androidx-camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "camerax" }
 androidx-camera-view = { group = "androidx.camera", name = "camera-view", version.ref = "camerax" }
 zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
+androidx-annotation = { group = "androidx.annotation", name = "annotation", version.ref = "androidxAnnotation" }
 
 [bundles]
 compose = [
@@ -89,6 +93,8 @@ compose = [
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
+# The vendored terminal-emulator / terminal-view modules are Android libraries.
+android-library = { id = "com.android.library", version.ref = "agp" }
 # No separate "org.jetbrains.kotlin.android" plugin: AGP 9+ has Kotlin support
 # built in (applying it is now a hard error — "no longer required since AGP
 # 9.0").

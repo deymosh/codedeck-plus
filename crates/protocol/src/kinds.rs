@@ -20,9 +20,11 @@ pub const COMMAND_KIND: u16 = 4515;
 /// [`RESPONSE_EXPIRY_SECONDS`].
 pub const RESPONSE_KIND: u16 = 4516;
 
-/// Bridge → phone live output/status/usage. Ephemeral (20000–29999): relays
-/// broadcast but never store. Loss is acceptable by design — transcript sync
-/// recovers anything missed.
+/// Bridge → phone live output/status/usage, and phone → bridge terminal
+/// input. Ephemeral (20000–29999): relays broadcast but never store, in both
+/// directions — keystrokes are never stored on a relay. Loss is acceptable
+/// by design: transcript sync recovers anything missed, and the terminal's
+/// own `seq` (input) / `offset` (output) says what to resend.
 pub const LIVE_KIND: u16 = 24515;
 
 /// NIP-40 expiration applied to [`COMMAND_KIND`] events (seconds).

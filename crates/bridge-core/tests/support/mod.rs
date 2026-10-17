@@ -12,7 +12,7 @@ use agent_protocol::{
 };
 use bridge_core::ports::memory::{MemoryStore, MemoryTranscripts, MemoryWorkspace, TestSystem};
 use bridge_core::ports::Ports;
-use bridge_core::{Config, Effect, Engine, InboundEvent, Input, PairedPhone, TimerId, Via};
+use bridge_core::{Config, Effect, Engine, InboundEvent, Input, PairedPhone, TerminalConfig, TimerId, Via};
 use protocol::common::{AgentStyle, AgentSupports, EntryBody, OptionChoice, OutputEntry, Role};
 use protocol::crypto::{encrypt_to, generate_keypair, Keypair};
 use protocol::events::BridgeToPhone;
@@ -105,6 +105,9 @@ pub struct Rig {
     /// Armed timers: id → due time.
     timers: BTreeMap<TimerId, u64>,
     host_seq: u64,
+    /// The terminal settings the engine was given; kept so a restarted rig is
+    /// the same bridge.
+    terminal: TerminalConfig,
 }
 
 pub struct RigOptions {
@@ -112,11 +115,20 @@ pub struct RigOptions {
     pub store: MemoryStore,
     pub transcripts: MemoryTranscripts,
     pub configure: fn(&mut Config),
+    /// What the owner decided about terminals (off by default, as on a real
+    /// machine).
+    pub terminal: TerminalConfig,
 }
 
 impl Default for RigOptions {
     fn default() -> Self {
-        Self { paired: true, store: MemoryStore::default(), transcripts: MemoryTranscripts::default(), configure: |_| {} }
+        Self {
+            paired: true,
+            store: MemoryStore::default(),
+            transcripts: MemoryTranscripts::default(),
+            configure: |_| {},
+            terminal: TerminalConfig::default(),
+        }
     }
 }
 
@@ -146,6 +158,7 @@ impl Rig {
         let mut config = Config::new(bridge.clone(), "laptop");
         config.relays = vec!["wss://relay.example".into()];
         config.bridge_version = "11.0.0-test".into();
+        config.terminal = options.terminal.clone();
         (options.configure)(&mut config);
         let ports = Ports {
             system: Box::new(system.clone()),
@@ -164,6 +177,7 @@ impl Rig {
             effects: Vec::new(),
             timers: BTreeMap::new(),
             host_seq: 0,
+            terminal: options.terminal,
         };
         rig.input(Input::Start);
         rig
@@ -171,7 +185,13 @@ impl Rig {
 
     /// A fresh engine over the same storage: a bridge restart.
     pub fn restart(self) -> Self {
-        let options = RigOptions { paired: false, store: self.store.clone(), transcripts: self.transcripts.clone(), configure: |_| {} };
+        let options = RigOptions {
+            paired: false,
+            store: self.store.clone(),
+            transcripts: self.transcripts.clone(),
+            configure: |_| {},
+            terminal: self.terminal.clone(),
+        };
         let rig = Self::build(options, self.bridge.clone(), self.phone.clone());
         rig.system.set_now(self.system_now());
         rig
@@ -221,8 +241,17 @@ impl Rig {
         self.phone_event_via_key(from, from, msg, via)
     }
 
-    /// An event written by `from` whose payload `key` encrypted.
-    pub fn phone_event_via_key(&mut self, from: &Keypair, key: &Keypair, mut msg: Value, via: Via) -> InboundEvent {
+    /// A command written by `from` whose payload `key` encrypted.
+    pub fn phone_event_via_key(&mut self, from: &Keypair, key: &Keypair, msg: Value, via: Via) -> InboundEvent {
+        self.event_of_kind(from, key, msg, via, protocol::kinds::COMMAND_KIND)
+    }
+
+    /// A phone's keystrokes: the same, on the live kind terminal input rides.
+    pub fn live_event(&mut self, from: &Keypair, key: &Keypair, msg: Value, via: Via) -> InboundEvent {
+        self.event_of_kind(from, key, msg, via, protocol::kinds::LIVE_KIND)
+    }
+
+    pub fn event_of_kind(&mut self, from: &Keypair, key: &Keypair, mut msg: Value, via: Via, kind: u16) -> InboundEvent {
         // Versioned as the phone's codec does; a test that means another
         // version names its own `v`.
         if let Some(fields) = msg.as_object_mut() {
@@ -236,6 +265,7 @@ impl Rig {
             pubkey: from.pubkey_hex.clone(),
             created_at: self.system_now() / 1000,
             content: encrypt_to(&key.secret_key, &self.bridge.pubkey_hex, &msg.to_string()).unwrap(),
+            kind,
         };
         self.input(Input::RelayEvent { event: event.clone(), via });
         event
@@ -244,7 +274,7 @@ impl Rig {
     /// Send a command from the paired phone.
     pub fn send(&mut self, msg: Value) {
         let phone = self.phone.clone();
-        self.phone_event(&phone, msg, Via::Commands);
+        self.phone_event(&phone, msg, Via::Relay);
     }
 
     /// Messages published since the last take, with their recipients.

@@ -10,11 +10,18 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::time::Duration;
 
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
 use bridge_core::ports::{Ports, System};
-use bridge_core::{Config as EngineConfig, Effect, Engine, Input, NotifyLevel, PairingCloseReason, PairingWindowInfo, TimerId};
+use bridge_core::{
+    Config as EngineConfig, Effect, Engine, Input, NotifyLevel, PairingCloseReason, PairingWindowInfo, TerminalConfig,
+    TimerId,
+};
 use protocol::commands::UploadFileMsg;
 use protocol::crypto::Keypair;
+use protocol::events::{BridgeToPhone, TerminalOutputMsg};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -22,10 +29,12 @@ use crate::config::Config;
 use crate::host::{self, HostCommand, HostHandle};
 use crate::relay::Relays;
 use crate::state::StateFile;
+use crate::terminal::{Cast, Terminals};
+use crate::terminal_allow::{self, Cache as AllowlistCache};
 use crate::transcripts::FileTranscripts;
 use crate::workspace::FsWorkspace;
 use crate::uploads::{self, Uploads};
-use crate::{qr, work};
+use crate::{audit, qr, work};
 
 /// The real clock, ids and environment.
 pub struct RealSystem;
@@ -96,6 +105,22 @@ struct Runtime {
     uploads: Rc<RefCell<Uploads>>,
     pairing_urls: Option<mpsc::UnboundedSender<String>>,
     direct: Option<crate::direct::Direct>,
+    /// Whether the relay subscription also carries the live kind, so a paired
+    /// phone's terminal input reaches the bridge over a relay. True only when
+    /// the owner allows a terminal over relays.
+    terminals_on_relays: bool,
+    /// The ptys behind the terminals the engine decided to open, with their
+    /// rings of output and their recordings. Empty unless the owner turned
+    /// terminals on: the engine emits no terminal effect otherwise.
+    terminals: Terminals,
+    /// The terminal audit's writer thread.
+    audit: audit::Audit,
+    /// `<home>/terminal-allow.json`, shared with the periodic change check so
+    /// its metadata is read once between the two.
+    allowlist: Rc<RefCell<AllowlistCache>>,
+    /// Writes the allowlist file, on a thread of its own: the runtime's single
+    /// thread never writes it.
+    allowlist_writer: terminal_allow::Writer,
 }
 
 fn say(line: &str) {
@@ -112,6 +137,23 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
     engine_config.host_kind = Some(config.host_kind);
     engine_config.relays = config.relays.clone();
     engine_config.bridge_version = crate::version().to_string();
+    // The owner's decision about terminals, and the devices already approved.
+    // The allowlist file is read once here (the cache's first check) and again
+    // whenever its mtime moves.
+    let mut allowlist_cache = AllowlistCache::new(&config.home);
+    let allowlist = allowlist_cache.changed().unwrap_or_default();
+    engine_config.terminal = TerminalConfig {
+        enabled: config.terminal.enabled,
+        relays_allowed: config.terminal.relays_allowed,
+        max_terminals: config.terminal.max_terminals,
+        idle_secs: config.terminal.idle_minutes * 60,
+        allowlist,
+    };
+    // Whether the bridge must hear a phone's keystrokes over a relay as well
+    // as its own link. Off unless the owner allows a terminal over relays, so
+    // a bridge without that never subscribes to the live kind and a relay
+    // never sees one.
+    let terminals_on_relays = config.terminal.enabled && config.terminal.relays_allowed;
     let first_root = config.workspace_roots[0].clone();
     if let Some(keep) = config.transcript_keep_last {
         engine_config.transcript_keep_last = keep;
@@ -149,6 +191,15 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
     }
 
     let nostr_http = work::NostrHttp::new(config.tor_proxy.as_deref())?;
+    let terminals = Terminals::new(config.home.join("audit"), inputs.clone());
+    // The audit's writer thread, fed by a channel: the runtime never touches
+    // the log file itself.
+    let audit = audit::Audit::open(
+        &config.home,
+        config.audit.syslog,
+        audit::Retention { max_days: config.audit.max_days, max_bytes: config.audit.max_bytes },
+    );
+    let allowlist_writer = terminal_allow::Writer::start(terminal_allow::path_in(&config.home));
     let mut rt = Runtime {
         engine: Engine::new(engine_config, ports),
         config,
@@ -163,7 +214,18 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
         uploads: Rc::new(RefCell::new(Uploads::new(&first_root))),
         pairing_urls: options.pairing_urls,
         direct,
+        terminals_on_relays,
+        terminals,
+        audit,
+        allowlist: Rc::new(RefCell::new(allowlist_cache)),
+        allowlist_writer,
     };
+    // The periodic half of the allowlist check: a `terminal disallow` with no
+    // terminal message arriving still closes a terminal, within a few seconds.
+    // With terminals off there is no terminal to close.
+    if rt.config.terminal.enabled {
+        watch_allowlist(Rc::clone(&rt.allowlist), rt.inputs.clone());
+    }
 
     rt.step(Input::Start).await;
     if rt.mode == Mode::Pair || rt.engine.paired_phones().is_empty() {
@@ -178,6 +240,28 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
         }
     }
     Ok(rt.outcome)
+}
+
+/// Watch the terminal allowlist file for a change every few seconds, so a
+/// `terminal disallow` closes a device's terminals even when no terminal
+/// message arrives to carry the check. The check is one `metadata` call; the
+/// file is read only when its stamp moved, and the same cache is shared with
+/// the per-message check, so the change is noticed and read once.
+fn watch_allowlist(cache: Rc<RefCell<AllowlistCache>>, inputs: mpsc::UnboundedSender<Input>) {
+    tokio::task::spawn_local(async move {
+        let mut ticker = tokio::time::interval(Duration::from_secs(5));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // The first tick is immediate; the start-up read already happened.
+        ticker.tick().await;
+        loop {
+            ticker.tick().await;
+            if let Some(list) = cache.borrow_mut().changed() {
+                if inputs.send(Input::TerminalAllowlist(list)).is_err() {
+                    return;
+                }
+            }
+        }
+    });
 }
 
 fn watch_signals(inputs: mpsc::UnboundedSender<Input>) {
@@ -208,9 +292,38 @@ impl Runtime {
     /// Handle one input; true once the engine has stopped and everything is
     /// flushed.
     async fn step(&mut self, input: Input) -> bool {
+        // The shell is gone: the pty is dropped before the engine hears
+        // about it. `forget` does not signal it — it has already exited, and
+        // by then its pid may belong to another process.
+        if let Input::TerminalExited { term, .. } = &input {
+            self.terminals.forget(term);
+        }
+        // A terminal command can arrive between the periodic checks, so the
+        // allowlist's mtime is checked here too, before the command is routed:
+        // `terminal disallow` then takes effect on the very next command, not
+        // up to five seconds later. The runtime cannot tell which commands are
+        // terminal ones — they are NIP-44 ciphertext until the engine decrypts
+        // them — so this covers every inbound event, at the cost of one
+        // `metadata` call each and a read only when the file moved. A bridge
+        // with terminals off (the default) has nothing to check.
+        let changed = if self.config.terminal.enabled && matches!(input, Input::RelayEvent { .. }) {
+            self.allowlist.borrow_mut().changed()
+        } else {
+            None
+        };
+        if let Some(list) = changed {
+            if self.dispatch(Input::TerminalAllowlist(list)).await {
+                return true;
+            }
+        }
+        self.dispatch(input).await
+    }
+
+    /// Feed one input to the engine and carry out its effects in order.
+    async fn dispatch(&mut self, input: Input) -> bool {
         let effects = self.engine.handle(input);
         for effect in effects {
-            if self.execute(effect) {
+            if self.execute(effect).await {
                 self.relays.flush().await;
                 self.host.stop().await;
                 self.relays.shutdown();
@@ -226,8 +339,11 @@ impl Runtime {
         false
     }
 
-    /// Carry out one effect; true for [`Effect::Stopped`].
-    fn execute(&mut self, effect: Effect) -> bool {
+    /// Carry out one effect; true for [`Effect::Stopped`]. Async because one
+    /// effect does blocking file work that must not run here: opening a
+    /// terminal's recording, which is handed to a blocking task before its
+    /// shell is started.
+    async fn execute(&mut self, effect: Effect) -> bool {
         match effect {
             Effect::Publish { to, message } => self.relays.publish(to, message),
             Effect::Host(frame) => self.host.send(&frame),
@@ -249,7 +365,7 @@ impl Runtime {
                 if let Some(direct) = &self.direct {
                     direct.hub.set_paired(&filter.authors);
                 }
-                self.relays.subscribe_commands(filter.authors, filter.since);
+                self.relays.subscribe_commands(filter.authors, filter.since, self.terminals_on_relays);
             }
             Effect::OpenPairingSubscription { since } => self.relays.open_pairing(since),
             Effect::ClosePairingSubscription => self.relays.close_pairing(),
@@ -295,6 +411,68 @@ impl Runtime {
                 });
             }
             Effect::Stopped => return true,
+            // The engine decides terminals and the runtime serves them: the
+            // ptys, the per-terminal ring of output and the recordings
+            // (`crate::terminal`). With terminals switched off — the only
+            // state a configuration leaves them in — the engine emits none of
+            // these effects, so a bridge without terminals starts no shell.
+            Effect::TerminalSpawn { term, cwd, cols, rows } => {
+                // Opening the recording is blocking file work — create the
+                // audit directory, open the file, write and flush the header —
+                // and the bridge's one thread must not do it, so it goes to a
+                // blocking task. It is awaited before the pty is opened: no
+                // shell ever runs without its recording, and a recording that
+                // cannot be opened is answered as a refusal, not left as a
+                // terminal that never appears. `None` is the owner's
+                // configured `terminal.command`: with none, the shell runs.
+                let path = self.terminals.recording_path(&term);
+                let opened = tokio::task::spawn_blocking(move || Cast::open(&path, cols, rows)).await;
+                let result = match opened {
+                    Ok(Ok(cast)) => {
+                        self.terminals.spawn(&term, &cwd, cols, rows, self.config.terminal.command.as_deref(), cast)
+                    }
+                    Ok(Err(e)) => Err(format!("could not open the recording: {e}")),
+                    Err(e) => Err(format!("could not open the recording: {e}")),
+                };
+                let _ = match result {
+                    Ok(shell) => self.inputs.send(Input::TerminalSpawned { term, shell }),
+                    Err(note) => self.inputs.send(Input::TerminalSpawnFailed { term, note }),
+                };
+            }
+            Effect::TerminalWrite { term, bytes } => self.terminals.write(&term, &bytes),
+            Effect::TerminalResize { term, cols, rows } => self.terminals.resize(&term, cols, rows),
+            Effect::TerminalReplay { term, from, client } => {
+                // The engine named the one client this goes to (a terminal's
+                // output is not a broadcast); the runtime only serves the
+                // ring it keeps. An oversize replay is split into `chunk`
+                // fragments by the transport, like any other message.
+                if let Some((offset, data)) = self.terminals.replay(&term, from) {
+                    // `replay` marks this as the answer to `terminal-replay`:
+                    // `offset` is the ring's start, which may be past the
+                    // requested `from`, and the phone takes it from there
+                    // instead of asking again.
+                    let message = BridgeToPhone::TerminalOutput(TerminalOutputMsg {
+                        term,
+                        offset,
+                        data: STANDARD.encode(data),
+                        replay: Some(true),
+                    });
+                    self.relays.publish(vec![client], message);
+                }
+            }
+            Effect::TerminalClose { term } => self.terminals.close(&term),
+            Effect::TerminalPending(pending) => {
+                // The refused devices go to the allowlist's writer thread,
+                // which reads the file, replaces `pending` with this list and
+                // writes it — never the runtime's thread, which an unapproved
+                // device spamming `terminal-open` would otherwise stall with a
+                // read per message. The engine already holds its own pending
+                // list, and the write's new mtime reaches it through the
+                // per-message and periodic allowlist checks, so nothing is
+                // sent back to it here.
+                self.allowlist_writer.set_pending(pending);
+            }
+            Effect::Audit(record) => self.audit.record(record),
         }
         false
     }

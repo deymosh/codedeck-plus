@@ -58,7 +58,7 @@ fn to(phone: &Keypair, key: &Keypair) -> Vec<Vec<(String, String)>> {
 /// A refresh from the phone, its payload encrypted with `key`.
 fn refresh_via(rig: &mut Rig, key: &Keypair) {
     let phone = rig.phone.clone();
-    rig.phone_event_via_key(&phone, key, json!({"v":12,"type":"refresh-sessions"}), Via::Commands);
+    rig.phone_event_via_key(&phone, key, json!({"v":12,"type":"refresh-sessions"}), Via::Relay);
 }
 
 #[test]
@@ -87,10 +87,10 @@ fn an_event_signed_by_the_session_key_is_not_heard() {
     let mut rig = Rig::new();
     let key = generate_keypair();
     grant(&mut rig, &key, NOW_SECS + DAY);
-    rig.phone_event(&key, json!({"v":12,"type":"refresh-sessions"}), Via::Commands);
+    rig.phone_event(&key, json!({"v":12,"type":"refresh-sessions"}), Via::Relay);
     assert!(heartbeats(&rig.take()).is_empty());
     let bridge = rig.bridge.pubkey_hex.clone();
-    rig.phone_event(&key, grant_msg(&bridge, &generate_keypair().pubkey_hex, NOW_SECS + DAY), Via::Commands);
+    rig.phone_event(&key, grant_msg(&bridge, &generate_keypair().pubkey_hex, NOW_SECS + DAY), Via::Relay);
     assert_eq!(client_keys(&rig).len(), 1, "a key cannot grant a key");
 }
 
@@ -150,12 +150,12 @@ fn a_key_belongs_to_one_phone() {
     }
     let b_key = generate_keypair();
     let bridge = rig.bridge.pubkey_hex.clone();
-    rig.phone_event(&b, grant_msg(&bridge, &b_key.pubkey_hex, NOW_SECS + DAY), Via::Commands);
+    rig.phone_event(&b, grant_msg(&bridge, &b_key.pubkey_hex, NOW_SECS + DAY), Via::Relay);
     rig.take();
 
     // A names B's identity, then B's session key, as its own session key.
     for key in [&b.pubkey_hex, &b_key.pubkey_hex] {
-        rig.phone_event(&a, grant_msg(&bridge, key, NOW_SECS + DAY), Via::Commands);
+        rig.phone_event(&a, grant_msg(&bridge, key, NOW_SECS + DAY), Via::Relay);
         rig.take();
     }
     let phones = rig.engine.paired_phones();
@@ -209,7 +209,7 @@ fn a_rotation_moves_its_client_to_the_new_key() {
     // Sent under the key it retires, as a client rotating does.
     let phone = rig.phone.pubkey_hex.clone();
     let rig_phone = rig.phone.clone();
-    rig.phone_event_via_key(&rig_phone, &phone_a, rotate_msg(&bridge, &a_next.pubkey_hex, &phone_a.pubkey_hex, NOW_SECS + 2 * DAY), Via::Commands);
+    rig.phone_event_via_key(&rig_phone, &phone_a, rotate_msg(&bridge, &a_next.pubkey_hex, &phone_a.pubkey_hex, NOW_SECS + 2 * DAY), Via::Relay);
     let sent = heartbeats(&rig.take());
     assert_eq!(sent, vec![vec![(phone.clone(), a_next.pubkey_hex.clone()), (phone.clone(), phone_b.pubkey_hex.clone())]]);
     // A command still under the old key is read while the client rotates.
@@ -237,7 +237,7 @@ fn only_the_client_holding_a_key_can_retire_it() {
     // Another client of the identity names the victim's key, under its own
     // key and under the identity: neither moves the victim's copies.
     let takeover = rotate_msg(&bridge, &intruder.pubkey_hex, &victim.pubkey_hex, NOW_SECS + DAY);
-    rig.phone_event_via_key(&phone, &other, takeover.clone(), Via::Commands);
+    rig.phone_event_via_key(&phone, &other, takeover.clone(), Via::Relay);
     rig.send(takeover);
     rig.take();
     let keys = client_keys(&rig);
@@ -328,7 +328,7 @@ fn a_pair_request_can_grant_the_first_key() {
 fn presence(rig: &mut Rig, key: &Keypair, away: bool) -> Vec<Effect> {
     let phone = rig.phone.clone();
     rig.take();
-    rig.phone_event_via_key(&phone, key, json!({"v":12,"type":"presence","away":away}), Via::Commands);
+    rig.phone_event_via_key(&phone, key, json!({"v":12,"type":"presence","away":away}), Via::Relay);
     rig.take()
 }
 
@@ -382,7 +382,7 @@ fn a_sync_goes_to_the_client_that_asked_alone() {
     grant(&mut rig, &other, NOW_SECS + DAY);
     rig.take();
     let phone = rig.phone.clone();
-    rig.phone_event_via_key(&phone, &asking, json!({"v":12,"type":"sync-request","sessionId":"s","haveRanges":[]}), Via::Commands);
+    rig.phone_event_via_key(&phone, &asking, json!({"v":12,"type":"sync-request","sessionId":"s","haveRanges":[]}), Via::Relay);
     let sync: Vec<Vec<String>> = rig
         .take()
         .iter()
@@ -403,7 +403,7 @@ fn a_sync_goes_to_the_client_that_asked_alone() {
 fn watching(rig: &mut Rig, key: &Keypair, session: Option<&str>) -> Vec<Effect> {
     let phone = rig.phone.clone();
     rig.take();
-    rig.phone_event_via_key(&phone, key, json!({"v":12,"type":"presence","watching":session}), Via::Commands);
+    rig.phone_event_via_key(&phone, key, json!({"v":12,"type":"presence","watching":session}), Via::Relay);
     rig.take()
 }
 

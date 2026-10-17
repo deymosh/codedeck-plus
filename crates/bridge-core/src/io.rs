@@ -8,10 +8,13 @@
 
 use agent_protocol::{BridgeFrame, HostFrame};
 use protocol::commands::UploadFileMsg;
+use protocol::common::TerminalEndReason;
 use protocol::events::BridgeToPhone;
 use serde::{Deserialize, Serialize};
 
-/// A command event from the relays, signature already verified. `content` is
+use crate::engine::{PendingDevice, TerminalAllowlist, TerminalAuditRecord};
+
+/// A command event from a phone, signature already verified. `content` is
 /// still NIP-44 ciphertext.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InboundEvent {
@@ -21,13 +24,30 @@ pub struct InboundEvent {
     /// Seconds since the Unix epoch.
     pub created_at: u64,
     pub content: String,
+    /// The event's kind: [`COMMAND_KIND`](protocol::kinds::COMMAND_KIND) for
+    /// every command, [`LIVE_KIND`](protocol::kinds::LIVE_KIND) for the
+    /// keystrokes a phone types into a terminal. What a command carries is
+    /// remembered by its event id so a relay's replay runs nothing twice;
+    /// live input must not be (a burst of keystrokes would push command ids
+    /// out of the dedup set), so the engine has to tell the two apart before
+    /// it accepts either.
+    pub kind: u16,
 }
 
-/// Which subscription delivered an event.
+/// Which subscription delivered an event, and how it reached the bridge.
+/// The terminal audit and `terminal-event` name it, so a person reading them
+/// can tell a command that came over a relay from one that came over the
+/// bridge's own link — and, of those, one that took the phone through Tor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Via {
-    /// The standing subscription: commands from paired phones.
-    Commands,
+    /// The standing subscription over a relay: commands from paired phones.
+    Relay,
+    /// The standing subscription over the bridge's direct link (LAN, VPN).
+    Direct,
+    /// The standing subscription over the direct link's `.onion` endpoint
+    /// (the phone reached it through Orbot): the same link directly, with Tor
+    /// in front, which the audit keeps apart from a plain one.
+    Onion,
     /// The pairing window's authorless subscription.
     Pairing,
 }
@@ -60,6 +80,18 @@ pub struct PhoneClient {
     /// it, until it lapses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous: Option<protocol::commands::SessionKeyGrant>,
+    /// The device this client is: [`device_id`](protocol::recipients::device_id)
+    /// of the FIRST key it granted this bridge, so its name in the terminal
+    /// allowlist and in the audit survives every rotation. Empty in a state
+    /// file written before devices existed; the engine derives it from the
+    /// key there on load.
+    #[serde(default)]
+    pub device: String,
+    /// The client's own name for its device, from its latest grant (a phone
+    /// sends its model by default). What the machine's owner reads when
+    /// deciding whether to approve a device; never what it trusts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     /// Until when (ms) the client is present: it gets the identity's shared
     /// updates (see `protocol::commands::PresenceMsg`). Not stored: a
     /// restarted bridge counts every client present for a lease, so none
@@ -71,6 +103,12 @@ pub struct PhoneClient {
     /// live text until the client says again.
     #[serde(skip)]
     pub watch: WatchState,
+    /// The terminal whose output the client shows, set the same way `watch`
+    /// is: a `presence` says both. A terminal's output goes only to the
+    /// clients showing it. Not stored, for the same reason as `watch` — and
+    /// because a bridge that has just restarted has no terminals.
+    #[serde(skip)]
+    pub watch_terminal: WatchState,
 }
 
 /// Which session's live text a client wants. Only a `partial` is filtered by
@@ -93,6 +131,16 @@ impl WatchState {
             WatchState::Unknown => true,
             WatchState::Watching(watching) => watching.as_deref() == Some(session),
         }
+    }
+
+    /// Whether this client shows `term`. Only one that said so does: a
+    /// terminal's output is not the completing entry of a row already on
+    /// screen, so an unasked client loses nothing by not being sent it — it
+    /// draws what it missed with `terminal-replay` from the runtime's ring
+    /// when it does attach, and a terminal nobody attached to is one the idle
+    /// limit is meant to close.
+    pub(crate) fn shows(&self, term: &str) -> bool {
+        matches!(self, WatchState::Watching(Some(watching)) if watching == term)
     }
 }
 
@@ -164,6 +212,25 @@ pub enum Input {
     ClosePairing,
     /// The workspace roots or folders changed on disk: republish them.
     WorkspaceChanged,
+    /// A shell for [`Effect::TerminalSpawn`] is running; `shell` is what
+    /// runs in it. Answer to a `terminal-open`.
+    TerminalSpawned { term: String, shell: String },
+    /// The shell could not be started (no PTY, no usable program): the open
+    /// is answered as a refusal, and `note` is what the audit records.
+    TerminalSpawnFailed { term: String, note: String },
+    /// A terminal wrote output: `data`, base64, from byte `offset` of
+    /// everything it has ever written. Goes to the clients showing it.
+    TerminalOutput { term: String, offset: u64, data: String },
+    /// A terminal's shell is gone: `code` when it exited on its own, else the
+    /// `reason` the runtime saw (its pipe broke, the bridge is going down).
+    TerminalExited { term: String, code: Option<i32>, reason: TerminalEndReason },
+    /// The terminal allowlist changed on disk — the owner ran
+    /// `codedeck-bridge terminal allow|disallow` on the machine: replace what
+    /// the engine holds and close the terminals of a device withdrawn.
+    TerminalAllowlist(TerminalAllowlist),
+    /// The owner unpaired an identity on the machine: it is heard from no
+    /// more, and the terminals its devices hold end.
+    Unpaired { identity: String },
     /// Stop: end every session, publish the offline heartbeat, then
     /// [`Effect::Stopped`].
     Shutdown,
@@ -203,6 +270,34 @@ pub enum Effect {
     /// Fetch / reassemble an uploaded image into the workspace; answer with
     /// [`Input::FileReady`] once it is on disk.
     HandleFileUpload(UploadFileMsg),
+    /// Start a shell for `term` in `cwd`, at `cols`×`rows`; answer with
+    /// [`Input::TerminalSpawned`] once it runs, or
+    /// [`Input::TerminalSpawnFailed`]. The runtime starts it with a built
+    /// environment, never the bridge's own: the bridge's may hold the
+    /// agents' provider keys.
+    TerminalSpawn { term: String, cwd: String, cols: u16, rows: u16 },
+    /// Type `bytes` into a terminal, in the order the engine emitted them.
+    /// The engine has already checked the sender is the writer and that no
+    /// earlier input is missing.
+    TerminalWrite { term: String, bytes: Vec<u8> },
+    /// The writer's window changed.
+    TerminalResize { term: String, cols: u16, rows: u16 },
+    /// Send `client` this terminal's output from byte `from`, and what
+    /// follows: it attached to a terminal it was not showing.
+    TerminalReplay { term: String, from: u64, client: Addressee },
+    /// Hang up a terminal: SIGHUP, then kill once it does not go. The engine
+    /// has already ended it; this is the shell's part.
+    TerminalClose { term: String },
+    /// The devices waiting for the owner's approval changed: write them where
+    /// the owner lists them (`codedeck-bridge terminal pending`). Sent whole,
+    /// so the file always says what the engine knows.
+    TerminalPending(Vec<PendingDevice>),
+    /// One line for the terminal audit, in the order the engine decided it.
+    /// The engine holds no file: the runtime chains the line to the one
+    /// before it and stores it, and denies the audit to no one running as
+    /// the bridge's user — the chain catches tampering that is not that
+    /// thorough.
+    Audit(TerminalAuditRecord),
     /// Shutdown is complete: every publish before this one must still go
     /// out, then the runtime may close the host and the relays.
     Stopped,
