@@ -39,6 +39,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -48,7 +49,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -120,9 +121,27 @@ internal class RemoteTerminal(
     private var sentSize: Pair<Int, Int>? = null
     private var viewSize: Pair<Int, Int>? = null
 
+    /**
+     * The predicted echo drawn at the cursor. Kept once the core has sent
+     * those keys ([echoSent]) until the shell's output arrives: the echo is a
+     * round trip behind the send, and the letters would blink out meanwhile.
+     */
+    var echoText: String = ""
+        private set
+    private var echoSent = false
+
     fun update(next: UniffiAttachedTerminal) {
         val wasWriter = attached?.writer == true
         attached = next
+        val predicted = if (next.writer) predictedEcho(next.waitingInput) else ""
+        when {
+            predicted.isNotEmpty() -> {
+                echoText = predicted
+                echoSent = false
+            }
+            next.waitingInput.isEmpty() && echoText.isNotEmpty() -> echoSent = true
+            else -> echoText = ""
+        }
         // A device that just took the pen tells the shell its own size.
         if (next.writer && !wasWriter) sentSize = null
         sendSize()
@@ -190,6 +209,10 @@ internal class RemoteTerminal(
     // --- TerminalSessionClient: from the emulator -----------------------------
 
     override fun onTextChanged(changedSession: TerminalSession) {
+        if (echoSent) {
+            echoText = ""
+            echoSent = false
+        }
         view?.onScreenUpdated()
         echo?.invalidate()
     }
@@ -341,12 +364,14 @@ internal fun predictedEcho(waiting: ByteArray): String {
 }
 
 /**
- * Draws [predictedEcho] dimmed at the cursor, over the terminal: typing shows
+ * Draws [RemoteTerminal.echoText] dimmed at the cursor, over the terminal: typing shows
  * at once on a link that takes a round trip to echo it. Only on the normal
  * screen at the bottom of the scrollback, where the cursor is where the
  * shell will put those characters.
  */
-private class PredictedEchoView(context: Context, private val terminal: RemoteTerminal) : View(context) {
+private class PredictedEchoView(context: Context) : View(context) {
+    var terminal: RemoteTerminal? = null
+
     private val text = Paint().apply {
         typeface = Typeface.MONOSPACE
         isAntiAlias = true
@@ -355,13 +380,12 @@ private class PredictedEchoView(context: Context, private val terminal: RemoteTe
     private val cell = Paint().apply { color = Tokens.Bg.toArgb() }
 
     override fun onDraw(canvas: Canvas) {
-        val a = terminal.attached ?: return
-        if (!a.writer || a.waitingInput.isEmpty()) return
+        val terminal = terminal ?: return
+        val predicted = terminal.echoText
+        if (predicted.isEmpty()) return
         val view = terminal.view ?: return
         val emulator = terminal.session.emulator ?: return
         if (emulator.isAlternateBufferActive || view.topRow != 0) return
-        val predicted = predictedEcho(a.waitingInput)
-        if (predicted.isEmpty()) return
         text.textSize = terminal.textPx(terminal.textSp).toFloat()
         val row = emulator.cursorRow
         val x = view.getPointX(emulator.cursorCol).toFloat()
@@ -392,7 +416,7 @@ internal fun TerminalEmulatorHost(terminal: RemoteTerminal, attached: UniffiAtta
                         attachSession(terminal.session)
                     }
                     terminal.view = view
-                    val echo = PredictedEchoView(ctx, terminal)
+                    val echo = PredictedEchoView(ctx).also { it.terminal = terminal }
                     terminal.echo = echo
                     addView(view, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
                     addView(echo, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
@@ -409,8 +433,8 @@ internal fun TerminalEmulatorHost(terminal: RemoteTerminal, attached: UniffiAtta
     }
 }
 
-/** The columns and rows the terminal's area will hold at [textSp], estimated from the window before it is laid out. */
-private fun estimateSize(context: Context, textSp: Int, widthDp: Int, heightDp: Int): Pair<Int, Int> {
+/** The columns and rows the terminal's area will hold at [textSp], estimated from the window ([widthPx] x [heightPx]) before it is laid out. */
+private fun estimateSize(context: Context, textSp: Int, widthPx: Int, heightPx: Int): Pair<Int, Int> {
     val metrics = context.resources.displayMetrics
     val paint = Paint().apply {
         typeface = Typeface.MONOSPACE
@@ -419,8 +443,8 @@ private fun estimateSize(context: Context, textSp: Int, widthDp: Int, heightDp: 
     val lineSpacing = ceil(paint.fontSpacing).toInt()
     val ascent = ceil(paint.ascent()).toInt()
     // The slim bar, the extra-keys row, the side padding and the system bars.
-    val width = (widthDp - 16) * metrics.density
-    val height = (heightDp - 48 - 40 - 48) * metrics.density
+    val width = widthPx - 16 * metrics.density
+    val height = heightPx - (48 + 40 + 48) * metrics.density
     val cols = (width / paint.measureText("X")).toInt().coerceAtLeast(4)
     val rows = ((height - (lineSpacing + ascent)) / lineSpacing).toInt().coerceAtLeast(4)
     return cols to rows
@@ -446,7 +470,7 @@ fun TerminalScreen(core: CoreHost, machine: String, term: String?, session: Stri
     var unlocked by rememberSaveable { mutableStateOf<String?>(null) }
     if (prefs.requireUnlock && unlocked != PROCESS_TOKEN) {
         val available = remember { DeviceUnlock.available(context) }
-        var asks by remember { mutableStateOf(0) }
+        var asks by remember { mutableIntStateOf(0) }
         LaunchedEffect(asks) {
             if (available && DeviceUnlock.ask(context, "Open a terminal")) unlocked = PROCESS_TOKEN
         }
@@ -463,7 +487,7 @@ fun TerminalScreen(core: CoreHost, machine: String, term: String?, session: Stri
     val terminal = remember(machine) {
         RemoteTerminal(machine, context, prefs.textSp, send = { outbox.trySend(it) }, onTextSp = { prefs.textSp = it })
     }
-    val configuration = LocalConfiguration.current
+    val window = LocalWindowInfo.current.containerSize
 
     DisposableEffect(terminal) {
         // The output sink is in place before the open or attach is sent, so
@@ -480,7 +504,7 @@ fun TerminalScreen(core: CoreHost, machine: String, term: String?, session: Stri
             // Its open is still on the way; the answer lands in the view.
             current?.openId != null -> null
             else -> {
-                val (cols, rows) = estimateSize(context, terminal.textSp, configuration.screenWidthDp, configuration.screenHeightDp)
+                val (cols, rows) = estimateSize(context, terminal.textSp, window.width, window.height)
                 terminal.opened(cols, rows)
                 UniffiIntent.OpenTerminal(machine, session, cols.toUShort(), rows.toUShort())
             }

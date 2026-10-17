@@ -7,6 +7,7 @@ import android.hardware.biometrics.BiometricManager.Authenticators.DEVICE_CREDEN
 import android.hardware.biometrics.BiometricPrompt
 import android.os.Build
 import android.os.CancellationSignal
+import androidx.annotation.RequiresApi
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 
@@ -17,13 +18,17 @@ import kotlin.coroutines.resume
  * phones do not offer the setting at all rather than a weaker check.
  */
 object DeviceUnlock {
-    private const val AUTHENTICATORS = BIOMETRIC_WEAK or DEVICE_CREDENTIAL
+    /** Read only behind the Android 11 check: the constants are Android 11's. */
+    @RequiresApi(Build.VERSION_CODES.R)
+    private object Api30 {
+        const val AUTHENTICATORS = BIOMETRIC_WEAK or DEVICE_CREDENTIAL
+    }
 
     /** Whether this phone can ask: Android 11+, with a fingerprint or a screen lock set up. */
     fun available(context: Context): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return false
         val manager = context.getSystemService(BiometricManager::class.java) ?: return false
-        return manager.canAuthenticate(AUTHENTICATORS) == BiometricManager.BIOMETRIC_SUCCESS
+        return manager.canAuthenticate(Api30.AUTHENTICATORS) == BiometricManager.BIOMETRIC_SUCCESS
     }
 
     /** Ask, and return whether the user passed. A cancel, a failure or a phone that cannot ask is false. */
@@ -34,7 +39,7 @@ object DeviceUnlock {
             cont.invokeOnCancellation { cancel.cancel() }
             BiometricPrompt.Builder(context)
                 .setTitle(title)
-                .setAllowedAuthenticators(AUTHENTICATORS)
+                .setAllowedAuthenticators(Api30.AUTHENTICATORS)
                 .build()
                 .authenticate(
                     cancel,
