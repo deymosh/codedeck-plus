@@ -99,8 +99,10 @@ pub struct DirectHandlers {
 pub struct DirectLink(Rc<Inner>);
 
 /// A publish awaiting the bridge's `OK`, with the byte length of the frame it
-/// reserved from the outbound budget.
-type PendingPublish = (oneshot::Sender<(bool, String)>, usize);
+/// reserved from the outbound budget and a token identifying this publish.
+/// A superseded publish with the same event id must not remove its
+/// replacement's entry when its own wait ends.
+type PendingPublish = (oneshot::Sender<(bool, String)>, usize, u64);
 
 struct Inner {
     config: DirectConfig,
@@ -114,6 +116,8 @@ struct Inner {
     /// written) and of publishes still awaiting an `OK`.
     queued_bytes: Cell<usize>,
     pending_bytes: Cell<usize>,
+    /// Source of the token that ties a cleanup to the exact publish it ends.
+    pending_seq: Cell<u64>,
     /// Byte cap on `queued_bytes + pending_bytes`; a field so tests can shrink
     /// it without allocating the production budget.
     budget: Cell<usize>,
@@ -149,10 +153,24 @@ impl Inner {
     /// Take one waiting publish, releasing the bytes its frame reserved.
     fn take_pending(&self, id: &str) -> Option<oneshot::Sender<(bool, String)>> {
         let entry = self.pending.borrow_mut().remove(id);
-        if let Some((_, len)) = &entry {
+        if let Some((_, len, _)) = &entry {
             self.pending_bytes.set(self.pending_bytes.get().saturating_sub(*len));
         }
-        entry.map(|(tx, _)| tx)
+        entry.map(|(tx, _, _)| tx)
+    }
+
+    /// Take the pending publish for `id` only if it is still the one `token`
+    /// identifies: a superseded publish ending its own wait must not remove
+    /// the replacement registered under the same event id.
+    fn take_pending_if(&self, id: &str, token: u64) -> Option<oneshot::Sender<(bool, String)>> {
+        let mut map = self.pending.borrow_mut();
+        let mine = map.get(id).is_some_and(|(_, _, t)| *t == token);
+        let entry = if mine { map.remove(id) } else { None };
+        drop(map);
+        if let Some((_, len, _)) = &entry {
+            self.pending_bytes.set(self.pending_bytes.get().saturating_sub(*len));
+        }
+        entry.map(|(tx, _, _)| tx)
     }
 }
 
@@ -167,6 +185,7 @@ impl DirectLink {
             pending: RefCell::default(),
             queued_bytes: Cell::new(0),
             pending_bytes: Cell::new(0),
+            pending_seq: Cell::new(0),
             budget: Cell::new(OUTBOUND_BUDGET),
             newest: Cell::new(now_secs().saturating_sub(FIRST_RESUME_SECS)),
             ping_every: Cell::new(PING_EVERY),
@@ -214,6 +233,10 @@ impl DirectLink {
         let outbound = self.0.up.borrow().as_ref().map(|(_, out)| out.clone())?;
         let frame = encode_direct_frame(&DirectFrame::Event(event.clone()));
         let len = frame.len();
+        // A publish of the same event replaces the waiter already registered
+        // for it: release the bytes that entry reserved, or they stay counted
+        // against the budget with nothing left to release them.
+        self.0.take_pending(&event.id);
         // A bridge that stops reading must not let the unbounded queue grow
         // past the budget. Fail this publish and close the link (the caller
         // falls back to the relays) rather than drop a frame silently.
@@ -227,11 +250,13 @@ impl DirectLink {
             self.0.close_link();
             return None;
         }
+        let token = self.0.pending_seq.get() + 1;
+        self.0.pending_seq.set(token);
         let (tx, rx) = oneshot::channel();
-        self.0.pending.borrow_mut().insert(event.id.clone(), (tx, len));
+        self.0.pending.borrow_mut().insert(event.id.clone(), (tx, len, token));
         self.0.pending_bytes.set(self.0.pending_bytes.get().saturating_add(len));
         if outbound.send(Message::Text(frame)).is_err() {
-            self.0.take_pending(&event.id);
+            self.0.take_pending_if(&event.id, token);
             return None;
         }
         self.0.queued_bytes.set(self.0.queued_bytes.get().saturating_add(len));
@@ -239,7 +264,7 @@ impl DirectLink {
             Ok(Ok((true, _))) => Some(PublishResult { verdict: PublishVerdict::Accepted, detail: None }),
             Ok(Ok((false, message))) => Some(PublishResult { verdict: PublishVerdict::Rejected, detail: Some(message) }),
             _ => {
-                self.0.take_pending(&event.id);
+                self.0.take_pending_if(&event.id, token);
                 None
             }
         }
@@ -554,6 +579,7 @@ mod tests {
             pending: RefCell::default(),
             queued_bytes: Cell::new(0),
             pending_bytes: Cell::new(0),
+            pending_seq: Cell::new(0),
             budget: Cell::new(OUTBOUND_BUDGET),
             newest: Cell::new(0),
             ping_every: Cell::new(PING_EVERY),
@@ -743,6 +769,43 @@ mod tests {
                 assert!(publish.await.unwrap().is_none(), "the pending publish was failed");
 
                 server.abort();
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn a_same_id_publish_releases_the_superseded_reservation() {
+        LocalSet::new()
+            .run_until(async {
+                let ev = a_signed_event("e1", "hello");
+                let len = encode_direct_frame(&DirectFrame::Event(ev.clone())).len();
+                let (link, mut rx) = up_link(len * 4);
+
+                let first = {
+                    let (link, ev) = (link.clone(), ev.clone());
+                    tokio::task::spawn_local(async move { link.publish(&ev, Duration::from_secs(2)).await })
+                };
+                let _frame = rx.recv().await.expect("the first frame was queued");
+                assert_eq!(link.0.pending_bytes.get(), len);
+
+                let second = {
+                    let (link, ev) = (link.clone(), ev.clone());
+                    tokio::task::spawn_local(async move { link.publish(&ev, Duration::from_secs(2)).await })
+                };
+                let _frame = rx.recv().await.expect("the replacement frame was queued");
+                // The superseded waiter released its bytes: only the new
+                // reservation is counted.
+                assert_eq!(link.0.pending_bytes.get(), len);
+                assert!(first.await.unwrap().is_none(), "the superseded publish got no answer");
+
+                let ok = encode_direct_frame(&DirectFrame::Ok {
+                    id: "e1".into(),
+                    accepted: true,
+                    message: String::new(),
+                });
+                assert!(link.on_frame(&ok));
+                assert_eq!(second.await.unwrap().unwrap().verdict, PublishVerdict::Accepted);
+                assert_eq!(link.0.pending_bytes.get(), 0);
             })
             .await;
     }
