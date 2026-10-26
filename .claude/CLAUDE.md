@@ -262,7 +262,7 @@ crates/protocol          the phone wire: messages, total codec, kinds, ranges,
   binaries: the agent host installs them on demand at the version and sha512
   pnpm-lock.yaml pins (the image into the `/data` volume). A host without npm
   registry access uses `CODEDECK_NPM_REGISTRY`, a one-time online
-  `codedeck-bridge agents install`, or a copied `/data/agents` volume. Never add
+  `codedeck-bridge agents install <agent>…`, or a copied `/data/agents` volume. Never add
   a global Claude Code, OpenCode or DeepSeek Harness install — the version must
   follow the lockfile.
 

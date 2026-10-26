@@ -221,7 +221,7 @@ default agent, is installed when the bridge first starts, and any other agent
 when someone installs it from the phone, pinned to the lockfile (see
 [`docs/BRIDGE.md`](docs/BRIDGE.md)). A host without npm registry access points
 `CODEDECK_NPM_REGISTRY` at a mirror, installs the agents once with
-`codedeck-bridge agents install` while online, or copies its `agents` volume
+`codedeck-bridge agents install <agent>…` while online, or copies its `agents` volume
 from another deployment.
 
 A tag with a hyphen (`v1.2.3-rc1`) is published as a prerelease and does not move
