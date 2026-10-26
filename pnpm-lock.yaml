@@ -33,8 +33,8 @@ importers:
         specifier: 2.1.4
         version: 2.1.4
       '@qwen-code/qwen-code':
-        specifier: 0.25.2
-        version: 0.25.2(@types/node@22.20.1)
+        specifier: 0.26.1
+        version: 0.26.1(@types/node@22.20.1)
       '@types/js-yaml':
         specifier: ^4.0.9
         version: 4.0.9
@@ -3395,7 +3395,6 @@ packages:
 
   '@opencode/cli@2.1.4':
     resolution: {integrity: sha512-vtHFa/1frSylpx1cZRuzmM2ecHWn6YB8cNvhw8eWKPvSFvDnckZXugDbi3LJYD9TGjRx2U6JRo725qwqtwMUfQ==}
-    cpu: [arm64, x64]
     os: [darwin, linux, win32]
     hasBin: true
 
@@ -3482,6 +3481,26 @@ packages:
     resolution: {integrity: sha512-eSYWTm620tTk45EKSedaUL8MFYI8hW164hIXsgIHyxu3VobUB3fFCu5t0hQby6OoWRPsG1KkKUG2M5UadiLiVg==}
     engines: {node: '>=14'}
 
+  '@oven/bun-darwin-aarch64@1.3.14':
+    resolution: {integrity: sha512-Omj20SuiHBOUjUBIyqtkNjSUIjOtEOJwmbix/ZyFH4BaQ6OZTaaRWIR4TjHVz0yadHgli6lLTiAh1uarnvD49A==}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@oven/bun-darwin-x64@1.3.14':
+    resolution: {integrity: sha512-FFj3QdU/OhlDyZOJ8CWfN5eWLpRlT4qjZg7lMQi7jA6GuoY5ajlO1zWLP/MuHYRSbXQUvV52RejNi8DVnAp13w==}
+    cpu: [x64]
+    os: [darwin]
+
+  '@oven/bun-linux-aarch64@1.3.14':
+    resolution: {integrity: sha512-X5SsPZHs+iYO8R/efIcRtc7gT2Q2DgPfliCxEkx4cXBumwkw0c/EsHMNwH3EgGpCDaZ7IYVPhpCG/xBOQHEwZw==}
+    cpu: [arm64]
+    os: [linux]
+
+  '@oven/bun-linux-x64@1.3.14':
+    resolution: {integrity: sha512-7OVTAKvwfPmSbIV1HpdOoVVx5VRc427GuPPne93N6vk4eQBPId9nXmZDh9/zGaKPdbVjVtQSZafWQoUjx38Utw==}
+    cpu: [x64]
+    os: [linux]
+
   '@protobufjs/aspromise@1.1.2':
     resolution: {integrity: sha512-j+gKExEuLmKwvz3OgROXtrJ2UG2x8Ch2YZUxahh+s1F2HZ+wAceUNLkvy6zKCPVRkU++ZWQrdxsUeQXmcg4uoQ==}
 
@@ -3509,12 +3528,12 @@ packages:
   '@protobufjs/utf8@1.1.2':
     resolution: {integrity: sha512-b1UQwcEZ4yCnMCD8DAL1VlbvBJE9/IX4FTIp7BG1xYpf29SLazLSrqUkj4w7Y5y7cCVP6E5tcqqcI0xemPkHug==}
 
-  '@qwen-code/audio-capture@0.25.2':
-    resolution: {integrity: sha512-vAAUZPBqvG5q/E6DjK8qT/ahBROyv1OkcHs/Egd957kqYoXld/0cyimUjyBegg/bpfbjFQH5awenwwhk2Gfa3A==}
+  '@qwen-code/audio-capture@0.26.1':
+    resolution: {integrity: sha512-MRI/JW31UMUjwJJO4Vd7zNQvGpUklBre5lEuNIAbVtq/60FNr8NDIlwB//VMT04WgYrXru9ndDHsEaZAE7bMlA==}
     engines: {node: '>=22'}
 
-  '@qwen-code/qwen-code@0.25.2':
-    resolution: {integrity: sha512-Why8rpC3RY20L07sqwsFph/BMjzCDxF0HMmqyIl4mfhCVLCHWnD/swVIwSN/iUugqEWnm2G5Zrl+qwndprN9kQ==}
+  '@qwen-code/qwen-code@0.26.1':
+    resolution: {integrity: sha512-4kpIzrlrgmawivim0yCZjr1AP5cfHTanyL7eL1g2R8WYU6QDBq7j9fiAye7REXL4EEXkRIq45D7+ngTw5n3GqQ==}
     engines: {node: '>=22.0.0'}
     hasBin: true
 
@@ -9171,6 +9190,18 @@ snapshots:
 
   '@opentelemetry/semantic-conventions@1.43.0': {}
 
+  '@oven/bun-darwin-aarch64@1.3.14':
+    optional: true
+
+  '@oven/bun-darwin-x64@1.3.14':
+    optional: true
+
+  '@oven/bun-linux-aarch64@1.3.14':
+    optional: true
+
+  '@oven/bun-linux-x64@1.3.14':
+    optional: true
+
   '@protobufjs/aspromise@1.1.2': {}
 
   '@protobufjs/base64@1.1.2': {}
@@ -9191,12 +9222,12 @@ snapshots:
 
   '@protobufjs/utf8@1.1.2': {}
 
-  '@qwen-code/audio-capture@0.25.2':
+  '@qwen-code/audio-capture@0.26.1':
     dependencies:
       node-gyp-build: 4.8.4
     optional: true
 
-  '@qwen-code/qwen-code@0.25.2(@types/node@22.20.1)':
+  '@qwen-code/qwen-code@0.26.1(@types/node@22.20.1)':
     optionalDependencies:
       '@lydell/node-pty': 1.2.0-beta.10
       '@lydell/node-pty-darwin-arm64': 1.2.0-beta.10
@@ -9205,7 +9236,11 @@ snapshots:
       '@lydell/node-pty-linux-x64': 1.2.0-beta.10
       '@lydell/node-pty-win32-arm64': 1.2.0-beta.10
       '@lydell/node-pty-win32-x64': 1.2.0-beta.10
-      '@qwen-code/audio-capture': 0.25.2
+      '@oven/bun-darwin-aarch64': 1.3.14
+      '@oven/bun-darwin-x64': 1.3.14
+      '@oven/bun-linux-aarch64': 1.3.14
+      '@oven/bun-linux-x64': 1.3.14
+      '@qwen-code/audio-capture': 0.26.1
       '@teddyzhu/clipboard': 0.0.5
       '@teddyzhu/clipboard-darwin-arm64': 0.0.5
       '@teddyzhu/clipboard-darwin-x64': 0.0.5
