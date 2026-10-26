@@ -91,11 +91,15 @@ const CONFIGURED_NAMES = ['subagent', 'subagent_fork', 'workflow'];
  * Tools an installed package declares that this profile does not mount: the
  * agent-team experiment (nothing in the bundle inserts it), `present` (it
  * declares deliverable files for the harness's own web app, which nothing on
- * the phone shows), and `ralph` (its row in the bundle is disabled).
+ * the phone shows), `ralph` (its row in the bundle is disabled), and the
+ * worktree experiment and scheduled-task tools (the `acp` profile inserts
+ * neither plugin).
  */
 const NOT_MOUNTED = [
   'present', 'ralph',
   'spawn_teammate', 'wait_agent', 'team_task_create', 'team_task_get', 'team_task_list', 'team_task_update',
+  'create_worktree',
+  'schedule_create', 'schedule_list', 'schedule_delete', 'schedule_update',
 ];
 
 /** One tool as the package registering it declares it. */

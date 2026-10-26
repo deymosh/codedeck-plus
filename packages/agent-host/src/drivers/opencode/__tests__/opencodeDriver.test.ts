@@ -713,9 +713,9 @@ describe('OpenCode compaction', () => {
     // summary replaced, and the context meter simply drops at the next step.
     const ctx = start(clientWith([
       stepStarted,
-      { type: 'session.compaction.started', data: { sessionID: 'ses_1', reason: 'auto', recent: '' } },
+      { type: 'session.compaction.started', data: { sessionID: 'ses_1', reason: 'auto' } },
       { type: 'session.compaction.delta', data: { sessionID: 'ses_1', text: '## Objective' } },
-      { type: 'session.compaction.ended', data: { sessionID: 'ses_1', reason: 'auto', model: { providerID: 'zen', id: 'm1' }, text: '## Objective\n- x', recent: '', cost: 0 } },
+      { type: 'session.compaction.ended', data: { sessionID: 'ses_1', reason: 'auto', model: { providerID: 'zen', id: 'm1' }, text: '## Objective\n- x', cost: 0 } },
     ]));
     await ctx.ended();
     expect(ctx.entries().filter((e) => e.entryType === 'status').map((e) => (e as { text: string }).text)).toEqual([
@@ -729,8 +729,8 @@ describe('OpenCode compaction', () => {
     // driver adds the outcome, which is the part the built-in cannot know.
     const ctx = start(clientWith([
       stepStarted,
-      { type: 'session.compaction.started', data: { sessionID: 'ses_1', reason: 'manual', recent: '', inputID: 'msg_9' } },
-      { type: 'session.compaction.ended', data: { sessionID: 'ses_1', reason: 'manual', model: { providerID: 'zen', id: 'm1' }, text: '## Objective\n- x', recent: '', cost: 0 } },
+      { type: 'session.compaction.started', data: { sessionID: 'ses_1', reason: 'manual', inputID: 'msg_9' } },
+      { type: 'session.compaction.ended', data: { sessionID: 'ses_1', reason: 'manual', model: { providerID: 'zen', id: 'm1' }, text: '## Objective\n- x', cost: 0 } },
     ]));
     await ctx.ended();
     expect(ctx.entries().filter((e) => e.entryType === 'status').map((e) => (e as { text: string }).text)).toEqual([

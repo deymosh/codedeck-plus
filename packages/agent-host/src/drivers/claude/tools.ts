@@ -123,6 +123,7 @@ export const CLAUDE_TOOLS: ToolDialects = {
   projects: { kind: ToolKind.Other, title: (input) => str(input.method) },
   remotetrigger: { kind: ToolKind.Other, title: (input) => str(input.action) },
   showonboardingrolepicker: { kind: ToolKind.Other },
+  offerchromesetup: { kind: ToolKind.Other, title: (input) => oneLine(str(input.reason)) },
   readnotifications: { kind: ToolKind.Other },
   proposeskills: { kind: ToolKind.Other },
   proposegoal: { kind: ToolKind.Other, title: (input) => oneLine(str(input.condition)) },

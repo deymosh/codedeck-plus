@@ -117,6 +117,7 @@ const TOOL_OF_INPUT: Record<string, string[]> = {
   ScheduleWakeupInput: ['schedulewakeup'],
   RemoteTriggerInput: ['remotetrigger'],
   ShowOnboardingRolePickerInput: ['showonboardingrolepicker'],
+  OfferChromeSetupInput: ['offerchromesetup'],
   ReadNotificationsInput: ['readnotifications'],
   MonitorInput: ['monitor'],
   ProposeSkillsInput: ['proposeskills'],
