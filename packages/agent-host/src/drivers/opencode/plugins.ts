@@ -12,7 +12,9 @@
  *
  * OpenCode has no marketplaces, so a plugin is installed by its package
  * name. V2 serves an explicit update, which the phone can ask for; OpenCode
- * also updates its own plugins when it loads them.
+ * also updates its own plugins when it loads them. Its `plugin.list` names
+ * a package plugin by `source.target` (a package entry has no `id`; verified
+ * against 2.1.4), which is the spec this file's `plugins` list holds.
  */
 import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
@@ -154,7 +156,18 @@ export class OpenCodePlugins implements PluginManager {
     // reads as failed rather than as a config line that looks fine.
     const loaded = await this.client()
       .then((client) => client.plugin.list())
-      .then((listed) => new Map(listed.data.map((p) => [p.id, p.state])))
+      .then(
+        (listed) =>
+          new Map(
+            listed.data.flatMap((plugin) => {
+              // A package plugin has no `id`: 2.1.4 names it by its source
+              // target, which is the package spec the config lists. Built-in
+              // plugins (§ the rest of the list) do have one.
+              const id = plugin.id ?? (plugin.source.type === 'package' ? plugin.source.target : undefined);
+              return id ? [[id, plugin.state] as const] : [];
+            }),
+          ),
+      )
       .catch(() => new Map());
     const plugins = entries
       .map(toInstalledPlugin)

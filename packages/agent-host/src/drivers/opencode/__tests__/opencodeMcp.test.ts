@@ -11,7 +11,8 @@ function server(config: Record<string, Record<string, unknown>>, status: Entry[]
   const servers = [...status];
   const client = {
     config: {
-      get: vi.fn(async () => [{ type: 'document', info: { mcp: config } }]),
+      // 2.1.4 reads the file's `mcp` map back as `{servers: …}`.
+      get: vi.fn(async () => [{ type: 'document', info: { mcp: { servers: config } } }]),
     },
     mcp: {
       list: vi.fn(async () => ({ location: { directory: '/w' }, data: servers })),

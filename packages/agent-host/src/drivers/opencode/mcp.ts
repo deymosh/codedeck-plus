@@ -4,9 +4,13 @@
  *
  * V2 serves the whole lifecycle over its API — list, add, remove, connect,
  * disconnect — so nothing here edits a config file by hand any more (v1 had
- * no way to delete a server, and rewrote the global config itself). A config
- * change reloads the projects OpenCode has open, which restarts their running
- * sessions, as for any change to its config.
+ * no way to delete a server, and rewrote the global config itself). Its
+ * running inventory and its config file are not the same thing (verified
+ * against 2.1.4): `add` and `remove` change the inventory only, so a removed
+ * config server comes back on the next start and an added one is gone; a
+ * `disconnect` is the inventory's `disabled` status, not a config flag. This
+ * manager therefore holds the adds and removes of the current server, and
+ * reads the switch from `mcp.list`.
  *
  * In a session, a server is connected or disconnected for the session's
  * project — OpenCode has no narrower scope — so the switch is project-wide.
@@ -52,31 +56,50 @@ export function openCodeServers(mcp: unknown): McpServerInfo[] {
 export class OpenCodeMcp implements McpManager {
   /** One MCP change at a time: each reads the list, then writes it. */
   private queue: Promise<unknown> = Promise.resolve();
+  /** Servers added through the API in this server's lifetime. V2 keeps an
+   *  added server in its running inventory and not in the config document
+   *  (verified against 2.1.4), so the manager is the only other place that
+   *  knows what they are. */
+  private readonly added = new Map<string, Record<string, unknown>>();
+  /** Servers removed through the API: a config-file server leaves the
+   *  running inventory but not the file, so it would otherwise be listed
+   *  again at once. A new server (and so a restart) clears both. */
+  private readonly removed = new Set<string>();
+  /** The client these two sets belong to. */
+  private lastClient: OpenCodeClient | undefined;
 
   constructor(private readonly client: () => Promise<OpenCodeClient>) {}
 
   list(): Promise<McpState> {
-    return this.serial(async () => this.state(await this.client()));
+    return this.serial(async () => {
+      const client = await this.client();
+      this.forClient(client);
+      return this.state(client);
+    });
   }
 
   act(action: McpAction, servers: McpServerAdd[], names: string[]): Promise<McpState> {
     return this.serial(async () => {
       const client = await this.client();
+      this.forClient(client);
       const current = await this.known(client);
       if (action === 'remove') {
         const missing = names.find((n) => !current.has(n));
         if (missing) throw new Error(`OpenCode has no MCP server '${missing}'.`);
         for (const name of names) await this.call(`remove ${name}`, () => client.mcp.remove({ server: name }));
+        for (const name of names) {
+          this.added.delete(name);
+          this.removed.add(name);
+        }
       } else if (action === 'add') {
         // A refusal can quote the config it was handed — env, headers and
         // all. The setup's credential values are removed before it travels.
         const secrets = servers.flatMap((add) => setupSecrets(add.setup));
         for (const add of servers) {
-          await this.call(
-            `add ${add.name}`,
-            () => client.mcp.add({ server: add.name, config: openCodeServerConfig(add) as never }),
-            secrets,
-          );
+          const config = openCodeServerConfig(add);
+          await this.call(`add ${add.name}`, () => client.mcp.add({ server: add.name, config: config as never }), secrets);
+          this.added.set(add.name, config);
+          this.removed.delete(add.name);
         }
       } else {
         const missing = names.find((n) => !current.has(n));
@@ -114,20 +137,43 @@ export class OpenCodeMcp implements McpManager {
     return next;
   }
 
+  /** Forget what belongs to a server process that has been replaced. */
+  private forClient(client: OpenCodeClient): void {
+    if (this.lastClient === client) return;
+    this.added.clear();
+    this.removed.clear();
+    this.lastClient = client;
+  }
+
   private async state(client: OpenCodeClient): Promise<McpState> {
+    // What was added or removed belongs to one server process: a replaced
+    // server has started from its config again.
+    this.forClient(client);
     // The server lists which servers exist; only the config says what each
     // one is (its command, its URL), so both are read. V2's config answer is
-    // a list of documents whose shape is the config file's, read loosely
-    // here for the one section that matters.
+    // a list of documents, and its `mcp` section holds the servers under
+    // `servers` — the file's bare `mcp` map is not the shape of the answer.
     const [config, listed] = await Promise.all([
       client.config.get().catch(() => []),
       client.mcp.list().catch((err: unknown) => {
         throw new Error(`OpenCode could not report its MCP servers: ${reason(err)}`);
       }),
     ]);
-    const documents = config as unknown as Array<{ info?: { mcp?: Record<string, unknown> } }>;
-    const mcp = documents.find((entry) => entry.info?.mcp)?.info?.mcp ?? {};
-    return { servers: openCodeServers(mcp), toggles: true };
+    const documents = config as unknown as Array<{ type?: string; info?: { mcp?: { servers?: Record<string, unknown> } } }>;
+    const configured = documents.find((entry) => entry.info?.mcp?.servers !== undefined)?.info?.mcp?.servers ?? {};
+    // A server added through the API is not in the config document; the
+    // manager's record stands in for it, and a removed one is kept out until
+    // this server process starts again.
+    const known = new Map<string, unknown>();
+    for (const [name, entry] of Object.entries(configured)) if (!this.removed.has(name)) known.set(name, entry);
+    for (const [name, entry] of this.added) known.set(name, entry);
+    // The switch is the inventory's status, not a flag in the config: a
+    // `disconnect` leaves the config entry as it was (verified against 2.1.4).
+    const off = new Set(listed.data.filter((server) => server.status.status === 'disabled').map((server) => server.name));
+    return {
+      servers: openCodeServers(Object.fromEntries(known)).map((server) => (off.has(server.name) ? { ...server, enabled: false } : server)),
+      toggles: true,
+    };
   }
 }
 
