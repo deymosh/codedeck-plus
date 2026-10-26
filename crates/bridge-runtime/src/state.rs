@@ -19,6 +19,7 @@ use std::time::Duration;
 use bridge_core::ports::Store;
 use protocol::crypto::{generate_keypair, keypair_from_secret_hex, Keypair};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// Best-effort permission tightening (a no-op off Unix).
 pub fn restrict(path: &Path, mode: u32) {
@@ -48,8 +49,10 @@ pub fn write_private(path: &Path, content: &[u8]) -> std::io::Result<()> {
 struct StateDoc {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     secret_key_hex: Option<String>,
+    /// Values that are JSON objects or arrays are stored as such, so the file
+    /// stays readable; everything else is stored as the string that was set.
     #[serde(default)]
-    kv: BTreeMap<String, String>,
+    kv: BTreeMap<String, Value>,
 }
 
 /// One snapshot handed to the state writer. `ack`, when set, is answered once
@@ -172,6 +175,30 @@ fn coalesce(mut doc: StateDoc, acks: &mut Vec<Sender<Result<(), String>>>, rx: &
     doc
 }
 
+/// The value to store: a JSON object or array is kept as JSON, so the file
+/// stays readable and `get` returns its compact serialization; a scalar or
+/// plain text is kept as the exact string that was set, so `get` returns it
+/// byte for byte.
+fn stored_value(raw: &str) -> Value {
+    match serde_json::from_str::<Value>(raw) {
+        Ok(parsed) if parsed.is_object() || parsed.is_array() => parsed,
+        _ => Value::String(raw.to_string()),
+    }
+}
+
+/// Older bridges escaped every value into a JSON string. Re-nest the ones that
+/// are really objects or arrays, so the first rewrite produces a readable
+/// file; anything else stays a string and is returned unchanged.
+fn nest_parsed_values(doc: &mut StateDoc) {
+    for value in doc.kv.values_mut() {
+        let Value::String(raw) = value else { continue };
+        match serde_json::from_str::<Value>(raw) {
+            Ok(parsed) if parsed.is_object() || parsed.is_array() => *value = parsed,
+            _ => {}
+        }
+    }
+}
+
 /// The state file. Clones share one in-memory copy and one writer.
 #[derive(Clone)]
 pub struct StateFile {
@@ -184,10 +211,10 @@ impl StateFile {
         fs::create_dir_all(home).map_err(|e| format!("cannot create {}: {e}", home.display()))?;
         restrict(home, 0o700);
         let path = home.join("state.json");
-        let doc = match fs::read_to_string(&path) {
+        let mut doc: StateDoc = match fs::read_to_string(&path) {
             Ok(raw) => {
                 restrict(&path, 0o600);
-                serde_json::from_str(&raw).map_err(|e| {
+                serde_json::from_str::<StateDoc>(&raw).map_err(|e| {
                     format!(
                         "corrupt state file {}: {e}. Move it aside to start fresh (this loses the bridge identity and pairings).",
                         path.display()
@@ -197,6 +224,7 @@ impl StateFile {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => StateDoc::default(),
             Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
         };
+        nest_parsed_values(&mut doc);
         let writer = Arc::new(Writer::spawn(path));
         Ok(Self { doc: Arc::new(Mutex::new(doc)), writer })
     }
@@ -230,15 +258,19 @@ impl StateFile {
     }
 
     pub fn get(&self, key: &str) -> Option<String> {
-        self.lock().kv.get(key).cloned()
+        self.lock().kv.get(key).map(|value| match value {
+            Value::String(raw) => raw.clone(),
+            other => other.to_string(),
+        })
     }
 
     pub fn set(&self, key: &str, value: &str) -> Result<(), String> {
+        let value = stored_value(value);
         let mut doc = self.lock();
-        if doc.kv.get(key).map(String::as_str) == Some(value) {
+        if doc.kv.get(key) == Some(&value) {
             return Ok(());
         }
-        doc.kv.insert(key.to_string(), value.to_string());
+        doc.kv.insert(key.to_string(), value);
         self.writer.queue(doc.clone())
     }
 }
@@ -326,6 +358,55 @@ mod tests {
         let again = StateFile::open(dir.path()).unwrap();
         assert_eq!(again.identity().unwrap().pubkey_hex, keys.pubkey_hex);
         assert_eq!(again.get("pairedPhones").as_deref(), Some("[]"));
+    }
+
+    #[test]
+    fn values_round_trip_as_objects_arrays_scalars_and_plain_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = StateFile::open(dir.path()).unwrap();
+        state.identity().unwrap();
+        let values = [
+            ("object", r#"{"npub":"npub1","relays":["wss://relay.example"]}"#),
+            ("array", r#"[{"npub":"npub1"}]"#),
+            ("scalar", "42"),
+            ("text", "hello world"),
+        ];
+        for (key, value) in values {
+            state.set(key, value).unwrap();
+        }
+        state.flush().unwrap();
+        let again = StateFile::open(dir.path()).unwrap();
+        for (key, value) in values {
+            assert_eq!(again.get(key).as_deref(), Some(value), "{key} came back unchanged");
+        }
+    }
+
+    #[test]
+    fn an_old_format_file_loads_and_returns_the_same_values() {
+        let dir = tempfile::tempdir().unwrap();
+        // What a bridge that escaped every value wrote: an array and plain
+        // strings. The array is re-nested on load; the rest are left alone.
+        let old = r#"{"kv":{"pairedPhones":"[{\"npub\":\"npub1\"}]","cursor":"42","name":"hello"}}"#;
+        fs::write(dir.path().join("state.json"), old).unwrap();
+        let state = StateFile::open(dir.path()).unwrap();
+        assert_eq!(state.get("pairedPhones").as_deref(), Some(r#"[{"npub":"npub1"}]"#));
+        assert_eq!(state.get("cursor").as_deref(), Some("42"));
+        assert_eq!(state.get("name").as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn the_written_file_holds_objects_as_objects() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = StateFile::open(dir.path()).unwrap();
+        state.set("profile", r#"{"name":"me","relays":["wss://relay.example"]}"#).unwrap();
+        state.set("note", "plain text").unwrap();
+        state.flush().unwrap();
+        let raw = fs::read_to_string(dir.path().join("state.json")).unwrap();
+        let doc: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(doc["kv"]["profile"]["name"], "me");
+        assert_eq!(doc["kv"]["profile"]["relays"][0], "wss://relay.example");
+        assert_eq!(doc["kv"]["note"], "plain text");
+        assert!(!raw.contains(r#"\"name\""#), "the object is not stored as an escaped string");
     }
 
     #[test]
