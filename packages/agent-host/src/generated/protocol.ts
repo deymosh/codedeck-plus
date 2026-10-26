@@ -220,6 +220,12 @@ export type AgentInfo_Deserialize = {
 	 *  phone that asks.
 	 */
 	style?: AgentStyle_Deserialize | null,
+	/**
+	 *  The agent's own release (e.g. `"2.1.283"`), once the host has read
+	 *  it; it follows in `agent-changed` when the read finishes after
+	 *  `initialize`.
+	 */
+	version?: string | null,
 };
 
 /**
@@ -259,6 +265,12 @@ export type AgentInfo_Serialize = {
 	 *  phone that asks.
 	 */
 	style?: AgentStyle_Serialize | null,
+	/**
+	 *  The agent's own release (e.g. `"2.1.283"`), once the host has read
+	 *  it; it follows in `agent-changed` when the read finishes after
+	 *  `initialize`.
+	 */
+	version?: string | null,
 };
 
 /**

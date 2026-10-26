@@ -76,6 +76,11 @@ pub struct AgentInfo {
     /// phone that asks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style: Option<AgentStyle>,
+    /// The agent's own release (e.g. `"2.1.283"`), once the host has read
+    /// it; it follows in `agent-changed` when the read finishes after
+    /// `initialize`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
 }
 
 // --- MCP servers ---
