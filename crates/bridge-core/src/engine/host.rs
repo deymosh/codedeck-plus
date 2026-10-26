@@ -627,6 +627,13 @@ impl Engine {
                         run.parts.clear();
                     }
                     if run.turn != state {
+                        // A turn that ran to its end shows the agent is healthy
+                        // again: the restart budget is for one crash loop, not
+                        // for the session's whole life, so a session that runs
+                        // a turn normally after a restart earns it back.
+                        if state == TurnState::Idle && run.turn == TurnState::Running {
+                            run.restarts = 0;
+                        }
                         run.turn = state;
                         run.turn_started = (state == TurnState::Running).then_some(now);
                         self.list_dirty = true;
@@ -840,6 +847,12 @@ impl Engine {
         }
         run.restarts += 1;
         run.start_kind = StartKind::Restart;
+        // The interrupted turn is over. A resumed agent commonly reports
+        // idle as soon as it comes up; leaving `turn` at `Running` would make
+        // that report look like a turn that ran to its end and hand the
+        // budget back without one.
+        run.turn = TurnState::Idle;
+        run.turn_started = None;
         // The interrupted turn's parts will never be completed: kept, a
         // client that starts watching would be caught up on a row nothing
         // ends.

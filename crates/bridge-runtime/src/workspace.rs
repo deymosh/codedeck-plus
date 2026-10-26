@@ -58,6 +58,10 @@ fn confine(root: &Path, requested: &str) -> Option<PathBuf> {
     Some(out)
 }
 
+/// Make `dir` a git repository. Called when a folder is created, which is
+/// rare, and `git init` is quick; starting it on another thread would race
+/// the new session's `git rev-parse HEAD` and could leave a half-made `.git`
+/// for a session that starts at once.
 fn git_init(dir: &Path) {
     if dir.join(".git").exists() {
         return;

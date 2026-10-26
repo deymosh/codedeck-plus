@@ -1157,6 +1157,25 @@ fn a_terminal_nobody_shows_is_closed_once_it_has_sat_idle() {
 }
 
 #[test]
+fn a_shell_that_exits_before_its_spawn_is_handled_still_ends_the_terminal() {
+    let mut world = World::new();
+    world.command(json!({"v":12,"type":"terminal-open","openId":"o1","cols":80,"rows":24}));
+    let (term, _) = world.spawned().expect("the runtime was asked to start a shell");
+    // The runtime starts the shell on its own thread; this one died before
+    // the bridge handled the spawn.
+    world.rig.input(Input::TerminalExited { term: term.clone(), code: Some(127), reason: TerminalEndReason::Exit });
+    world.rig.take();
+    world.rig.input(Input::TerminalSpawned { term: term.clone(), shell: "/bin/bash".into() });
+    let (acts, msgs) = world.take();
+    assert_eq!(opened(&msgs).len(), 1, "the open is answered");
+    let ended = exits(&msgs);
+    assert_eq!((ended[0].term.as_deref(), ended[0].code), (Some(term.as_str()), Some(127)));
+    assert_eq!(ended[0].reason, TerminalEndReason::Exit);
+    assert_eq!(audits_of(&acts, TerminalAuditWhat::Exited).len(), 1);
+    assert!(heartbeat_terminals(&msgs).is_empty(), "no terminal with a dead shell is left listed");
+}
+
+#[test]
 fn a_shell_that_ends_is_told_to_everyone_with_its_code() {
     let mut world = World::new();
     let term = world.open();

@@ -324,6 +324,11 @@ struct PendingOpen {
     rows: u16,
     /// The phone's own id for the request, echoed back in the answer.
     open_id: String,
+    /// The shell exited before its spawn was reported. The runtime starts
+    /// the shell on another thread, so its exit can reach the engine first;
+    /// remembering it here keeps the terminal from being shown open with a
+    /// dead shell.
+    exited: Option<(Option<i32>, TerminalEndReason)>,
 }
 
 /// Whether a terminal is there and whose it is.
@@ -761,6 +766,7 @@ impl Engine {
                 cols: m.cols,
                 rows: m.rows,
                 open_id: m.open_id,
+                exited: None,
             },
         );
         self.out.push(Effect::TerminalSpawn { term, cwd, cols: m.cols, rows: m.rows });
@@ -770,6 +776,7 @@ impl Engine {
     /// the news to every present client of the identity.
     pub(super) fn on_terminal_spawned(&mut self, term: String, shell: String) {
         let Some(open) = self.terminals.spawning.remove(&term) else { return };
+        let exit = open.exited;
         let now = self.now();
         self.out.publish_addressed(
             vec![open.asker],
@@ -800,7 +807,7 @@ impl Engine {
         if let Some(device) = &open.device {
             self.terminal_event(&term, TerminalEventKind::Opened, device, &open.identity, open.via);
         }
-        let mut rec = TerminalAuditRecord::new(now, term, TerminalAuditWhat::Opened, open.identity.clone());
+        let mut rec = TerminalAuditRecord::new(now, term.clone(), TerminalAuditWhat::Opened, open.identity.clone());
         rec.device = open.device;
         rec.label = open.label;
         rec.via = Some(open.via);
@@ -809,6 +816,13 @@ impl Engine {
         rec.cols = Some(open.cols);
         rec.rows = Some(open.rows);
         self.audit(rec);
+        // The shell may have exited before this spawn was reported (the
+        // runtime starts it on another thread); the exit input was kept on
+        // the pending open. End it now, so the phone is never left showing a
+        // terminal whose shell is already gone.
+        if let Some((code, reason)) = exit {
+            self.end_terminal(&term, reason, code, None);
+        }
     }
 
     /// The runtime could not start the shell. The open never became a
@@ -854,6 +868,15 @@ impl Engine {
     /// bridge going down — every present client of the identity is told, and
     /// the end is audited.
     pub(super) fn on_terminal_exited(&mut self, term: String, code: Option<i32>, reason: TerminalEndReason) {
+        // The runtime starts a shell on another thread, and a shell that dies
+        // at once (a bad command, a missing directory) can report its exit
+        // before the spawn is handled here. Keep the exit on the pending open
+        // so the terminal it becomes is ended at once rather than shown open
+        // with a dead shell.
+        if let Some(open) = self.terminals.spawning.get_mut(&term) {
+            open.exited = Some((code, reason));
+            return;
+        }
         self.end_terminal(&term, reason, code, None);
     }
 
