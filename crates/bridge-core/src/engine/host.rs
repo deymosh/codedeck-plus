@@ -840,6 +840,12 @@ impl Engine {
         }
         run.restarts += 1;
         run.start_kind = StartKind::Restart;
+        // The interrupted turn is over. A resumed agent commonly reports
+        // idle as soon as it comes up; leaving `turn` at `Running` would make
+        // that report look like a turn that ran to its end and hand the
+        // budget back without one.
+        run.turn = TurnState::Idle;
+        run.turn_started = None;
         // The interrupted turn's parts will never be completed: kept, a
         // client that starts watching would be caught up on a row nothing
         // ends.
