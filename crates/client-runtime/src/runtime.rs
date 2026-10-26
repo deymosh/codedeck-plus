@@ -290,7 +290,9 @@ pub struct CoreConfig {
     /// trusts the device id derived from the first key, never this name.
     pub device_label: Option<String>,
     /// Backoff / stale-window timing. [`CoreConfig::new`] picks the Tor variant
-    /// when `tor` is set; tests override directly.
+    /// when `tor` is set; tests override directly. The loop re-derives it the
+    /// same way whenever `Intent::SetTorEnabled` changes the transport at
+    /// runtime.
     pub reconnect: ReconnectConfig,
 }
 
@@ -2183,6 +2185,12 @@ impl Loop {
             let proxy = if on { self.tor_proxy_address.clone() } else { None };
             self.nostr.set_proxy(proxy.clone());
             self.http.set_proxy(proxy.as_deref());
+            // The timing must follow the transport in force, not only the one
+            // this process booted with: a phone that starts on clearnet and
+            // turns Orbot on later would otherwise keep the shorter clearnet
+            // connect deadline, which abandons an attempt while the transport
+            // is still allowed to finish a Tor dial.
+            self.reconnect = if on { TOR_RECONNECT_CONFIG } else { DEFAULT_RECONNECT_CONFIG };
         }
         // Orbot toggled, a machine removed, or its endpoints edited.
         self.sync_direct_links();
