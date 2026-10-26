@@ -172,6 +172,28 @@ describe('the wire itself', () => {
     expect(updates).toHaveBeenCalledWith({ sessionId: 's1' });
   });
 
+  it('keeps a multi-byte character split across chunks intact', async () => {
+    const outgoing = new PassThrough();
+    const incoming = new PassThrough();
+    const client = new AcpClient({ stdin: outgoing, stdout: incoming, log: () => {}, tag: 'test' });
+    const updates = vi.fn();
+    client.on('session/update', updates);
+    const text = 'done 🎉';
+    const line = Buffer.from(
+      `${JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 's1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } } })}\n`,
+    );
+    // Split inside the emoji's four UTF-8 bytes: each half alone is not a
+    // character, and decoding them separately would yield U+FFFD.
+    const emojiAt = line.indexOf(Buffer.from('🎉'));
+    const cut = emojiAt + 2;
+    incoming.write(line.subarray(0, cut));
+    incoming.write(line.subarray(cut));
+    expect(updates).toHaveBeenCalledWith({
+      sessionId: 's1',
+      update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } },
+    });
+  });
+
   it('refuses anything once the agent is gone', async () => {
     const w = await connected();
     const pending = w.client.request('session/list', {});
