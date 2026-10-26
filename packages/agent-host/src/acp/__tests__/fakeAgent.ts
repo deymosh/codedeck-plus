@@ -77,6 +77,10 @@ export class FakeAgent {
   supportsResume: boolean | 'null' = true;
   /** Whether `session/new` succeeds. */
   newSessionError: string | undefined;
+  /** Whether the agent answers `session/new` at all — a wedged start. */
+  ignoreNewSession = false;
+  /** Whether the agent answers `session/close` at all — a wedged end. */
+  ignoreClose = false;
   /** Scripts one turn; the default completes at once. */
   onPrompt: ((sessionId: string, text: string, agent: FakeAgent) => Promise<string> | string) | undefined;
   private nextId = 1;
@@ -142,6 +146,7 @@ export class FakeAgent {
         });
         return;
       case 'session/new': {
+        if (this.ignoreNewSession) return;
         if (this.newSessionError !== undefined) {
           this.errorReply(id, -32602, `Invalid params: ${this.newSessionError}`);
           return;
@@ -205,6 +210,7 @@ export class FakeAgent {
         return;
       }
       case 'session/close': {
+        if (this.ignoreClose) return;
         this.closed.push(String(params.sessionId));
         this.reply(id, {});
         return;

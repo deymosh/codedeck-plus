@@ -48,6 +48,15 @@ export interface AcpSessionDeps<H, E extends AcpProcessEvents> {
   label: string;
 }
 
+/** How long a session-lifecycle request (`session/new`, `session/resume`,
+ *  `session/close`) may wait for the agent. A turn takes as long as the model
+ *  takes, but opening or closing a session has no work that should outlast
+ *  this: a wedged agent must not block a start, an end-session, or the host's
+ *  shutdown for ever. */
+export const SESSION_REQUEST_TIMEOUT_MS = 15_000;
+
+type PendingAsk = (response: RequestPermissionResponse) => void;
+
 export abstract class AcpSession<
   H,
   E extends AcpProcessEvents,
@@ -79,6 +88,10 @@ export abstract class AcpSession<
   /** Whether a `session/prompt` of this session is in flight — the turn a
    *  message sent now can steer. */
   protected promptInFlight = false;
+  /** Permission asks the agent is waiting on. A session that ends settles
+   *  them as cancelled, so the agent is never left waiting on a decision no
+   *  person can still give (and its `session/close` is not blocked on one). */
+  private readonly pendingAsks = new Set<PendingAsk>();
 
   constructor(
     protected readonly params: StartSession,
@@ -208,7 +221,11 @@ export abstract class AcpSession<
     // only an object (even an empty one) advertises `session/resume`.
     if (resume && resumable != null) {
       try {
-        const resumed = await this.client.request('session/resume', { sessionId: resume, cwd: this.cwd, mcpServers: [] });
+        const resumed = await this.client.request(
+          'session/resume',
+          { sessionId: resume, cwd: this.cwd, mcpServers: [] },
+          { timeoutMs: SESSION_REQUEST_TIMEOUT_MS },
+        );
         return { sessionId: resume, configOptions: resumed.configOptions ?? [], modes: resumed.modes, resumed: true };
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
@@ -223,7 +240,11 @@ export abstract class AcpSession<
         });
       }
     }
-    const created = await this.client.request('session/new', { cwd: this.cwd, mcpServers: [] });
+    const created = await this.client.request(
+      'session/new',
+      { cwd: this.cwd, mcpServers: [] },
+      { timeoutMs: SESSION_REQUEST_TIMEOUT_MS },
+    );
     return { sessionId: created.sessionId, configOptions: created.configOptions ?? [], modes: created.modes, resumed: false };
   }
 
@@ -307,9 +328,28 @@ export abstract class AcpSession<
     this.ctx.emit({ type: 'info', contextWindow: size, contextPercentage: percentage });
   }
 
-  /** One permission ask, as `answerPermission` answers it. */
+  /**
+   * One permission ask, as `answerPermission` answers it — but always
+   * answerable: when the session ends while the person is still deciding,
+   * the ask is settled as cancelled rather than left pending.
+   */
   private onPermission(request: RequestPermissionRequest): Promise<RequestPermissionResponse> {
-    return this.answerPermission(request);
+    return new Promise<RequestPermissionResponse>((resolve) => {
+      let settled = false;
+      const settle: PendingAsk = (response) => {
+        if (settled) return;
+        settled = true;
+        this.pendingAsks.delete(settle);
+        resolve(response);
+      };
+      this.pendingAsks.add(settle);
+      void this.answerPermission(request).then(settle, () => settle({ outcome: { outcome: 'cancelled' } }));
+    });
+  }
+
+  /** Answer every ask the session can no longer pass to a person. */
+  private cancelPendingAsks(): void {
+    for (const settle of [...this.pendingAsks]) settle({ outcome: { outcome: 'cancelled' } });
   }
 
   /**
@@ -342,6 +382,7 @@ export abstract class AcpSession<
   protected finish(error?: string): void {
     if (this.ended) return;
     this.ended = true;
+    this.cancelPendingAsks();
     this.abandon();
     this.ctx.emit({ type: 'ended', ...(error ? { error } : {}) });
   }
@@ -432,10 +473,14 @@ export abstract class AcpSession<
     const sessionId = this.nativeId;
     const process_ = this.process;
     this.ended = true;
+    this.cancelPendingAsks();
     if (sessionId !== undefined && process_) {
       // Closing the session lets the agent cancel its work and flush; the
-      // conversation stays on disk for a later resume.
-      await process_.client.request('session/close', { sessionId }).catch(() => {});
+      // conversation stays on disk for a later resume. Bounded, and skipped
+      // once the agent is gone: a wedged process must not hold this open.
+      await process_.client
+        .request('session/close', { sessionId }, { timeoutMs: SESSION_REQUEST_TIMEOUT_MS })
+        .catch(() => {});
     }
     this.abandon();
   }
