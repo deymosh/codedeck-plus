@@ -322,6 +322,13 @@ impl Runtime {
 
     /// Feed one input to the engine and carry out its effects in order.
     async fn dispatch(&mut self, input: Input) -> bool {
+        // A timer that fired has done its work: drop the finished task so a
+        // bridge that arms timers for the whole of a long run does not keep
+        // one handle per firing. An engine that re-arms the same id replaces
+        // this entry with the new handle below.
+        if let Input::Timer(id) = &input {
+            self.timers.remove(id);
+        }
         let effects = self.engine.handle(input);
         for effect in effects {
             if self.execute(effect).await {
