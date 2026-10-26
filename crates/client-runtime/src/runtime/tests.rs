@@ -801,6 +801,64 @@ async fn a_connect_that_never_reaches_eose_is_abandoned_and_retried() {
 }
 
 #[tokio::test]
+async fn a_paused_connect_is_not_abandoned_and_a_resume_restarts_its_clock() {
+    LocalSet::new()
+        .run_until(async {
+            let mock = mock_relay().await;
+            let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+            let spy = Rc::new(Spy::default());
+            let clock = Rc::new(FixedClock(RefCell::new(1_000_000)));
+            let core = core_for_ports_clock(
+                &mock,
+                &phone,
+                Rc::clone(&spy),
+                CorePorts::default(),
+                clock.clone(),
+            )
+            .await;
+            core.set_machines(vec![generate_keypair().pubkey_hex]);
+            core.start();
+            settle().await;
+            assert_eq!(core.connection_status().await.0, ConnectionStatus::Connecting);
+
+            // Hidden past the 500ms visibility debounce, then dozing: wall
+            // time moves beyond the deadline while the app runs nothing.
+            core.pause();
+            tokio::time::sleep(Duration::from_millis(600)).await;
+            *clock.0.borrow_mut() += CONNECT_DEADLINE_MS + 60_000;
+            core.tick();
+            settle().await;
+            assert_eq!(
+                core.connection_status().await.0,
+                ConnectionStatus::Connecting,
+                "paused time is not spent against the connect attempt"
+            );
+
+            // Resume re-dials while still Connecting: that is a new attempt,
+            // with a fresh window rather than the abandoned one's leftovers.
+            core.resume();
+            settle().await;
+            *clock.0.borrow_mut() += CONNECT_DEADLINE_MS - 1_000;
+            core.tick();
+            settle().await;
+            assert_eq!(
+                core.connection_status().await.0,
+                ConnectionStatus::Connecting,
+                "the resumed attempt gets its own window"
+            );
+
+            *clock.0.borrow_mut() += 2_000;
+            core.tick();
+            settle().await;
+            assert!(
+                spy.statuses.lock().unwrap().iter().any(|(s, _)| *s == ConnectionStatus::WaitingRetry),
+                "the resumed attempt is abandoned once its own deadline passes"
+            );
+        })
+        .await;
+}
+
+#[tokio::test]
 async fn stop_is_terminal_no_reconnect() {
     LocalSet::new()
         .run_until(async {

@@ -1378,6 +1378,12 @@ impl Loop {
     /// nothing else watches `Connecting`. Report it as a lost socket so the
     /// FSM's normal backoff and retry path runs.
     fn check_connect_deadline(&mut self) {
+        // A hidden, dozing app is not a slow connect: no time passes against
+        // the attempt while it is paused. The resume that brings it back
+        // re-dials (OpenSocket), which restarts the clock for the new attempt.
+        if !self.conn.visible {
+            return;
+        }
         if !connect_attempt_expired(self.conn.status, self.connecting_since, self.clock.now_ms()) {
             return;
         }
@@ -1428,6 +1434,11 @@ impl Loop {
     fn apply(&mut self, effect: ConnectionEffect) {
         match effect {
             ConnectionEffect::OpenSocket => {
+                // Every OpenSocket is a real dial — including the FSM's
+                // re-dial when a resume lands in `Connecting` — so the
+                // deadline runs from now, not from when the status first
+                // became `Connecting`.
+                self.connecting_since = Some(self.clock.now_ms());
                 log::info!(
                     "connection: OpenSocket — dialing {} configured relay(s), proxy={:?}",
                     self.ws.relay_count(),
