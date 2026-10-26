@@ -84,7 +84,7 @@ interface Harness {
 
 function withDriver(options: { env?: NodeJS.ProcessEnv; qwenPath?: string; providers?: ProviderBinding[] } = {}): Harness {
   const home = mkdtempSync(path.join(tmpdir(), 'codedeck-qwen-'));
-  const agent = new FakeAgent();
+  const agent = new FakeAgent('qwen');
   agent.options = configOptions();
   agent.modes = modeState();
   const spawns: Harness['spawns'] = [];
@@ -238,7 +238,7 @@ describe('QwenSession startup', () => {
     }
   });
 
-  it('closes the session an agent creates after the start request timed out', async () => {
+  it('does not ask an agent without session/close to dispose of a late session', async () => {
     const ready = withDriver();
     // A live session keeps the shared process (and connection) up while the
     // next start times out.
@@ -256,10 +256,15 @@ describe('QwenSession startup', () => {
       vi.useRealTimers();
     }
 
-    // The agent finally answers, naming the session it created; it is not
-    // this driver's to keep, so it is closed rather than orphaned.
+    // Qwen Code advertises `list` and `resume` only, so the late session
+    // cannot be closed; a call to a method the agent does not serve would
+    // only be refused. It stays in the agent's own state.
     ready.agent.answerNewSession();
-    await vi.waitFor(() => expect(ready.agent.closed).toEqual(['s2']));
+    // A reply to a request sent after the late answer proves that answer was
+    // handled first: both travel the one stdout stream, in order.
+    await ready.agent.extRequest('craft/drainMidTurnQueue', { sessionId: 's1' });
+    expect(ready.agent.requests.some((request) => request.method === 'session/close')).toBe(false);
+    expect(ready.agent.closed).toEqual([]);
   });
 
   it('applies the mode and the model a session was started with', async () => {
@@ -702,19 +707,14 @@ describe('QwenSession resume', () => {
 });
 
 describe('QwenSession shutdown', () => {
-  it('returns from end() when the agent never answers session/close', async () => {
+  it('ends a session without asking an agent that does not serve session/close', async () => {
     const ready = withDriver();
     await started(ready);
-    ready.agent.ignoreClose = true;
-    vi.useFakeTimers();
-    try {
-      const ending = ready.session.end();
-      await vi.advanceTimersByTimeAsync(SESSION_REQUEST_TIMEOUT_MS);
-      await ending;
-      expect(ready.agent.closed).toEqual([]);
-    } finally {
-      vi.useRealTimers();
-    }
+    await ready.session.end();
+    // Qwen Code advertises `list` and `resume` only. Its session is over when
+    // the driver lets it go; there is no close call to make.
+    expect(ready.agent.requests.some((request) => request.method === 'session/close')).toBe(false);
+    expect(ready.agent.closed).toEqual([]);
   });
 
   it('ends a turn locally when the agent ignores the cancel, and the next message still runs', async () => {

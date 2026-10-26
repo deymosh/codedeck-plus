@@ -259,6 +259,10 @@ export abstract class AcpSession<
     params: { sessionId?: string; cwd: string; mcpServers: [] },
   ): Promise<unknown> {
     const client = this.client;
+    // Read now: a start that gives up ends the session (and drops its
+    // process) before the late answer arrives, so the capability cannot be
+    // looked up then.
+    const closesSessions = this.process?.capabilities.sessionCapabilities?.close != null;
     const request =
       method === 'session/new'
         ? client.request('session/new', params as { cwd: string; mcpServers: [] })
@@ -268,7 +272,7 @@ export abstract class AcpSession<
       (result) => {
         if (!timedOut) return;
         const sessionId = (result as { sessionId?: unknown } | null)?.sessionId;
-        if (typeof sessionId === 'string' && sessionId !== '') this.closeOrphanSession(client, sessionId);
+        if (typeof sessionId === 'string' && sessionId !== '') this.closeOrphanSession(client, sessionId, closesSessions);
       },
       () => {},
     );
@@ -290,8 +294,10 @@ export abstract class AcpSession<
   }
 
   /** Close a session the agent created after its start was given up on. The
-   *  connection may be gone by now, so this is best effort. */
-  private closeOrphanSession(client: AcpClient, sessionId: string): void {
+   *  connection may be gone by now, so this is best effort — and an agent
+   *  that does not serve `session/close` is not asked (Qwen Code does not). */
+  private closeOrphanSession(client: AcpClient, sessionId: string, closesSessions: boolean): void {
+    if (!closesSessions) return;
     this.ctx.log(`[${this.deps.tag}] closing ${sessionId}: its start had already timed out`);
     void client.request('session/close', { sessionId }, { timeoutMs: SESSION_REQUEST_TIMEOUT_MS }).catch(() => {});
   }
@@ -584,13 +590,23 @@ export abstract class AcpSession<
     this.turnOpen = false;
     this.clearCancelGrace();
     this.cancelPendingAsks();
+    // The reply to a cancelled ask is written a few microtasks after the
+    // decision. Wait for it before the connection is let go: an agent that
+    // serves `session/close` yields here anyway while that request is in
+    // flight, but one that does not (Qwen Code) would otherwise have its
+    // answer cut off by the teardown.
+    await process_?.client.whenIdle();
     if (sessionId !== undefined && process_) {
       // Closing the session lets the agent cancel its work and flush; the
       // conversation stays on disk for a later resume. Bounded, and skipped
-      // once the agent is gone: a wedged process must not hold this open.
-      await process_.client
-        .request('session/close', { sessionId }, { timeoutMs: SESSION_REQUEST_TIMEOUT_MS })
-        .catch(() => {});
+      // once the agent is gone and for an agent that does not serve
+      // `session/close` at all (Qwen Code advertises `list` and `resume`
+      // only): a method it does not have is not a method to call.
+      if (process_.capabilities.sessionCapabilities?.close != null) {
+        await process_.client
+          .request('session/close', { sessionId }, { timeoutMs: SESSION_REQUEST_TIMEOUT_MS })
+          .catch(() => {});
+      }
     }
     this.abandon();
   }

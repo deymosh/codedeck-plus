@@ -64,7 +64,7 @@ const modeState = (): unknown => ({
 
 function withDriver(providerHttp?: ProviderHttp) {
   const home = mkdtempSync(path.join(tmpdir(), 'qwen-secrets-'));
-  const agent = new FakeAgent();
+  const agent = new FakeAgent('qwen');
   agent.options = configOptions();
   agent.modes = modeState();
   const spawns: Array<{ command: string; args: string[]; env: Record<string, string> }> = [];
