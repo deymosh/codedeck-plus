@@ -1803,9 +1803,11 @@ export class OpenCodeDriver implements Driver {
           // starts a new one.
           if (driver.server) driver.clientPromise = Promise.resolve(client);
         } catch (err) {
-          // A failed first start is not fatal for the driver's lifetime:
-          // `bin` stays known, and the next session tries a new server.
-          driver.unavailable = err instanceof Error ? err.message : String(err);
+          // A failed first start is not a reason to report the agent as
+          // unavailable: the host refuses every start-session when it is, so
+          // the retry this driver relies on would never run. `bin` stays
+          // known, and the next session starts a new server.
+          options.log(`[opencode] first server start failed: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
     } else {
@@ -1876,7 +1878,8 @@ export class OpenCodeDriver implements Driver {
       if (this.stopped || this.server !== server) return;
       this.server = null;
       this.clientPromise = null;
-      this.unavailable = 'The OpenCode server exited; the next session starts a new one.';
+      // Deliberately not `unavailable`: the host refuses start-session on
+      // that, before the driver can start the new server this exists for.
       this.options.log('[opencode] the server exited; the next session starts a new one');
       const stale = [...this.sessions];
       this.sessions.clear();
