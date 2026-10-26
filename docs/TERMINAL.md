@@ -62,10 +62,11 @@ needs a name that survives rotation, for the allowlist and the audit:
   `USER`, `LANG`, `SHELL`, `TERM=xterm-256color` (and on Windows the system
   variables a shell needs). The bridge's own environment can hold provider
   keys the user exported for the agents, and only each driver knows which
-  variables are secrets, so the shell inherits none of it — except three
-  named locations, so `codedeck-bridge agents …` typed into it acts on this
-  bridge: `CODEDECK_HOME`, `CODEDECK_AGENT_CACHE` and `CODEDECK_NPM_REGISTRY`
-  (left out when its address carries a user or password).
+  variables are secrets, so the shell inherits none of it. It is told one
+  thing of the bridge's: `CODEDECK_HOME`, the home the bridge resolved, so
+  `codedeck-bridge agents …` typed into it acts on this bridge's agents. A
+  registry mirror is not passed on (its address can carry a token): export
+  `CODEDECK_NPM_REGISTRY` in the shell to use one.
 - What runs: `terminal.command` when the owner sets one (a fixed program —
   `tmux new -A -s phone`, a restricted shell), else `$SHELL`, else `/bin/sh`;
   on Windows `pwsh`, else `powershell`, else `cmd`.

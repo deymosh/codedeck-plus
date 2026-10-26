@@ -196,7 +196,7 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
     }
 
     let nostr_http = work::NostrHttp::new(config.tor_proxy.as_deref())?;
-    let terminals = Terminals::new(config.home.join("audit"), inputs.clone());
+    let terminals = Terminals::new(config.home.join("audit"), config.home.clone(), inputs.clone());
     // The audit's writer thread, fed by a channel: the runtime never touches
     // the log file itself.
     let audit = audit::Audit::open(
