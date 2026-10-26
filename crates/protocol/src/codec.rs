@@ -39,11 +39,13 @@ fn decode<T: DeserializeOwned>(json: &str) -> DecodeResult<T> {
         Some(v) => return Err(DecodeError::Version(v)),
         None => return Err(DecodeError::Version(None)),
     }
-    serde_json::from_value::<T>(raw.clone()).map_err(|e| {
-        let ty = raw
-            .get("type")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("<missing>");
+    // The parsed object is moved into the message rather than cloned: an
+    // inbound message can carry a large payload, and serde's error does not
+    // carry the type tag, so only that short string is copied beforehand for
+    // the error path.
+    let body_type = raw.get("type").and_then(serde_json::Value::as_str).map(str::to_string);
+    serde_json::from_value::<T>(raw).map_err(|e| {
+        let ty = body_type.as_deref().unwrap_or("<missing>");
         DecodeError::Invalid(format!("schema mismatch for type \"{}\": {}", loggable(ty, 64), loggable(&e.to_string(), 200)))
     })
 }

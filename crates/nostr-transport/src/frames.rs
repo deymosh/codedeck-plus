@@ -135,12 +135,19 @@ pub fn close_frame(sub_id: &str) -> String {
 
 /// `["EVENT", <event>]` — publish.
 pub fn event_frame(event: &SignedEvent) -> String {
-    json!(["EVENT", serde_json::to_value(event).expect("SignedEvent serializes")]).to_string()
+    frame_with_event("EVENT", event)
 }
 
 /// `["AUTH", <event>]` — the answer to a NIP-42 challenge.
 pub fn auth_frame(event: &SignedEvent) -> String {
-    json!(["AUTH", serde_json::to_value(event).expect("SignedEvent serializes")]).to_string()
+    frame_with_event("AUTH", event)
+}
+
+/// One verb plus one serialized event, built as a single string: going
+/// through a `Value` first would encode the event twice.
+fn frame_with_event(verb: &str, event: &SignedEvent) -> String {
+    let event = serde_json::to_string(event).expect("SignedEvent serializes");
+    format!("[\"{verb}\",{event}]")
 }
 
 #[cfg(test)]

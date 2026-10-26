@@ -93,6 +93,10 @@ const DIAL_TIMEOUT_PROXIED: Duration = Duration::from_secs(60);
 /// A single frame write that has not completed in this long means the peer
 /// stopped reading (or the path is gone): the socket is dropped.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(20);
+/// How long a relay has to answer the NIP-42 AUTH we sent it. A relay that
+/// challenges and then goes quiet must not hold a subscription (or a publish)
+/// on that connection forever; Tor makes a round trip slow, so this is generous.
+const AUTH_DEADLINE: Duration = Duration::from_secs(20);
 /// Frames queued for one relay's socket. Far above anything a healthy relay
 /// accumulates (a REQ per subscription on connect, then a trickle); a relay
 /// that lets it fill is dropped and redialled.
@@ -125,6 +129,7 @@ struct Timing {
     dial: Duration,
     dial_proxied: Duration,
     write: Duration,
+    auth: Duration,
     retry_base: Duration,
     retry_max: Duration,
     stable_after: Duration,
@@ -136,6 +141,7 @@ const TIMING: Timing = Timing {
     dial: DIAL_TIMEOUT,
     dial_proxied: DIAL_TIMEOUT_PROXIED,
     write: WRITE_TIMEOUT,
+    auth: AUTH_DEADLINE,
     retry_base: RETRY_BASE,
     retry_max: RETRY_MAX,
     stable_after: STABLE_AFTER,
@@ -1049,17 +1055,57 @@ impl WsTransport {
             Ok(event) => event,
             Err(err) => {
                 log::warn!("ws: could not sign the AUTH answer for {relay}: {err}");
+                // No AUTH is in flight, so no deadline will fire: settle what
+                // already waits on this AUTH here, and let a later challenge
+                // on this connection try again.
+                let actions = {
+                    let mut st = self.state.borrow_mut();
+                    if st.conns.get(relay).is_none_or(|c| c.generation != generation) {
+                        return;
+                    }
+                    st.router.auth_sign_failed(relay)
+                };
+                self.apply(actions, None);
                 return;
             }
         };
-        let mut st = self.state.borrow_mut();
-        if st.conns.get(relay).is_none_or(|c| c.generation != generation) {
-            return;
+        {
+            let mut st = self.state.borrow_mut();
+            if st.conns.get(relay).is_none_or(|c| c.generation != generation) {
+                return;
+            }
+            // Settled meanwhile (the AUTH deadline elapsed): this signature
+            // answered a challenge the connection no longer has.
+            if st.router.auth_is_settled(relay) {
+                return;
+            }
+            st.router.auth_sent(relay, &event.id);
+            if let Some(c) = st.conns.get(relay) {
+                c.send(frames::auth_frame(&event));
+            }
         }
-        st.router.auth_sent(relay, &event.id);
-        if let Some(c) = st.conns.get(relay) {
-            c.send(frames::auth_frame(&event));
-        }
+        self.arm_auth_deadline(relay, generation);
+    }
+
+    /// Give the relay [`AUTH_DEADLINE`] to answer the AUTH just sent on
+    /// `generation`'s connection. A relay that never does is treated as
+    /// refusing it (see [`Router::auth_timed_out`]) instead of leaving the
+    /// subscription parked forever; a replaced connection is left alone.
+    fn arm_auth_deadline(&self, relay: &str, generation: u64) {
+        let within = self.state.borrow().timing.auth;
+        let this = self.clone();
+        let relay = relay.to_string();
+        tokio::task::spawn_local(async move {
+            tokio::time::sleep(within).await;
+            let actions = {
+                let mut st = this.state.borrow_mut();
+                if st.conns.get(&relay).is_none_or(|c| c.generation != generation) {
+                    return;
+                }
+                st.router.auth_timed_out(&relay)
+            };
+            this.apply(actions, None);
+        });
     }
 }
 
@@ -1206,6 +1252,12 @@ fn project_event(raw: Value) -> Option<NostrEvent> {
     })
 }
 
+/// Whether `host` (in the form `Url::host_str` gives it) is this machine.
+/// IPv6 literals come back bracketed (`[::1]`), so both spellings are accepted.
+fn is_loopback(host: &str) -> bool {
+    matches!(host, "127.0.0.1" | "::1" | "[::1]" | "localhost")
+}
+
 async fn dial(relay: &str, proxy: Option<String>) -> Result<RelayStream, String> {
     let url = Url::parse(relay).map_err(|e| format!("bad relay url {relay:?}: {e}"))?;
     let host = url.host_str().ok_or("relay url has no host")?.to_string();
@@ -1221,8 +1273,7 @@ async fn dial(relay: &str, proxy: Option<String>) -> Result<RelayStream, String>
     // against). This was previously only an app-level settings check (easy to
     // bypass via config file or a manually typed relay); it now holds
     // regardless of what added this URL.
-    let is_loopback = matches!(host.as_str(), "127.0.0.1" | "::1" | "localhost");
-    if !tls && !host.ends_with(".onion") && !is_loopback {
+    if !tls && !host.ends_with(".onion") && !is_loopback(&host) {
         return Err(format!(
             "refusing cleartext ws:// to non-.onion, non-loopback host {host:?} — use wss://"
         ));
@@ -1296,6 +1347,23 @@ mod tests {
         // 127.0.0.1 — proves loopback is genuinely usable, not just "not
         // rejected before some other failure".
         dial(&mock.url, None).await.unwrap();
+    }
+
+    #[test]
+    fn loopback_includes_the_bracketed_ipv6_form_url_gives() {
+        for host in ["127.0.0.1", "::1", "[::1]", "localhost"] {
+            assert!(is_loopback(host), "{host}");
+        }
+        assert!(!is_loopback("192.168.1.20"));
+        assert!(!is_loopback("[::2]"));
+    }
+
+    #[tokio::test]
+    async fn dial_accepts_cleartext_to_bracketed_ipv6_loopback() {
+        // Nothing has to listen: the cleartext guard must pass and the
+        // failure must come from the connection attempt instead.
+        let err = dial("ws://[::1]:1", None).await.unwrap_err();
+        assert!(!err.contains("cleartext"), "{err}");
     }
 
     #[tokio::test]
@@ -1412,6 +1480,7 @@ mod tests {
             dial: Duration::from_millis(300),
             dial_proxied: Duration::from_millis(300),
             write: Duration::from_millis(300),
+            auth: Duration::from_millis(200),
             // Long enough that no redial lands inside these tests; the
             // redial tests set their own.
             retry_base: Duration::from_secs(30),
@@ -1638,6 +1707,70 @@ mod tests {
                 self.0.sign_auth(&relay, &challenge, now_ms).await
             })
         }
+    }
+
+    /// A signer whose first attempt fails (the user dismissed the prompt),
+    /// then signs. The failure is local: no AUTH frame is sent.
+    struct FlakySigner {
+        key: Keypair,
+        attempts: Cell<u32>,
+    }
+    impl AuthSigner for FlakySigner {
+        fn sign_auth(
+            &self,
+            relay: &str,
+            challenge: &str,
+            now_ms: u64,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<SignedEvent, String>> + '_>> {
+            let attempt = self.attempts.get();
+            self.attempts.set(attempt + 1);
+            let (relay, challenge) = (relay.to_string(), challenge.to_string());
+            let key = self.key.clone();
+            Box::pin(async move {
+                if attempt == 0 {
+                    return Err("the user dismissed the prompt".to_string());
+                }
+                key.sign_auth(&relay, &challenge, now_ms).await
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_auth_signature_releases_the_sub_and_a_new_challenge_retries() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let t = WsTransport::new(WsConfig {
+                    relays: vec![mock.url.clone()],
+                    auth: Rc::new(FlakySigner { key: phone.clone(), attempts: Cell::new(0) }),
+                    proxy: None,
+                });
+                t.ensure_connected();
+                let (_sub, seen) = recording_sub(&t, &phone);
+                let _req = mock.next_frame().await;
+
+                // The relay challenges, the signer fails (no AUTH frame), and
+                // the relay refuses the REQ for auth: the sub must not wait on
+                // an answer that will never come.
+                mock.push(r#"["AUTH","chal-1"]"#.to_string());
+                mock.push(r#"["CLOSED","cd-1","auth-required: sign in"]"#.to_string());
+                wait_until(|| seen.closes.get() == 1).await;
+                assert_eq!(seen.eoses.get(), 0);
+
+                // A fresh challenge on the same connection is tried again.
+                mock.push(r#"["AUTH","chal-2"]"#.to_string());
+                let auth = mock.next_frame().await;
+                assert!(auth.starts_with(r#"["AUTH","#), "{auth}");
+                let v: Vec<Value> = serde_json::from_str(&auth).unwrap();
+                assert!(v[1]["tags"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|tag| tag[0] == "challenge" && tag[1] == "chal-2"));
+                t.shutdown();
+            })
+            .await;
     }
 
     #[tokio::test]
@@ -2171,6 +2304,59 @@ mod tests {
                 assert_eq!(mock.next_frame().await, first, "the same event, re-sent");
                 mock.push(format!(r#"["OK","{id}",true,""]"#));
                 assert_eq!(handle.await.unwrap().verdict, PublishVerdict::Accepted);
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn a_repeated_auth_challenge_costs_one_identity_signature() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let t = transport(&mock, &phone);
+                t.ensure_connected();
+                wait_until(|| !t.connected_relays().is_empty()).await;
+
+                mock.push(r#"["AUTH","chal-1"]"#.to_string());
+                let first = mock.next_frame().await;
+                assert!(first.starts_with(r#"["AUTH","#), "{first}");
+
+                for challenge in ["chal-2", "chal-3"] {
+                    mock.push(format!(r#"["AUTH","{challenge}"]"#));
+                }
+                assert_eq!(
+                    mock.frame_within(Duration::from_millis(300)).await,
+                    None,
+                    "a repeated challenge must not be signed again"
+                );
+                t.shutdown();
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn a_relay_that_never_answers_our_auth_releases_the_sub_at_its_deadline() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let t = transport(&mock, &phone);
+                t.state.borrow_mut().timing = fast_timing();
+                t.ensure_connected();
+                let (_sub, seen) = recording_sub(&t, &phone);
+                let _req = mock.next_frame().await;
+
+                mock.push(r#"["AUTH","chal"]"#.to_string());
+                let auth = mock.next_frame().await;
+                assert!(auth.starts_with(r#"["AUTH","#), "{auth}");
+                // The relay refuses the REQ for auth and then never answers the
+                // AUTH it asked for: the sub must not stay parked on it.
+                mock.push(r#"["CLOSED","cd-1","auth-required: sign in"]"#.to_string());
+
+                wait_until(|| seen.closes.get() == 1).await;
+                assert_eq!(seen.eoses.get(), 0);
+                t.shutdown();
             })
             .await;
     }

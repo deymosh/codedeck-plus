@@ -134,6 +134,15 @@ struct RelayAuth {
     pending: Option<String>,
     /// The relay's answer to our last AUTH: `Some(true)` accepted.
     accepted: Option<bool>,
+    /// This connection's challenge has been handed to the signer. One
+    /// connection gets at most one identity signature, however often the
+    /// relay repeats its challenge: on the phone the identity may live in a
+    /// signer app that prompts the user for each one.
+    answered: bool,
+    /// The last attempt produced no AUTH event locally (a dismissed or timed
+    /// out signer). The relay never saw an answer, so a fresh challenge may
+    /// try again, but nothing may park on the failed attempt either.
+    sign_failed: bool,
     /// Subs / events refused with `auth-required:` before AUTH settled.
     waiting_subs: HashSet<String>,
     waiting_events: HashSet<String>,
@@ -311,12 +320,67 @@ impl Router {
     }
 
     /// We answered `relay`'s challenge with the AUTH event `auth_event_id`;
-    /// the relay's `OK` for that id settles it.
+    /// the relay's `OK` for that id settles it. A settled AUTH is never
+    /// reopened: a signature that arrives too late is not an answer to this
+    /// connection anymore.
     pub fn auth_sent(&mut self, relay: &str, auth_event_id: &str) {
         if let Some(a) = self.auth.get_mut(relay) {
-            a.pending = Some(auth_event_id.to_string());
-            a.accepted = None;
+            if a.accepted.is_none() {
+                a.pending = Some(auth_event_id.to_string());
+            }
         }
+    }
+
+    /// Whether `relay`'s AUTH on this connection is already settled — so a
+    /// signature that arrives now must not be sent.
+    pub fn auth_is_settled(&self, relay: &str) -> bool {
+        self.auth.get(relay).is_some_and(|a| a.accepted.is_some())
+    }
+
+    /// The signer produced no AUTH event for `relay`'s challenge, so nothing
+    /// was sent and the relay never answered. Settle what already waits on
+    /// this AUTH as refused — the sub is dead on this relay, the publish
+    /// failed there — and allow a later challenge on the same connection to
+    /// try signing again: a prompt the user dismissed once should not need a
+    /// reconnect.
+    pub fn auth_sign_failed(&mut self, relay: &str) -> Vec<RouterAction> {
+        let mut out = Vec::new();
+        let (subs, events) = {
+            let Some(a) = self.auth.get_mut(relay) else { return out };
+            a.pending = None;
+            a.answered = false;
+            a.sign_failed = true;
+            (
+                a.waiting_subs.drain().collect::<Vec<_>>(),
+                a.waiting_events.drain().collect::<Vec<_>>(),
+            )
+        };
+        let reason = "auth-required: the AUTH answer could not be signed".to_string();
+        for sub_id in subs {
+            self.sub_dead_on(relay, &sub_id, reason.clone(), &mut out);
+        }
+        for event_id in events {
+            self.publish_result(relay, &event_id, classify_publish(Err(&reason)), &mut out);
+        }
+        out
+    }
+
+    /// The connection's AUTH deadline elapsed with no answer from the relay.
+    /// Treat it as refused: the subscription waiting on it is dead on this
+    /// relay (so EOSE can proceed from the others, or the sub closes when no
+    /// carrier is left) and a publish awaiting it settles as rejected. A
+    /// relay that answered in time is untouched, and so is a connection that
+    /// has since been replaced.
+    pub fn auth_timed_out(&mut self, relay: &str) -> Vec<RouterAction> {
+        let mut out = Vec::new();
+        let unsettled = self
+            .auth
+            .get(relay)
+            .is_some_and(|a| a.pending.is_some() && a.accepted.is_none());
+        if unsettled {
+            self.refuse_auth(relay, "auth-required: the relay did not answer our AUTH".to_string(), &mut out);
+        }
+        out
     }
 
     /// `event_id` passed verification and went to `sub_id`'s `on_event`; the
@@ -377,10 +441,37 @@ impl Router {
                 }
             }
             RelayMessage::Auth { challenge } => {
-                out.push(RouterAction::NeedAuth {
-                    relay: relay.to_string(),
-                    challenge,
-                });
+                let progress = self.auth.get(relay).map(|a| (a.answered, a.accepted, a.sign_failed));
+                match progress {
+                    // The previous attempt never reached the relay: this is
+                    // the fresh chance it is allowed, not a repeat.
+                    Some((_, _, true)) => {
+                        if let Some(a) = self.auth.get_mut(relay) {
+                            a.sign_failed = false;
+                            a.answered = true;
+                        }
+                        out.push(RouterAction::NeedAuth {
+                            relay: relay.to_string(),
+                            challenge,
+                        });
+                    }
+                    // Already answered on this connection — being signed,
+                    // awaiting the relay's OK, accepted, or refused: never a
+                    // second signature. A challenge after acceptance revokes
+                    // nothing; NIP-42 lets a relay rotate challenges, and a
+                    // relay that really wants AUTH again says so with an
+                    // auth-required CLOSED or OK.
+                    Some((true, _, _)) | Some((_, Some(_), _)) => {}
+                    _ => {
+                        if let Some(a) = self.auth.get_mut(relay) {
+                            a.answered = true;
+                        }
+                        out.push(RouterAction::NeedAuth {
+                            relay: relay.to_string(),
+                            challenge,
+                        });
+                    }
+                }
             }
             // NOTICE is logged by the socket layer; COUNT / future verbs ignored.
             RelayMessage::Notice { .. } | RelayMessage::Unknown { .. } => {}
@@ -403,6 +494,10 @@ impl Router {
             // Refused our AUTH, or demands it again after accepting it: our
             // key is not welcome here.
             Some(_) => self.sub_dead_on(relay, sub_id, message, out),
+            // The answer to this connection's challenge could not even be
+            // produced: do not park the sub on a wait only a new challenge
+            // (which may never come) could end.
+            None if a.sign_failed => self.sub_dead_on(relay, sub_id, message, out),
             None => {
                 a.waiting_subs.insert(sub_id.to_string());
                 if let Some(s) = self.subs.get_mut(sub_id) {
@@ -426,6 +521,11 @@ impl Router {
                 });
             }
             Some(_) => self.publish_result(relay, event_id, classify_publish(Err(&message)), out),
+            // No AUTH answer can be sent until a new challenge is answered;
+            // fail the publish here instead of waiting for one.
+            None if a.sign_failed => {
+                self.publish_result(relay, event_id, classify_publish(Err(&message)), out)
+            }
             None => {
                 a.waiting_events.insert(event_id.to_string());
             }
@@ -458,6 +558,27 @@ impl Router {
             for event_id in events {
                 self.publish_result(relay, &event_id, classify_publish(Err(&reason)), out);
             }
+        }
+    }
+
+    /// The relay will not serve this connection's identity after all. Every
+    /// sub parked on its AUTH is dead there and every publish awaiting it is
+    /// rejected; later refusals then take the ordinary "auth refused" path.
+    fn refuse_auth(&mut self, relay: &str, reason: String, out: &mut Vec<RouterAction>) {
+        let (subs, events) = {
+            let Some(a) = self.auth.get_mut(relay) else { return };
+            a.pending = None;
+            a.accepted = Some(false);
+            (
+                a.waiting_subs.drain().collect::<Vec<_>>(),
+                a.waiting_events.drain().collect::<Vec<_>>(),
+            )
+        };
+        for sub_id in subs {
+            self.sub_dead_on(relay, &sub_id, reason.clone(), out);
+        }
+        for event_id in events {
+            self.publish_result(relay, &event_id, classify_publish(Err(&reason)), out);
         }
     }
 
@@ -771,6 +892,103 @@ mod tests {
     }
 
     #[test]
+    fn one_challenge_per_connection_is_answered_and_a_repeat_is_not() {
+        let mut r = Router::new();
+        r.relay_connected(R1);
+        assert_eq!(
+            r.route(R1, RelayMessage::Auth { challenge: "a".into() }),
+            vec![RouterAction::NeedAuth { relay: R1.into(), challenge: "a".into() }]
+        );
+        // A repeat while the first answer is still with the signer costs no
+        // second signature.
+        assert!(r.route(R1, RelayMessage::Auth { challenge: "b".into() }).is_empty());
+        r.auth_sent(R1, "auth-1");
+        // Nor does one while the relay has not answered our AUTH yet.
+        assert!(r.route(R1, RelayMessage::Auth { challenge: "c".into() }).is_empty());
+        r.route(R1, ok("auth-1", true, ""));
+        // A challenge after acceptance is ignored too: the connection stays
+        // authenticated and nothing is signed.
+        assert!(r.route(R1, RelayMessage::Auth { challenge: "d".into() }).is_empty());
+        assert!(r.auth_is_settled(R1));
+        // A fresh connection gets its own answer.
+        r.relay_connected(R1);
+        assert_eq!(
+            r.route(R1, RelayMessage::Auth { challenge: "e".into() }),
+            vec![RouterAction::NeedAuth { relay: R1.into(), challenge: "e".into() }]
+        );
+    }
+
+    #[test]
+    fn a_challenge_after_acceptance_is_ignored_and_the_sub_stays_authenticated() {
+        let mut r = Router::new();
+        r.relay_connected(R1);
+        r.open_sub("s1", &[R1.to_string()]);
+        r.route(R1, RelayMessage::Auth { challenge: "a".into() });
+        r.auth_sent(R1, "auth-1");
+        r.route(R1, closed("s1", "auth-required: x"));
+        // Accepted: the sub is re-sent once.
+        assert_eq!(
+            r.route(R1, ok("auth-1", true, "")),
+            vec![RouterAction::ResubAfterAuth { relay: R1.into(), sub_id: "s1".into() }]
+        );
+
+        // A fresh challenge on the same connection is ignored: no signature,
+        // no refusal, and the connection stays authenticated.
+        assert!(r.route(R1, RelayMessage::Auth { challenge: "again".into() }).is_empty());
+        assert!(r.auth_is_settled(R1));
+        assert_eq!(
+            r.route(R1, RelayMessage::Eose { sub_id: "s1".into() }),
+            vec![RouterAction::Eose { sub_id: "s1".into() }],
+            "the sub is still carried on the relay"
+        );
+
+        // A relay that really wants re-auth refuses with auth-required; after
+        // acceptance that is the existing final "not welcome" path.
+        assert!(r
+            .route(R1, closed("s1", "auth-required: again"))
+            .iter()
+            .any(|a| matches!(a, RouterAction::SubClosed { .. })));
+    }
+
+    #[test]
+    fn a_failed_signature_settles_its_waiters_and_allows_a_fresh_attempt() {
+        let mut r = Router::new();
+        r.relay_connected(R1);
+        r.open_sub("s1", &[R1.to_string()]);
+        r.open_publish("evt", &[R1.to_string()]);
+        assert_eq!(
+            r.route(R1, RelayMessage::Auth { challenge: "a".into() }),
+            vec![RouterAction::NeedAuth { relay: R1.into(), challenge: "a".into() }]
+        );
+        // The relay refuses both for AUTH while the signature is pending.
+        assert!(r.route(R1, closed("s1", "auth-required: x")).is_empty());
+        assert!(r.route(R1, ok("evt", false, "auth-required: x")).is_empty());
+
+        let actions = r.auth_sign_failed(R1);
+        assert!(
+            actions.iter().any(|a| matches!(
+                a,
+                RouterAction::SubClosed { reason: Some(reason), .. } if reason.contains("could not be signed")
+            )),
+            "{actions:?}"
+        );
+        assert_eq!(settled(&actions), Some(PublishVerdict::Rejected));
+
+        // A later auth-required demand is final on this relay, not parked.
+        r.open_sub("s2", &[R1.to_string()]);
+        assert!(r
+            .route(R1, closed("s2", "auth-required: x"))
+            .iter()
+            .any(|a| matches!(a, RouterAction::SubClosed { sub_id, .. } if sub_id == "s2")));
+
+        // And a new challenge is a fresh signing attempt.
+        assert_eq!(
+            r.route(R1, RelayMessage::Auth { challenge: "b".into() }),
+            vec![RouterAction::NeedAuth { relay: R1.into(), challenge: "b".into() }]
+        );
+    }
+
+    #[test]
     fn auth_required_waits_for_the_auth_ok_then_resubscribes_once() {
         let mut r = router_with_two_relays();
         r.open_sub("s1", &relays());
@@ -827,6 +1045,42 @@ mod tests {
             r.route(R1, closed("s1", "auth-required: x")),
             vec![RouterAction::Eose { sub_id: "s1".into() }]
         );
+    }
+
+    #[test]
+    fn an_auth_nobody_answers_ends_the_waiting_sub_and_publish_at_its_deadline() {
+        let mut r = Router::new();
+        r.relay_connected(R1);
+        r.open_sub("s1", &[R1.to_string()]);
+        r.open_publish("evt", &[R1.to_string()]);
+        r.auth_sent(R1, "auth-1");
+        // The relay refuses both for AUTH, then never answers the AUTH itself:
+        // without a deadline they would wait forever.
+        assert!(r.route(R1, closed("s1", "auth-required: x")).is_empty());
+        assert!(r.route(R1, ok("evt", false, "auth-required: x")).is_empty());
+
+        let actions = r.auth_timed_out(R1);
+        assert!(
+            actions.iter().any(|a| matches!(
+                a,
+                RouterAction::SubClosed { reason: Some(reason), .. } if reason.contains("did not answer")
+            )),
+            "{actions:?}"
+        );
+        assert_eq!(settled(&actions), Some(PublishVerdict::Rejected));
+        // One deadline per AUTH: a second tick is silent, and a late OK for it
+        // cannot reopen the sub.
+        assert!(r.auth_timed_out(R1).is_empty());
+        assert!(r.route(R1, ok("auth-1", true, "")).is_empty());
+    }
+
+    #[test]
+    fn an_auth_answered_in_time_is_not_touched_by_its_deadline() {
+        let mut r = Router::new();
+        r.relay_connected(R1);
+        r.auth_sent(R1, "auth-1");
+        r.route(R1, ok("auth-1", true, ""));
+        assert!(r.auth_timed_out(R1).is_empty());
     }
 
     #[test]
