@@ -737,6 +737,20 @@ describe('QwenSession shutdown', () => {
     await ready.session.end();
     await expect(asked).resolves.toMatchObject({ outcome: 'cancelled' });
   });
+
+  it('ends without waiting on another session’s open permission ask', async () => {
+    // One agent process serves both sessions; the second one's card stays
+    // open until someone answers it, which may be never.
+    const ready = withDriver();
+    await started(ready, { sessionId: 'b1' });
+    const first = ready.session!;
+    const other = await started(ready, { sessionId: 'b2' }, recordingContext({ permission: () => new Promise<never>(() => {}) }));
+    void ready.agent.askPermission('s2', 'call-2');
+    await vi.waitFor(() => expect(other.permissions).toHaveLength(1));
+    const begun = Date.now();
+    await first.end();
+    expect(Date.now() - begun).toBeLessThan(3_000);
+  });
 });
 
 describe('QwenDriver conversations', () => {

@@ -55,6 +55,12 @@ export interface AcpSessionDeps<H, E extends AcpProcessEvents> {
  *  shutdown for ever. */
 export const SESSION_REQUEST_TIMEOUT_MS = 15_000;
 
+/** How long an ending session waits for the agent's requests to be answered
+ *  before it lets the connection go: the cancellations it just decided are
+ *  written within microtasks, and anything still open past this belongs to
+ *  another session on the same process. */
+const IDLE_WAIT_MS = 1_000;
+
 /** After `session/cancel`, how long the prompt may stay unsettled before the
  *  turn is ended here anyway: an agent that ignores the cancel must not keep
  *  the phone showing a turn that will never finish. */
@@ -594,8 +600,13 @@ export abstract class AcpSession<
     // decision. Wait for it before the connection is let go: an agent that
     // serves `session/close` yields here anyway while that request is in
     // flight, but one that does not (Qwen Code) would otherwise have its
-    // answer cut off by the teardown.
-    await process_?.client.whenIdle();
+    // answer cut off by the teardown. Bounded: the process can serve other
+    // sessions, whose own asks stay open until someone answers them.
+    if (process_) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([process_.client.whenIdle(), new Promise<void>((resolve) => (timer = setTimeout(resolve, IDLE_WAIT_MS)))]);
+      clearTimeout(timer);
+    }
     if (sessionId !== undefined && process_) {
       // Closing the session lets the agent cancel its work and flush; the
       // conversation stays on disk for a later resume. Bounded, and skipped
