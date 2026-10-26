@@ -1266,6 +1266,67 @@ describe('an OpenCode server it starts', () => {
     await create();
     expect(asMock(client.event.subscribe)).not.toHaveBeenCalled();
   });
+
+  it('starts a new server after the running one exited, and ends its sessions with a reason', async () => {
+    vi.stubEnv('XDG_DATA_HOME', mkdtempSync(path.join(tmpdir(), 'oc-data-')));
+    const exits: Array<() => void> = [];
+    let starts = 0;
+    // A session whose stream stays open: the server's exit is what ends it.
+    const client = clientWith([], {
+      event: { subscribe: vi.fn(() => (async function* () {
+        await new Promise(() => {});
+      })()) },
+    });
+    const driver = await OpenCodeDriver.create({
+      autoStart: true,
+      binaryPath: process.execPath,
+      log: () => {},
+      modelsRefreshWaitMs: 0,
+      startServer: async () => {
+        starts++;
+        const exited = new Promise<void>((resolve) => exits.push(resolve));
+        return { url: 'http://127.0.0.1:4100', pid: 1, exited, close: async () => {} };
+      },
+      connect: () => client,
+    });
+    const ctx = recordingContext();
+    driver.startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp' }, ctx);
+    await ctx.waitFor((e) => e.type === 'ready');
+    expect(starts).toBe(1);
+
+    exits[0]!();
+    expect(await ctx.ended()).toMatchObject({ type: 'ended', error: expect.stringMatching(/server exited/i) });
+    expect(driver.info().unavailableReason).toMatch(/exited/i);
+
+    // The dead server's client is not reused: the next use starts a new one.
+    await driver.deleteConversation?.('ses_1', '/tmp');
+    expect(starts).toBe(2);
+  });
+
+  it('starts a new server on the next session when the first attempt failed', async () => {
+    vi.stubEnv('XDG_DATA_HOME', mkdtempSync(path.join(tmpdir(), 'oc-data-')));
+    let starts = 0;
+    const client = clientWith([]);
+    const driver = await OpenCodeDriver.create({
+      autoStart: true,
+      binaryPath: process.execPath,
+      log: () => {},
+      modelsRefreshWaitMs: 0,
+      startServer: async () => {
+        starts++;
+        if (starts === 1) throw new Error('port 4100 is in use');
+        return { url: 'http://127.0.0.1:4100', pid: 1, exited: new Promise(() => {}), close: async () => {} };
+      },
+      connect: () => client,
+    });
+    expect(driver.info().unavailableReason).toMatch(/port 4100 is in use/);
+
+    const ctx = recordingContext();
+    driver.startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp' }, ctx);
+    await ctx.waitFor((e) => e.type === 'ready');
+    expect(starts).toBe(2);
+    await ctx.ended();
+  });
 });
 
 describe('an OpenCode server started for the first time that cannot be asked', () => {
