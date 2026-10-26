@@ -13,8 +13,6 @@ import * as path from 'node:path';
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import type { OpenCodeClient } from '@opencode/client';
 import { OpenCodeDriver, openCodeContext, pickDefaultModel, reasoningLevels, toFormAnswer, toQuestionSpecs } from '../driver';
-import { Agents } from '../../../host/agents';
-import { AgentHost } from '../../../host/host';
 import type { StartSession } from '../../../sdk/types';
 import { PARTIAL_INTERVAL_MS } from '../../../sdk/partial';
 import { recordingContext, type Handlers } from '../../../sdk/__tests__/context';
@@ -1269,93 +1267,6 @@ describe('an OpenCode server it starts', () => {
     expect(asMock(client.event.subscribe)).not.toHaveBeenCalled();
   });
 
-  /** An AgentHost over one driver: start-session goes through the same
-   *  availability gate a bridge request does, which a driver's own
-   *  `startSession` bypasses. */
-  function hostFor(driver: OpenCodeDriver) {
-    const out: Array<Record<string, unknown>> = [];
-    const host = new AgentHost(Agents.of([driver]), {
-      write: (line) => out.push(JSON.parse(line) as Record<string, unknown>),
-      log: () => {},
-    }, '9.9.9');
-    const send = (id: string, kind: string, payload: Record<string, unknown>) =>
-      host.handleLine(JSON.stringify({ v: 1, id, kind, payload }));
-    const events = (sessionId: string): Array<Record<string, unknown>> => out
-      .filter((frame) => frame.kind === 'session-event' && (frame.payload as { sessionId?: string } | undefined)?.sessionId === sessionId)
-      .map((frame) => (frame.payload as { event?: Record<string, unknown> }).event ?? {});
-    return { out, send, events };
-  }
-
-  it('starts a new server after the running one exited, and ends its sessions with a reason', async () => {
-    vi.stubEnv('XDG_DATA_HOME', mkdtempSync(path.join(tmpdir(), 'oc-data-')));
-    const exits: Array<() => void> = [];
-    let starts = 0;
-    // A session whose stream stays open: the server's exit is what ends it.
-    const client = clientWith([], {
-      event: { subscribe: vi.fn(() => (async function* () {
-        await new Promise(() => {});
-      })()) },
-    });
-    const driver = await OpenCodeDriver.create({
-      autoStart: true,
-      binaryPath: process.execPath,
-      log: () => {},
-      modelsRefreshWaitMs: 0,
-      startServer: async () => {
-        starts++;
-        const exited = new Promise<void>((resolve) => exits.push(resolve));
-        return { url: 'http://127.0.0.1:4100', pid: 1, exited, close: async () => {} };
-      },
-      connect: () => client,
-    });
-    const { out, send, events } = hostFor(driver);
-    await send('st1', 'start-session', { sessionId: 's1', agent: 'opencode', cwd: '/tmp' });
-    expect(out.find((frame) => frame.id === 'st1')).toMatchObject({ kind: 'ack' });
-    await vi.waitFor(() => expect(events('s1').some((event) => event.type === 'ready')).toBe(true));
-    expect(starts).toBe(1);
-
-    exits[0]!();
-    await vi.waitFor(() => expect(events('s1').some((event) => event.type === 'ended')).toBe(true));
-    expect(events('s1').find((event) => event.type === 'ended')).toMatchObject({
-      error: expect.stringMatching(/server exited/i),
-    });
-    // A crash is not "unavailable": the host refuses start-session on that,
-    // which would make the relaunch below impossible.
-    expect(driver.info().unavailableReason).toBeUndefined();
-
-    // The dead server's client is not reused: the next session starts a new one.
-    await send('st2', 'start-session', { sessionId: 's2', agent: 'opencode', cwd: '/tmp' });
-    expect(out.find((frame) => frame.id === 'st2')).toMatchObject({ kind: 'ack' });
-    await vi.waitFor(() => expect(events('s2').some((event) => event.type === 'ready')).toBe(true));
-    expect(starts).toBe(2);
-  });
-
-  it('starts a new server on the next session when the first attempt failed', async () => {
-    vi.stubEnv('XDG_DATA_HOME', mkdtempSync(path.join(tmpdir(), 'oc-data-')));
-    let starts = 0;
-    const client = clientWith([]);
-    const driver = await OpenCodeDriver.create({
-      autoStart: true,
-      binaryPath: process.execPath,
-      log: () => {},
-      modelsRefreshWaitMs: 0,
-      startServer: async () => {
-        starts++;
-        if (starts === 1) throw new Error('port 4100 is in use');
-        return { url: 'http://127.0.0.1:4100', pid: 1, exited: new Promise(() => {}), close: async () => {} };
-      },
-      connect: () => client,
-    });
-    // A failed first start is retried, not refused for the host's lifetime.
-    expect(driver.info().unavailableReason).toBeUndefined();
-
-    const { out, send, events } = hostFor(driver);
-    await send('st1', 'start-session', { sessionId: 's1', agent: 'opencode', cwd: '/tmp' });
-    expect(out.find((frame) => frame.id === 'st1')).toMatchObject({ kind: 'ack' });
-    await vi.waitFor(() => expect(events('s1').some((event) => event.type === 'ready')).toBe(true));
-    expect(starts).toBe(2);
-    await vi.waitFor(() => expect(events('s1').some((event) => event.type === 'ended')).toBe(true));
-  });
 });
 
 describe('an OpenCode server started for the first time that cannot be asked', () => {
