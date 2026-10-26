@@ -4714,6 +4714,12 @@ data class UniffiAgent (
      * for an agent with none.
      */
     var `style`: UniffiAgentStyle?
+    , 
+    /**
+     * The agent's own release on the bridge's machine (e.g. `2.1.283`),
+     * once the bridge has said it.
+     */
+    var `version`: kotlin.String? = null 
     
 ){
     
@@ -4756,6 +4762,7 @@ public object FfiConverterTypeUniffiAgent: FfiConverterRustBuffer<UniffiAgent> {
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalTypeUniffiAgentStyle.read(buf),
+            FfiConverterOptionalString.read(buf),
         )
     }
 
@@ -4785,7 +4792,8 @@ public object FfiConverterTypeUniffiAgent: FfiConverterRustBuffer<UniffiAgent> {
             FfiConverterOptionalString.allocationSize(value.`installError`) +
             FfiConverterOptionalString.allocationSize(value.`actionBusy`) +
             FfiConverterOptionalString.allocationSize(value.`actionFailure`) +
-            FfiConverterOptionalTypeUniffiAgentStyle.allocationSize(value.`style`)
+            FfiConverterOptionalTypeUniffiAgentStyle.allocationSize(value.`style`) +
+            FfiConverterOptionalString.allocationSize(value.`version`)
     )
 
     override fun write(value: UniffiAgent, buf: ByteBuffer) {
@@ -4815,6 +4823,7 @@ public object FfiConverterTypeUniffiAgent: FfiConverterRustBuffer<UniffiAgent> {
             FfiConverterOptionalString.write(value.`actionBusy`, buf)
             FfiConverterOptionalString.write(value.`actionFailure`, buf)
             FfiConverterOptionalTypeUniffiAgentStyle.write(value.`style`, buf)
+            FfiConverterOptionalString.write(value.`version`, buf)
     }
 }
 
