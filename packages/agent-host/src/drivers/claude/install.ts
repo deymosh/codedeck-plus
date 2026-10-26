@@ -10,6 +10,7 @@ import { createRequire } from 'node:module';
 import * as path from 'node:path';
 import type { PackagedBinary } from '../../install/agentInstall';
 import { exeName, isFile, isMusl } from '../../sdk/executable';
+import { manifestVersion } from '../../sdk/version';
 
 /** The SDK's platform package for a machine. */
 export function claudePlatformPackage(
@@ -36,4 +37,21 @@ export function bundledClaudeExecutable(): string | null {
   } catch {
     return null;
   }
+}
+
+/** The Claude Code release the SDK is locked to — the one its platform
+ *  package, bundled or installed on demand, carries — from the SDK's own
+ *  manifest (`claudeCodeVersion`). */
+export async function pinnedClaudeVersion(): Promise<string | undefined> {
+  try {
+    let dir = path.dirname(createRequire(import.meta.url).resolve('@anthropic-ai/claude-agent-sdk'));
+    for (let depth = 0; depth < 4; depth++) {
+      const version = await manifestVersion(path.join(dir, 'package.json'), 'claudeCodeVersion');
+      if (version) return version;
+      dir = path.dirname(dir);
+    }
+  } catch {
+    // No SDK to read: the catalog goes without a version.
+  }
+  return undefined;
 }

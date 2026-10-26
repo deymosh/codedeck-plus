@@ -26,13 +26,6 @@ import {
 } from '../../sdk/transcript';
 import type { DiffLine, OutputEntry, Subagent, TaskKind, TaskStatus } from '../../sdk/types';
 
-/** A new OpenCode session exists server-side and accepts prompts; `version`
- *  is the server's, when it said. */
-export interface OpenCodeStarted {
-  type: 'started';
-  version?: string;
-}
-
 /** OpenCode's `session.idle`: the turn is over. */
 export interface OpenCodeIdle {
   type: 'idle';
@@ -133,7 +126,6 @@ export interface OpenCodeQuestion {
 }
 
 export type OpenCodeEvent =
-  | OpenCodeStarted
   | OpenCodeIdle
   | OpenCodeText
   | OpenCodeReasoning
@@ -156,8 +148,6 @@ export const SHELL_TOOL = 'shell';
 export function opencodeEventToEntries(event: OpenCodeEvent, ctx: TranslateContext): OutputEntry[] {
   const ts = new Date().toISOString();
   switch (event.type) {
-    case 'started':
-      return [{ entryType: 'status', text: event.version ? `OpenCode ${event.version}` : 'OpenCode session started', timestamp: ts }];
     case 'idle':
       return [{ entryType: 'turn_complete', timestamp: ts }];
     case 'text':

@@ -601,11 +601,6 @@ export class OpenCodeSession implements DriverSession {
       if (catalog.models.length > 0) this.contextLimits ??= Promise.resolve(catalog.contextLimits ?? {});
       const model = params.model ?? catalog.defaultModel;
       if (!params.model) this.model = splitModelId(model);
-      // Read alongside the session, for the line a new session opens with; a
-      // server that does not say leaves the line without it.
-      const version = Promise.resolve()
-        .then(() => client.server.info())
-        .then((info) => info.version, () => undefined);
       const { session, resumeLost } = await this.resolveSession(client, params);
       // Before any prompt can run: which persona the session runs as, and
       // the rules of the agent that is actually running — the persona's
@@ -629,13 +624,6 @@ export class OpenCodeSession implements DriverSession {
       if (!this.ended) {
         this.ctx.emit({ type: 'info', nativeSessionId: session.id, ...(model ? { model } : {}), mode: this.mode, persona: this.persona });
         this.reportTitle(session.title);
-        // The version is said once, when a conversation starts — the model is
-        // on the phone's composer. A resumed one said it when it began; one
-        // whose conversation was lost starts anew.
-        if (!params.resume || resumeLost) {
-          const v = await version;
-          this.deliver({ type: 'started', ...(v ? { version: v } : {}) });
-        }
         this.ctx.emit({ type: 'ready' });
         // From here the session's directory has been booted, and its own
         // agents are the ones still loading.
@@ -1769,6 +1757,19 @@ export class OpenCodeDriver implements Driver {
   }
 
   /** The server's client, starting it again when the last attempt failed. */
+  /** The server's own release: the one sessions run on, whether this
+   *  driver started it or connected to it. Read only from a server that is
+   *  starting or up — never a reason to start (or install) one. */
+  async version(): Promise<string | undefined> {
+    if (!this.clientPromise) return undefined;
+    try {
+      const client = await this.clientPromise;
+      return (await client.server.info()).version || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   private client(): Promise<OpenCodeClient> {
     if (!this.clientPromise && !this.stopped && (this.bin || this.installs)) this.launch();
     return this.clientPromise ?? Promise.reject(new Error(this.unavailable ?? NOT_CONFIGURED));

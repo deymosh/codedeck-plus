@@ -180,6 +180,11 @@ export interface SessionMcpState {
 export interface Driver {
   /** How this agent is advertised. Read once, at `initialize`. */
   info(): AgentInfo;
+  /** The agent's own release on this machine, read once after the driver
+   *  is built (it may spawn the agent's binary, so it is not part of
+   *  `info`); undefined when it cannot be told. The catalog carries it, so
+   *  no session announces it. */
+  version?(): Promise<string | undefined>;
   /**
    * Start (or resume) a session. Returns at once; progress arrives through
    * `ctx.emit` — `ready` when it accepts prompts, `ended` when it is gone.

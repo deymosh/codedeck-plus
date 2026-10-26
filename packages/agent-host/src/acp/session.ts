@@ -117,9 +117,6 @@ export abstract class AcpSession<
   /** The model the session is on, as the identity info reports it. */
   protected abstract modelLabel(): string | undefined;
 
-  /** The agent's own version, for the opening status line. */
-  protected abstract version(): Promise<string | undefined>;
-
   /** Run a slash line this session knows as the agent's own command, and say
    *  whether it was one (else the line is an ordinary prompt). */
   protected async tryCommand(text: string): Promise<boolean> {
@@ -172,17 +169,6 @@ export abstract class AcpSession<
       const model = this.modelLabel();
       this.announced = true;
       this.ctx.emit({ type: 'info', nativeSessionId: opened.sessionId, ...(model ? { model } : {}), mode: this.mode() });
-      // The version is said once, when a conversation starts — the model is
-      // on the phone's composer. A resumed one said it when it began.
-      if (!opened.resumed) {
-        const version = await this.version();
-        if (this.ended) return;
-        this.deliver({
-          entryType: 'status',
-          text: version ? `${this.deps.label} ${version}` : `${this.deps.label} session started`,
-          timestamp: now(),
-        });
-      }
       this.ctx.emit({ type: 'ready' });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

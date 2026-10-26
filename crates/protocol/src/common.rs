@@ -657,6 +657,11 @@ pub struct AgentDescriptor {
     /// version, so it is not sent again with every heartbeat.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style_hash: Option<String>,
+    /// The agent's own release on the bridge's machine (e.g. `"2.1.283"`),
+    /// once a `ready` one has said it. Advertised here so no session has to
+    /// announce it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
 }
 
 /// How an agent's sessions look on a client, so they read like the agent's

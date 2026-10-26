@@ -297,11 +297,11 @@ describe('QwenSession startup', () => {
     expect(answer).toEqual({ outcome: { outcome: 'selected', optionId: 'allow-once' } });
   });
 
-  it('opens with the version the CLI reports', async () => {
+  it('opens without announcing a version: the catalog carries it', async () => {
     const ready = withDriver();
     ready.agent.agentInfo = { name: 'qwen-code', title: 'Qwen Code', version: '0.25.2' };
     const ctx = await started(ready);
-    expect(ctx.entries()).toEqual([expect.objectContaining({ entryType: 'status', text: 'Qwen Code 0.25.2' })]);
+    expect(ctx.entries()).toEqual([]);
   });
 });
 

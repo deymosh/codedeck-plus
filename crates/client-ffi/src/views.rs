@@ -458,6 +458,10 @@ pub struct UniffiAgent {
     /// bridge names (it is fetched while one of its sessions is open), and
     /// for an agent with none.
     pub style: Option<UniffiAgentStyle>,
+    /// The agent's own release on the bridge's machine (e.g. `2.1.283`),
+    /// once the bridge has said it.
+    #[uniffi(default = None)]
+    pub version: Option<String>,
 }
 
 /// An agent's look (`protocol::common::AgentStyle`), ready to draw: colours
@@ -596,6 +600,7 @@ fn to_uniffi_agent(a: &AgentDescriptor, action: Option<&AgentActionState>, style
         action_busy: action.and_then(|s| s.busy.as_ref()).map(wire_str),
         action_failure: action.and_then(|s| s.failure.clone()),
         style: style.map(to_uniffi_agent_style),
+        version: a.version.clone(),
     }
 }
 
