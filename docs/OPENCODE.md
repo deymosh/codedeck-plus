@@ -120,6 +120,13 @@ get the catalog's limits, tool calls, image input and reasoning levels. A
 profile whose name one of OpenCode's providers already has is refused, with
 the reason.
 
+OpenCode's server describes only the models of providers it can already use,
+so a gateway's model routed to another one (OpenCode Go's, without an OpenCode
+Go key) is looked up in models.dev — the list OpenCode itself is built on,
+read from the same place (`OPENCODE_MODELS_URL`; never with
+`OPENCODE_DISABLE_MODELS_FETCH`). The list is about 600 kB compressed, so it
+is fetched only for a model nothing else describes, and at most once a day.
+
 OpenCode reads its providers only when it starts, so a changed list restarts
 the bridge's server: its sessions end and the bridge resumes each on the new
 server, where OpenCode still has the conversation (the transcript shows a

@@ -64,7 +64,8 @@ import { OpenCodeMcp, openCodeSessionMcp, toggleOpenCodeMcp } from './mcp';
 import { OpenCodePlugins } from './plugins';
 import { OpenCodePermissionRules } from './permissionRules';
 import { OpenCodeAccounts } from './accounts';
-import { type Catalog, EMPTY_CATALOG } from './catalog';
+import { type Catalog, type CatalogModel, catalogModel, EMPTY_CATALOG, serverModel, withModels } from './catalog';
+import { fetchModelsDev, MODELS_DEV_TTL_MS, modelsDevSource } from './modelsDev';
 import { readCatalogCache, writeCatalogCache } from './catalogCache';
 import {
   NOTHING_SERVED,
@@ -1697,6 +1698,39 @@ export interface OpenCodeDriverOptions {
   /** How long a start with a kept catalog waits for the provider profiles
    *  (`FIRST_PROVIDERS_WAIT_MS` by default). */
   firstProvidersWaitMs?: number;
+  /** How long a started server is given to register its providers
+   *  (`CATALOG_WAIT_MS` by default; 0 does not wait). */
+  catalogWaitMs?: number;
+}
+
+/** A server registers its providers, from the catalog built into it, a
+ *  moment after it says it is listening (0.6-0.9 s): until then it lists
+ *  no provider and no model, and describes none. */
+export const CATALOG_WAIT_MS = 3_000;
+
+/** Wait for a just-started server to list a provider, at most `waitMs`. A
+ *  server that cannot be asked, or a host shutting down, has nothing to wait
+ *  for. (One whose config disables every provider never lists one: it costs
+ *  the whole wait, once per start.) */
+async function catalogRegistered(client: OpenCodeClient, waitMs: number, stopped: () => boolean): Promise<void> {
+  const deadline = Date.now() + waitMs;
+  while (Date.now() < deadline && !stopped()) {
+    try {
+      if ((await client.provider.list()).data.length > 0) return;
+    } catch {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
+/** Run `task` over `items`, `limit` at a time. */
+async function eachLimited<T>(items: T[], limit: number, task: (item: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) await task(items[next++]!);
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
 }
 
 /** A start with a kept catalog waits for the bridge's `set-providers`, which
@@ -1753,6 +1787,9 @@ async function modelsRefreshed(client: OpenCodeClient, env: NodeJS.ProcessEnv, w
   }
 }
 
+/** What of `catalog` models.dev filled in, and when. */
+const filled = (catalog: Catalog): Pick<Catalog, 'filledAt'> => (catalog.filledAt !== undefined ? { filledAt: catalog.filledAt } : {});
+
 /** Why OpenCode cannot run, when it is enabled but unusable. */
 const NOT_CONFIGURED = 'This bridge has no OpenCode server to use (CODEDECK_OPENCODE_SERVER_URL), and starts none of its own.';
 
@@ -1781,6 +1818,8 @@ export class OpenCodeDriver implements Driver {
   /** Set while the first start waits for the provider profiles: hands them
    *  over and lets the start go on. */
   private firstProviders?: () => void;
+  /** The models.dev list, once asked for (modelsDev.ts). */
+  private modelsDev?: Promise<Map<string, CatalogModel>>;
   /** Provider changes are applied one at a time, in order. */
   private applying: Promise<void> = Promise.resolve();
   /** Sessions on the running server, ended when it is replaced; ended
@@ -1900,6 +1939,8 @@ export class OpenCodeDriver implements Driver {
     const added = placed.length > 0 ? `, with ${placed.length} provider profile(s)` : '';
     this.options.log(`[opencode] started ${server.url} (pid ${server.pid ?? '?'})${added}`);
     const client = this.connect({ baseUrl: server.url, headers: setup.headers });
+    // Nothing reads the providers or the models before they are there.
+    await catalogRegistered(client, this.options.catalogWaitMs ?? CATALOG_WAIT_MS, () => this.stopped);
     // Everything waits on this start (the client promise), so nothing reads
     // the models before they are current.
     if (firstStart) {
@@ -1996,7 +2037,9 @@ export class OpenCodeDriver implements Driver {
     const first = this.firstProviders;
     if (first) {
       // The first start is waiting for these: it starts with them, placed
-      // against the kept catalog, and is checked against its own below.
+      // against the kept catalog — filled in first, so that a refresh due
+      // now is not a restart later — and is checked against its own below.
+      this.catalog = await this.fillIn(usable, this.catalog);
       this.placed = placeProfiles(usable, this.catalog).placed;
       first();
     }
@@ -2007,13 +2050,15 @@ export class OpenCodeDriver implements Driver {
     // added: the catalog a server without them would have.
     const read = await this.readCatalog();
     const live = read && withoutProfiles(read, this.serving);
-    // A server started from the kept catalog that cannot say otherwise
-    // keeps it: a restart would only place the profiles knowing less.
-    const catalog = live ?? (first ? this.catalog : EMPTY_CATALOG);
+    // It keeps what models.dev filled in, which no server lists. A server
+    // that cannot say keeps the catalog it was configured from: a restart
+    // would only place the profiles knowing less.
+    const known = live ? { ...withModels(live, this.catalog.models), ...filled(this.catalog) } : this.catalog;
+    const catalog = await this.fillIn(usable, known, live);
     const { placed, refused } = placeProfiles(usable, catalog);
     this.placed = placed;
     this.catalog = catalog;
-    if (live && this.options.catalogCache) writeCatalogCache(this.options.catalogCache, live, placed, this.options.log);
+    if (live && this.options.catalogCache) writeCatalogCache(this.options.catalogCache, catalog, placed, this.options.log);
     if (this.stopped || !this.server || !this.bin || providersFingerprint(placed, catalog) === this.served) return refused;
     this.options.log('[opencode] restarting the server: its provider profiles changed');
     const old = this.server;
@@ -2030,6 +2075,31 @@ export class OpenCodeDriver implements Driver {
     return refused;
   }
 
+  /** `catalog` with the models.dev records of the profiles' own models it
+   *  does not describe — asked for once per process, and not again for a
+   *  day once it has filled a catalog in. */
+  private async fillIn(profiles: ProviderBinding[], catalog: Catalog, live?: Catalog): Promise<Catalog> {
+    const source = modelsDevSource(process.env);
+    const http = this.options.providerHttp;
+    if (!source || !http) return catalog;
+    if (catalog.filledAt !== undefined && Date.now() - catalog.filledAt < MODELS_DEV_TTL_MS) return catalog;
+    const unknown = placeProfiles(profiles, catalog)
+      .placed.filter((p) => !p.known)
+      .some((p) => p.profile.models.some((m) => !catalogModel(catalog, m, new Set())));
+    if (!unknown) return catalog;
+    this.modelsDev ??= fetchModelsDev(source, http.get, this.options.log);
+    const listed = await this.modelsDev;
+    if (listed.size === 0) {
+      // Not had: the next list asks again.
+      this.modelsDev = undefined;
+      return catalog;
+    }
+    // A fresh list replaces what an earlier one filled in; what the server
+    // itself describes stands over both. The day counts whether or not the
+    // list had the model: one it lacks is not asked about again until then.
+    return { ...catalog, models: new Map([...catalog.models, ...listed, ...(live?.models ?? [])]), filledAt: Date.now() };
+  }
+
   /** The running server's catalog (catalog.ts). None when it cannot say:
    *  with no other to go by, every profile is then a provider of its own,
    *  nothing refused or filled in. */
@@ -2037,11 +2107,29 @@ export class OpenCodeDriver implements Driver {
     try {
       const client = await this.clientPromise;
       if (!client) return undefined;
-      const [providers, models] = await Promise.all([client.provider.list(), client.model.list()]);
+      // The providers it can use, and their models; every other provider
+      // it knows only by name until asked for it, one at a time.
+      const [integrations, available, models] = await Promise.all([client.integration.list(), client.provider.list(), client.model.list()]);
+      const providers = new Map(available.data.map((p) => [p.id, p]));
+      const others = integrations.data.map((i) => i.id).filter((id) => !providers.has(id));
+      await eachLimited(others, 8, async (id) => {
+        try {
+          const provider = (await client.provider.get({ providerID: id })).data;
+          providers.set(provider.id, provider);
+        } catch (err) {
+          // An integration that is no model provider (a web search) is not
+          // found; any other failure leaves the read incomplete, and a
+          // provider missing from it would move the profiles placed by it.
+          if (!isNotFound(err)) throw err;
+        }
+      });
       return {
-        providers: new Map(providers.data.map((p) => [p.id, p])),
-        models: new Map(models.data.map((m) => [`${m.providerID}/${m.modelID}`, m])),
-        connected: new Set(providers.data.filter((p) => p.activation === 'enabled').map((p) => p.id)),
+        // By id: the first provider listing a model is the one a profile
+        // model is filled in from, so the order may not depend on which
+        // answer came back first.
+        providers: new Map([...providers].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))),
+        models: new Map(models.data.map((m) => [`${m.providerID}/${m.modelID}`, serverModel(m)])),
+        connected: new Set(available.data.map((p) => p.id)),
       };
     } catch (err) {
       this.options.log(`[opencode] could not read its provider catalog, so profiles are not checked against it: ${err instanceof Error ? err.message : String(err)}`);

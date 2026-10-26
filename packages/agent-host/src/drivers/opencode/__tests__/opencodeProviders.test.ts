@@ -7,9 +7,9 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ModelInfo, OpenCodeClient, ProviderInfo } from '@opencode/client';
+import type { OpenCodeClient, ProviderInfo } from '@opencode/client';
 import { OpenCodeDriver } from '../driver';
-import { type Catalog, EMPTY_CATALOG } from '../catalog';
+import { type Catalog, type CatalogModel, EMPTY_CATALOG } from '../catalog';
 import { placeProfiles, profileModelGroup, profileProviderId, providersConfig, servedBy, serverSetup } from '../providers';
 import type { StartOpenCodeServerOptions } from '../server';
 import type { ProviderBinding } from '../../../sdk/types';
@@ -28,7 +28,7 @@ const router = (over: Partial<ProviderBinding> = {}): ProviderBinding => ({
 /** A catalog provider, as OpenCode's server lists it. */
 /** A catalog provider as v2 states one: the record itself, and the models it
  *  serves — v2 lists models apart from the providers that offer them. */
-function catalogProvider(id: string, name: string, url: string, models: Record<string, Partial<ModelInfo>> = {}) {
+function catalogProvider(id: string, name: string, url: string, models: Record<string, Partial<CatalogModel>> = {}) {
   const info: ProviderInfo = {
     id,
     name,
@@ -37,7 +37,7 @@ function catalogProvider(id: string, name: string, url: string, models: Record<s
     settings: { baseURL: url },
   };
   const entries = Object.entries(models).map(
-    ([mid, m]) => [`${id}/${mid}`, { id: mid, modelID: mid, providerID: id, name: mid, ...m } as ModelInfo] as const,
+    ([mid, m]) => [`${id}/${mid}`, { modelID: mid, providerID: id, name: mid, ...m } as CatalogModel] as const,
   );
   return { info, entries };
 }
@@ -51,11 +51,11 @@ function catalogOf(connected: string[], ...providers: Array<ReturnType<typeof ca
   };
 }
 
-const reasoningModel: Partial<ModelInfo> = {
+const reasoningModel: Partial<CatalogModel> = {
   name: 'DeepSeek V4.1 Flash',
   family: 'deepseek',
   capabilities: { tools: true, input: ['text', 'image'], output: ['text'] },
-  variants: [{ id: 'high', settings: { reasoningEffort: 'high' } }],
+  reasoning: { supported: true, effort: ['low', 'high'] },
   cost: [{ input: 0.15, output: 0.6, cache: { read: 0.003, write: 0 } }],
   limit: { context: 1_000_000, output: 393_216 },
 };
@@ -144,8 +144,9 @@ describe('providersConfig', () => {
         name: 'deepseek-v4.1-flash',
         family: 'deepseek',
         limit: { context: 1_000_000, output: 393_216 },
-        capabilities: { tools: true, input: ['text', 'image'], output: ['text'] },
-        variants: [{ id: 'high', settings: { reasoningEffort: 'high' } }],
+        // How it reasons, for OpenCode to spell for the gateway's own
+        // transport: the catalog's variants are spelled for another.
+        capabilities: { tools: true, input: ['text', 'image'], output: ['text'], reasoning: { supported: true, effort: ['low', 'high'] } },
         // The upstream list price, not what the gateway charges — a cost
         // shown from the catalog beats no cost at all.
         cost: [{ input: 0.15, output: 0.6, cache: { read: 0.003, write: 0 } }],
@@ -372,6 +373,7 @@ describe('an OpenCode driver given provider profiles', () => {
       // The running server lists what it has, the profiles it was given too.
       connect: () =>
         ({
+          integration: { list: async () => ({ location: { directory: '/tmp' }, data: ids.map((id) => ({ id, name: id, methods: [], connections: [] })) }) },
           provider: {
             list: async () => ({
               location: { directory: '/tmp' },

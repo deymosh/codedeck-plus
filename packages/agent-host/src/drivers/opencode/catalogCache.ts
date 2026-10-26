@@ -12,22 +12,22 @@
  * with it restarts the server as before.
  *
  * Only what placement and the profiles' config read is kept: every
- * provider's id, name and endpoint, which of them are connected, and the
- * catalog's records of the profiles' own models — never a key, nor a
- * provider's or a model's other settings.
+ * provider's id, name and endpoint, which of them are connected, the
+ * catalog's records of the profiles' own models, and when models.dev last
+ * filled those in — never a key, nor a provider's other settings.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { ModelInfo, ProviderInfo } from '@opencode/client';
-import { type Catalog, catalogModel } from './catalog';
+import type { ProviderInfo } from '@opencode/client';
+import { type Catalog, type CatalogModel, catalogModel } from './catalog';
 import type { Placement } from './providers';
 
 /** The catalog records `placed` was configured from, as `catalog` holds
  *  them: a known provider's models (whether the catalog has one decides
  *  what the profile adds), and the record each own provider's model is
  *  filled in from. */
-function placedModels(catalog: Catalog, placed: Placement[]): ModelInfo[] {
-  const found = new Map<string, ModelInfo>();
+function placedModels(catalog: Catalog, placed: Placement[]): CatalogModel[] {
+  const found = new Map<string, CatalogModel>();
   for (const { profile, known } of placed) {
     for (const model of profile.models) {
       const record = known ? catalog.models.get(`${known.id}/${model.id}`) : catalogModel(catalog, model, new Set());
@@ -47,16 +47,8 @@ export function catalogSnapshot(catalog: Catalog, placed: Placement[]): unknown 
       ...(typeof p.settings?.baseURL === 'string' ? { baseURL: p.settings.baseURL } : {}),
     })),
     connected: [...catalog.connected],
-    models: placedModels(catalog, placed).map((m) => ({
-      providerID: m.providerID,
-      modelID: m.modelID,
-      name: m.name,
-      ...(m.family ? { family: m.family } : {}),
-      capabilities: m.capabilities,
-      variants: m.variants,
-      cost: m.cost,
-      limit: m.limit,
-    })),
+    models: placedModels(catalog, placed),
+    ...(catalog.filledAt !== undefined ? { filledAt: catalog.filledAt } : {}),
   };
 }
 
@@ -77,6 +69,20 @@ export function writeCatalogCache(file: string, catalog: Catalog, placed: Placem
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 const isString = (value: unknown): value is string => typeof value === 'string';
+const isStrings = (value: unknown): value is string[] => Array.isArray(value) && value.every(isString);
+
+/** A kept model record, checked field by field: a file is data, not code. */
+function isModel(m: unknown): m is CatalogModel {
+  if (!isRecord(m) || !isString(m.providerID) || !isString(m.modelID) || !isString(m.name)) return false;
+  if (m.family !== undefined && !isString(m.family)) return false;
+  const c = m.capabilities;
+  if (!isRecord(c) || typeof c.tools !== 'boolean' || !isStrings(c.input) || !isStrings(c.output)) return false;
+  if (c.temperature !== undefined && typeof c.temperature !== 'boolean') return false;
+  const r = m.reasoning;
+  if (r !== undefined && (!isRecord(r) || typeof r.supported !== 'boolean' || (r.effort !== undefined && !isStrings(r.effort)))) return false;
+  if (!Array.isArray(m.cost) || !m.cost.every((x) => isRecord(x) && typeof x.input === 'number' && typeof x.output === 'number' && isRecord(x.cache))) return false;
+  return isRecord(m.limit) && typeof m.limit.context === 'number' && typeof m.limit.output === 'number';
+}
 
 /** The catalog a cache file holds; undefined for a missing, unreadable or
  *  malformed one, which is a start without a cache. */
@@ -97,25 +103,16 @@ export function readCatalogCache(file: string): Catalog | undefined {
     providers.set(p.id, { id: p.id, name: p.name, settings: p.baseURL ? { baseURL: p.baseURL } : {} } as ProviderInfo);
   }
   if (!parsed.connected.every(isString)) return undefined;
-  const models = new Map<string, ModelInfo>();
+  if (parsed.filledAt !== undefined && typeof parsed.filledAt !== 'number') return undefined;
+  const models = new Map<string, CatalogModel>();
   for (const m of parsed.models) {
-    if (
-      !isRecord(m) ||
-      !isString(m.providerID) ||
-      !isString(m.modelID) ||
-      !isString(m.name) ||
-      (m.family !== undefined && !isString(m.family)) ||
-      !isRecord(m.capabilities) ||
-      !Array.isArray(m.variants) ||
-      !Array.isArray(m.cost) ||
-      !isRecord(m.limit) ||
-      typeof m.limit.context !== 'number' ||
-      typeof m.limit.output !== 'number'
-    ) {
-      return undefined;
-    }
-    // Only what a profile model's config is filled in from (profileModelConfig).
-    models.set(`${m.providerID}/${m.modelID}`, { ...m, id: m.modelID } as unknown as ModelInfo);
+    if (!isModel(m)) return undefined;
+    models.set(`${m.providerID}/${m.modelID}`, m);
   }
-  return { providers, models, connected: new Set(parsed.connected) };
+  return {
+    providers,
+    models,
+    connected: new Set(parsed.connected),
+    ...(typeof parsed.filledAt === 'number' ? { filledAt: parsed.filledAt } : {}),
+  };
 }

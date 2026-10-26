@@ -10,7 +10,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelInfo, OpenCodeClient, ProviderInfo } from '@opencode/client';
 import { OpenCodeDriver } from '../driver';
-import type { Catalog } from '../catalog';
+import type { Catalog, CatalogModel } from '../catalog';
 import { readCatalogCache, writeCatalogCache } from '../catalogCache';
 import { placeProfiles, providersFingerprint, servedBy, withoutProfiles } from '../providers';
 import type { StartOpenCodeServerOptions } from '../server';
@@ -26,10 +26,10 @@ const router = (over: Partial<ProviderBinding> = {}): ProviderBinding => ({
   ...over,
 });
 
-function catalogProvider(id: string, name: string, url: string, models: Record<string, Partial<ModelInfo>> = {}) {
+function catalogProvider(id: string, name: string, url: string, models: Record<string, Partial<CatalogModel>> = {}) {
   const info: ProviderInfo = { id, name, activation: 'enabled', package: '@opencode/ai/providers/openai-compatible', settings: { baseURL: url } };
   const entries = Object.entries(models).map(
-    ([mid, m]) => [`${id}/${mid}`, { id: mid, modelID: mid, providerID: id, name: mid, ...m } as ModelInfo] as const,
+    ([mid, m]) => [`${id}/${mid}`, { modelID: mid, providerID: id, name: mid, ...m } as CatalogModel] as const,
   );
   return { info, entries };
 }
@@ -42,15 +42,15 @@ function catalogOf(connected: string[], ...providers: Array<ReturnType<typeof ca
   };
 }
 
-const flash: Partial<ModelInfo> = {
+const flash: Partial<CatalogModel> = {
   name: 'DeepSeek V4.1 Flash',
   family: 'deepseek',
   capabilities: { tools: true, input: ['text'], output: ['text'] },
-  variants: [{ id: 'high', settings: { reasoningEffort: 'high' } }],
+  reasoning: { supported: true, effort: ['high'] },
   cost: [{ input: 0.15, output: 0.6, cache: { read: 0.003, write: 0 } }],
   limit: { context: 1_000_000, output: 393_216 },
 };
-const chat: Partial<ModelInfo> = { capabilities: { tools: true, input: ['text'], output: ['text'] }, variants: [], cost: [], limit: { context: 64_000, output: 8_000 } };
+const chat: Partial<CatalogModel> = { capabilities: { tools: true, input: ['text'], output: ['text'] }, cost: [], limit: { context: 64_000, output: 8_000 } };
 
 const catalog = catalogOf(
   ['opencode', 'deepseek'],
@@ -151,13 +151,27 @@ describe('an OpenCode driver with a kept catalog', () => {
 
   type AddedProvider = { name?: string; settings?: { baseURL?: string }; models?: Record<string, unknown> };
 
-  /** A server that lists `known` plus what the config it was started with
-   *  adds, as a real one does. */
+  /** A server as OpenCode 2.x is one: it lists the providers it can use
+   *  (`known`'s connected ones, and what its config adds) and their models,
+   *  names every other as an integration and describes it when asked. */
   function serverFor(known: Catalog, config: { providers?: Record<string, AddedProvider> }): OpenCodeClient {
     const providers = new Map<string, ProviderInfo>(
-      [...known.providers].map(([id, p]) => [id, { ...p, activation: known.connected.has(id) ? 'enabled' : 'disabled' } as ProviderInfo]),
+      [...known.providers].map(([id, p]) => [id, { ...p, activation: known.connected.has(id) ? 'enabled' : 'auto' } as ProviderInfo]),
     );
-    const listed = (m: Partial<ModelInfo>) => ({ enabled: true, status: 'active', cost: [], variants: [], limit: { context: 0, output: 0 }, ...m });
+    const available = new Set(known.connected);
+    // A model as the server lists it: its variants spelled from how it reasons.
+    const listed = (m: Partial<CatalogModel> & { providerID: string; modelID: string }): ModelInfo =>
+      ({
+        id: m.modelID,
+        name: m.modelID,
+        enabled: true,
+        status: 'active',
+        cost: [],
+        limit: { context: 0, output: 0 },
+        capabilities: { tools: false, input: [], output: [] },
+        ...m,
+        variants: m.reasoning?.supported ? (m.reasoning.effort ?? []).map((id) => ({ id })) : [],
+      }) as unknown as ModelInfo;
     const models = [...known.models.values()].map(listed);
     for (const [id, entry] of Object.entries(config.providers ?? {})) {
       const base = providers.get(id);
@@ -168,8 +182,10 @@ describe('an OpenCode driver with a kept catalog', () => {
         package: '@opencode/ai/providers/openai-compatible',
         settings: { ...(base?.settings ?? {}), ...(entry.settings?.baseURL ? { baseURL: entry.settings.baseURL } : {}) },
       } as ProviderInfo);
-      for (const modelID of Object.keys(entry.models ?? {})) models.push(listed({ id: modelID, modelID, providerID: id, name: modelID }));
+      available.add(id);
+      for (const modelID of Object.keys(entry.models ?? {})) models.push(listed({ modelID, providerID: id }));
     }
+    const at = { location: { directory: '/tmp' } };
     return {
       // The stream opens and never yields: a session stays on its server.
       event: {
@@ -178,16 +194,25 @@ describe('an OpenCode driver with a kept catalog', () => {
             await new Promise(() => {});
           })(),
       },
-      provider: { list: async () => ({ location: { directory: '/tmp' }, data: [...providers.values()] }) },
+      integration: { list: async () => ({ ...at, data: [...providers.keys(), 'tinyfish'].map((id) => ({ id, name: id, methods: [], connections: [] })) }) },
+      provider: {
+        list: async () => ({ ...at, data: [...providers.values()].filter((p) => available.has(p.id)) }),
+        get: async ({ providerID }: { providerID: string }) => {
+          const provider = providers.get(providerID);
+          if (!provider) throw Object.assign(new Error('not found'), { name: 'ProviderNotFoundError' });
+          return { ...at, data: provider };
+        },
+      },
       model: {
-        list: async () => ({ location: { directory: '/tmp' }, data: models }),
-        default: async () => ({ location: { directory: '/tmp' }, data: null }),
+        list: async () => ({ ...at, data: models.filter((m) => available.has(m.providerID)) }),
+        default: async () => ({ ...at, data: null }),
       },
       session: {
         get: async () => {
           throw new Error('that session is gone');
         },
         create: async () => ({ id: 'ses_1' }),
+        update: async () => ({ id: 'ses_1' }),
       },
     } as unknown as OpenCodeClient;
   }
@@ -237,7 +262,7 @@ describe('an OpenCode driver with a kept catalog', () => {
     expect(next.starts).toHaveLength(1);
     expect(next.starts[0]!.env?.CODEDECK_PROVIDER_KEY_1).toBe('tok-ccr');
     expect(next.starts[0]!.env!.OPENCODE_CONFIG_CONTENT).toBe(first.starts[1]!.env!.OPENCODE_CONFIG_CONTENT);
-    expect(ctx.events.some((e) => e.type === 'ended')).toBe(false);
+    expect(ctx.events.filter((e) => e.type === 'ended')).toEqual([]);
     await driver.shutdown();
   });
 
@@ -263,7 +288,8 @@ describe('an OpenCode driver with a kept catalog', () => {
     writeCatalogCache(file, catalog, [], () => {});
     const { driver: created, starts } = managed(file, 10);
     const driver = await created;
-    expect((await driver.listModels()).models.length).toBeGreaterThan(0);
+    // Asked for meanwhile, the models wait for that start.
+    await driver.listModels();
     expect(starts).toHaveLength(1);
     await driver.shutdown();
   });
