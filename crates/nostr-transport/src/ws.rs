@@ -1241,6 +1241,12 @@ fn project_event(raw: Value) -> Option<NostrEvent> {
     })
 }
 
+/// Whether `host` (in the form `Url::host_str` gives it) is this machine.
+/// IPv6 literals come back bracketed (`[::1]`), so both spellings are accepted.
+fn is_loopback(host: &str) -> bool {
+    matches!(host, "127.0.0.1" | "::1" | "[::1]" | "localhost")
+}
+
 async fn dial(relay: &str, proxy: Option<String>) -> Result<RelayStream, String> {
     let url = Url::parse(relay).map_err(|e| format!("bad relay url {relay:?}: {e}"))?;
     let host = url.host_str().ok_or("relay url has no host")?.to_string();
@@ -1256,8 +1262,7 @@ async fn dial(relay: &str, proxy: Option<String>) -> Result<RelayStream, String>
     // against). This was previously only an app-level settings check (easy to
     // bypass via config file or a manually typed relay); it now holds
     // regardless of what added this URL.
-    let is_loopback = matches!(host.as_str(), "127.0.0.1" | "::1" | "localhost");
-    if !tls && !host.ends_with(".onion") && !is_loopback {
+    if !tls && !host.ends_with(".onion") && !is_loopback(&host) {
         return Err(format!(
             "refusing cleartext ws:// to non-.onion, non-loopback host {host:?} — use wss://"
         ));
@@ -1331,6 +1336,23 @@ mod tests {
         // 127.0.0.1 — proves loopback is genuinely usable, not just "not
         // rejected before some other failure".
         dial(&mock.url, None).await.unwrap();
+    }
+
+    #[test]
+    fn loopback_includes_the_bracketed_ipv6_form_url_gives() {
+        for host in ["127.0.0.1", "::1", "[::1]", "localhost"] {
+            assert!(is_loopback(host), "{host}");
+        }
+        assert!(!is_loopback("192.168.1.20"));
+        assert!(!is_loopback("[::2]"));
+    }
+
+    #[tokio::test]
+    async fn dial_accepts_cleartext_to_bracketed_ipv6_loopback() {
+        // Nothing has to listen: the cleartext guard must pass and the
+        // failure must come from the connection attempt instead.
+        let err = dial("ws://[::1]:1", None).await.unwrap_err();
+        assert!(!err.contains("cleartext"), "{err}");
     }
 
     #[tokio::test]
