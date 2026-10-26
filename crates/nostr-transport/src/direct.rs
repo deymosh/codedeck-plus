@@ -62,6 +62,10 @@ const STABLE_AFTER: Duration = Duration::from_secs(60);
 const FIRST_RESUME_SECS: u64 = 120;
 /// Resume a little before the newest event seen, for clock skew.
 const RESUME_GRACE_SECS: u64 = 5;
+/// Most bytes the link buffers: frames queued for the socket plus events
+/// awaiting the bridge's OK. The phone is memory-constrained, and a bridge
+/// that stops reading must cost the link, not an unbounded queue.
+const OUTBOUND_BUDGET: usize = 16 * 1024 * 1024;
 
 /// Where and how to reach one bridge.
 pub struct DirectConfig {
@@ -94,18 +98,48 @@ pub struct DirectHandlers {
 #[derive(Clone)]
 pub struct DirectLink(Rc<Inner>);
 
+/// A publish awaiting the bridge's `OK`, with the byte length of the frame it
+/// reserved from the outbound budget.
+type PendingPublish = (oneshot::Sender<(bool, String)>, usize);
+
 struct Inner {
     config: DirectConfig,
     handlers: DirectHandlers,
     /// The live connection's endpoint and outbound queue.
     up: RefCell<Option<(String, mpsc::UnboundedSender<Message>)>>,
-    /// Publishes awaiting the bridge's `OK`, by event id.
-    pending: RefCell<HashMap<String, oneshot::Sender<(bool, String)>>>,
+    /// Publishes awaiting the bridge's `OK`, by event id, each with the byte
+    /// length of its frame.
+    pending: RefCell<HashMap<String, PendingPublish>>,
+    /// Bytes of frames sitting in the outbound queue (decremented as they are
+    /// written) and of publishes still awaiting an `OK`.
+    queued_bytes: Cell<usize>,
+    pending_bytes: Cell<usize>,
+    /// Byte cap on `queued_bytes + pending_bytes`; a field so tests can shrink
+    /// it without allocating the production budget.
+    budget: Cell<usize>,
     /// The newest event seen (seconds), where the next connection resumes.
     newest: Cell<u64>,
     ping_every: Cell<Duration>,
     wake: Notify,
     task: RefCell<Option<AbortHandle>>,
+}
+
+impl Inner {
+    /// Forget every publish awaiting an OK. Dropping the senders resolves the
+    /// callers as unanswered, and releases the bytes they reserved.
+    fn clear_pending(&self) {
+        self.pending.borrow_mut().clear();
+        self.pending_bytes.set(0);
+    }
+
+    /// Take one waiting publish, releasing the bytes its frame reserved.
+    fn take_pending(&self, id: &str) -> Option<oneshot::Sender<(bool, String)>> {
+        let entry = self.pending.borrow_mut().remove(id);
+        if let Some((_, len)) = &entry {
+            self.pending_bytes.set(self.pending_bytes.get().saturating_sub(*len));
+        }
+        entry.map(|(tx, _)| tx)
+    }
 }
 
 impl DirectLink {
@@ -117,6 +151,9 @@ impl DirectLink {
             handlers,
             up: RefCell::default(),
             pending: RefCell::default(),
+            queued_bytes: Cell::new(0),
+            pending_bytes: Cell::new(0),
+            budget: Cell::new(OUTBOUND_BUDGET),
             newest: Cell::new(now_secs().saturating_sub(FIRST_RESUME_SECS)),
             ping_every: Cell::new(PING_EVERY),
             wake: Notify::new(),
@@ -138,7 +175,8 @@ impl DirectLink {
         if let Some(task) = self.0.task.borrow_mut().take() {
             task.abort();
         }
-        self.0.pending.borrow_mut().clear();
+        self.0.clear_pending();
+        self.0.queued_bytes.set(0);
         if self.0.up.borrow_mut().take().is_some() {
             (self.0.handlers.on_state)(None);
         }
@@ -159,17 +197,34 @@ impl DirectLink {
     /// caller publishes to the relays instead.
     pub async fn publish(&self, event: &SignedEvent, within: Duration) -> Option<PublishResult> {
         let outbound = self.0.up.borrow().as_ref().map(|(_, out)| out.clone())?;
-        let (tx, rx) = oneshot::channel();
-        self.0.pending.borrow_mut().insert(event.id.clone(), tx);
-        if outbound.send(Message::Text(encode_direct_frame(&DirectFrame::Event(event.clone())))).is_err() {
-            self.0.pending.borrow_mut().remove(&event.id);
+        let frame = encode_direct_frame(&DirectFrame::Event(event.clone()));
+        let len = frame.len();
+        // A bridge that stops reading must not let the unbounded queue grow
+        // past the budget. Fail this publish and close the link (the caller
+        // falls back to the relays) rather than drop a frame silently.
+        if self.0.queued_bytes.get().saturating_add(self.0.pending_bytes.get()).saturating_add(len)
+            > self.0.budget.get()
+        {
+            log::warn!(
+                "[Direct] outbound budget ({} bytes) exceeded — closing the link",
+                self.0.budget.get()
+            );
+            self.0.up.borrow_mut().take();
             return None;
         }
+        let (tx, rx) = oneshot::channel();
+        self.0.pending.borrow_mut().insert(event.id.clone(), (tx, len));
+        self.0.pending_bytes.set(self.0.pending_bytes.get().saturating_add(len));
+        if outbound.send(Message::Text(frame)).is_err() {
+            self.0.take_pending(&event.id);
+            return None;
+        }
+        self.0.queued_bytes.set(self.0.queued_bytes.get().saturating_add(len));
         match tokio::time::timeout(within, rx).await {
             Ok(Ok((true, _))) => Some(PublishResult { verdict: PublishVerdict::Accepted, detail: None }),
             Ok(Ok((false, message))) => Some(PublishResult { verdict: PublishVerdict::Rejected, detail: Some(message) }),
             _ => {
-                self.0.pending.borrow_mut().remove(&event.id);
+                self.0.take_pending(&event.id);
                 None
             }
         }
@@ -264,9 +319,15 @@ impl DirectLink {
             tokio::select! {
                 message = queue.recv() => {
                     let Some(message) = message else { break };
+                    let len = match &message {
+                        Message::Text(text) => text.len(),
+                        _ => 0,
+                    };
                     if sink.send(message).await.is_err() {
                         break;
                     }
+                    // Written: it no longer occupies the outbound queue.
+                    self.0.queued_bytes.set(self.0.queued_bytes.get().saturating_sub(len));
                 }
                 _ = ping.tick() => {
                     if last_heard.elapsed() > dead_after(self.0.ping_every.get()) {
@@ -292,7 +353,8 @@ impl DirectLink {
             }
         }
         self.0.up.borrow_mut().take();
-        self.0.pending.borrow_mut().clear();
+        self.0.clear_pending();
+        self.0.queued_bytes.set(0);
         log::info!("[Direct] Down on {endpoint}");
         (self.0.handlers.on_state)(None);
     }
@@ -318,7 +380,7 @@ impl DirectLink {
                 true
             }
             Ok(DirectFrame::Ok { id, accepted, message }) => {
-                if let Some(waiter) = self.0.pending.borrow_mut().remove(&id) {
+                if let Some(waiter) = self.0.take_pending(&id) {
                     let _ = waiter.send((accepted, message));
                 }
                 true
@@ -457,6 +519,7 @@ impl ServerCertVerifier for Pinned {
 mod tests {
     use super::*;
     use protocol::crypto::generate_keypair;
+    use tokio::task::LocalSet;
 
     fn link_with(endpoints: &[&str], pin: Option<&str>, proxy: Option<&str>) -> DirectLink {
         // Not started: only `usable` is exercised.
@@ -471,6 +534,9 @@ mod tests {
             handlers: DirectHandlers { on_event: Rc::new(|_| {}), on_state: Rc::new(|_| {}) },
             up: RefCell::default(),
             pending: RefCell::default(),
+            queued_bytes: Cell::new(0),
+            pending_bytes: Cell::new(0),
+            budget: Cell::new(OUTBOUND_BUDGET),
             newest: Cell::new(0),
             ping_every: Cell::new(PING_EVERY),
             wake: Notify::new(),
@@ -499,6 +565,86 @@ mod tests {
             ["wss://192.168.1.20:7447", "wss://abc.onion:7447", "ws://abc.onion:7448", "ws://127.0.0.1:7447"],
             "the user's own endpoints are dialled directly, onion ones through Orbot"
         );
+    }
+
+    fn a_signed_event(id: &str, content: &str) -> SignedEvent {
+        SignedEvent {
+            id: id.into(),
+            pubkey: "p".repeat(64),
+            created_at: 1,
+            kind: 4515,
+            tags: Vec::new(),
+            content: content.into(),
+            sig: "s".repeat(64),
+        }
+    }
+
+    /// A link with its queue open (no serve loop reading it) and a test budget.
+    fn up_link(budget: usize) -> (DirectLink, mpsc::UnboundedReceiver<Message>) {
+        let link = link_with(&[], None, None);
+        link.0.budget.set(budget);
+        let (tx, rx) = mpsc::unbounded_channel();
+        *link.0.up.borrow_mut() = Some(("ws://127.0.0.1:1".to_string(), tx));
+        (link, rx)
+    }
+
+    #[tokio::test]
+    async fn a_publish_past_the_outbound_budget_fails_and_closes_the_link() {
+        LocalSet::new()
+            .run_until(async {
+                let ev = a_signed_event("e1", &"x".repeat(400));
+                let len = encode_direct_frame(&DirectFrame::Event(ev.clone())).len();
+                let (link, mut rx) = up_link(len + len / 2);
+
+                // The first publish is queued and waiting for its OK.
+                let first = {
+                    let (link, ev) = (link.clone(), ev.clone());
+                    tokio::task::spawn_local(async move { link.publish(&ev, Duration::from_millis(100)).await })
+                };
+                let _frame = rx.recv().await.expect("the first frame was queued");
+                assert_eq!((link.0.queued_bytes.get(), link.0.pending_bytes.get()), (len, len));
+
+                // The second would push the link past its budget: it fails now
+                // and the link closes instead of growing.
+                assert!(link.publish(&ev, Duration::from_millis(50)).await.is_none());
+                assert!(link.0.up.borrow().is_none(), "the link was closed");
+                assert!(first.await.unwrap().is_none(), "the queued publish got no OK");
+                assert_eq!(link.0.pending_bytes.get(), 0);
+                assert!(link.0.pending.borrow().is_empty());
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn an_ok_releases_the_bytes_its_publish_reserved() {
+        LocalSet::new()
+            .run_until(async {
+                let ev = a_signed_event("e1", "hello");
+                let len = encode_direct_frame(&DirectFrame::Event(ev.clone())).len();
+                let (link, mut rx) = up_link(len * 10);
+
+                let waiting = {
+                    let (link, ev) = (link.clone(), ev.clone());
+                    tokio::task::spawn_local(async move { link.publish(&ev, Duration::from_secs(2)).await })
+                };
+                let _frame = rx.recv().await.expect("the frame was queued");
+                assert_eq!(link.0.pending_bytes.get(), len);
+
+                let ok = encode_direct_frame(&DirectFrame::Ok {
+                    id: "e1".into(),
+                    accepted: true,
+                    message: String::new(),
+                });
+                assert!(link.on_frame(&ok));
+                assert_eq!(waiting.await.unwrap().unwrap().verdict, PublishVerdict::Accepted);
+                assert_eq!(link.0.pending_bytes.get(), 0);
+                assert!(link.0.pending.borrow().is_empty());
+                // Not written (no serve loop): the queue still holds its bytes,
+                // and the link is still up.
+                assert_eq!(link.0.queued_bytes.get(), len);
+                assert!(link.0.up.borrow().is_some());
+            })
+            .await;
     }
 
     #[test]
