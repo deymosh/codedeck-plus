@@ -28,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextAlign
+import com.codedeck.plus.core.LiveReply
 import com.codedeck.plus.ui.theme.Tokens
 import com.codedeck.plus.ui.transcript.rows.ActivityBar
 import com.codedeck.plus.ui.transcript.rows.ActivityRow
@@ -96,9 +97,15 @@ fun TranscriptList(
     liveReplies: List<DisplayEntry.AgentMessage> = emptyList(),
     /** When the running turn started (epoch ms), for the working line's counter. */
     turnStartedAt: Long? = null,
+    /** The replies as they arrive, typed out here instead of [liveReplies].
+     *  Read inside the list, so the typing's steps (about 30 a second) and
+     *  each arrival recompose the list alone, not the screen around it —
+     *  its top bar and the composer being typed in. */
+    arrivingReplies: (() -> List<LiveReply>)? = null,
 ) = key(sessionId) {
+    val typed = if (arrivingReplies != null) rememberTypedReplies(arrivingReplies()) else liveReplies
     TranscriptListContent(
-        displayEntries, liveReplies, outboxItems, machine, sessionId, syncState, contiguous,
+        displayEntries, typed, outboxItems, machine, sessionId, syncState, contiguous,
         respondedCards, planApprovalChoices, running, activity, canStopTasks, dispatch, modifier, turnStartedAt,
     )
 }
