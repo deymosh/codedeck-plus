@@ -261,9 +261,10 @@ catalog the phone reads:
 - The harness is installed when someone chooses it — Install on the phone,
   or `codedeck-bridge agents install deepseek-harness` from a shell, before
   anyone asks — into `/data/agents` in the container image, like the other
-  agents. Build with `CODEDECK_BUNDLE_AGENTS=1` (see [`BRIDGE.md`](BRIDGE.md))
-  and the image carries it instead, from the same installer and so at the
-  same pinned version.
+  agents. On a host without npm registry access, point
+  `CODEDECK_NPM_REGISTRY` at a mirror, install it once while online (see
+  [`BRIDGE.md`](BRIDGE.md)), or copy the `agents` volume from another
+  deployment.
 - The harness's runtime is large (some 600 packages): a minute or two on a
   normal connection. The compose file keeps it in the `agents` volume rather
   than in `./data`: a harness process reads the whole tree every time it
@@ -273,4 +274,4 @@ catalog the phone reads:
   extracted where it belongs and counts as installed once its
   `package.json` — written last — names the pinned version.)
 - A container recreated with an existing `agents` volume keeps whatever
-  agents that volume already has; the bundled copy reaches a *new* volume.
+  agents that volume already has.

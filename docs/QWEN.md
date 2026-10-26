@@ -42,7 +42,7 @@ Medium, High, Extra high, Max.
 
 ## Offline and container notes
 
-Like the DeepSeek Harness it is a package tree in the `agents` volume.
-`CODEDECK_BUNDLE_AGENTS=1` does **not** bake it into the image (only Claude
-Code, OpenCode and the DeepSeek Harness): an offline host installs it from a
-copied `agents/` directory, or points `CODEDECK_QWEN_PATH` at its own.
+Like the DeepSeek Harness it is a package tree in the `agents` volume. A host
+without npm registry access installs it from a copied `agents/` directory,
+points `CODEDECK_NPM_REGISTRY` at a mirror, or points `CODEDECK_QWEN_PATH` at
+its own.
