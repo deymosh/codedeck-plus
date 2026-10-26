@@ -1,7 +1,6 @@
 /**
  * The host's one-shot commands, run instead of serving: what the bridge's
- * `codedeck-bridge agents …` runs, and what an image build runs to bake an
- * agent in.
+ * `codedeck-bridge agents …` runs.
  *
  *   list              every agent and where it stands on this machine
  *   install <id>…     install agents at the version this build pins

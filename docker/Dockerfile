@@ -1,34 +1,27 @@
 # syntax=docker/dockerfile:1
 #
-# Four stages, so the runtime image carries only what the bridge executes:
+# Three stages, so the runtime image carries only what the bridge executes:
 #   bridge     the Rust `codedeck-bridge` binary, built on the SAME base
 #              image as the runtime so the glibc it links against is the
 #              one it runs on.
 #   agenthost  the agent host (packages/agent-host): esbuild bundle, then
 #              `pnpm deploy --prod` of its own dependency closure — the
 #              Claude Agent SDK and the OpenCode client, nothing else.
-#   opencode   only with BUNDLE_AGENTS=1: `npm install -g @opencode/cli`
-#              pulls every CPU variant of the OpenCode binary (~180MB each);
-#              its postinstall picks one and materialises it. Only that one
-#              file is copied out.
 #   runtime    node:slim (the agent host is Node) + git/gh/python3 for the
 #              agent's own tool use.
 #
-# The agents' own binaries are NOT in the image by default. The agent host
-# installs OpenCode, the default agent, when it first starts, and any other
-# agent when someone installs it from the phone (or `codedeck-bridge agents
-# install`), pinned to pnpm-lock.yaml's sha512, into /data/agents — the
-# persisted volume, so a container recreated from a newer image reuses them
-# until the pin moves.
+# The agents' own binaries are NOT in the image. The agent host installs
+# OpenCode, the default agent, when it first starts, and any other agent when
+# someone installs it from the phone (or `codedeck-bridge agents install`),
+# pinned to pnpm-lock.yaml's sha512, into /data/agents — the persisted volume,
+# so a container recreated from a newer image reuses them until the pin moves.
 # /data/agents/bin (links under stable names) is on PATH for a shell in the
 # container, e.g. a one-time `opencode auth login`.
 #
-# BUNDLE_AGENTS=1 builds a complete image for hosts without internet access:
-# the Agent SDK's platform package stays in (so /usr/local/bin/claude is a
-# symlink to its binary, version-locked to the SDK), OpenCode is copied in,
-# and the DeepSeek Harness's runtime — a package tree, not one binary, so the
-# host's own installer fetches it — is laid down in the cache it installs into.
-ARG BUNDLE_AGENTS=0
+# A host without npm registry access points CODEDECK_NPM_REGISTRY at a
+# reachable mirror, runs `codedeck-bridge agents install <agent>…` once while
+# online (the volume keeps them across image rebuilds), or copies the
+# /data/agents volume from another deployment.
 
 ARG NODE_IMAGE=node:24.20.0-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e
 
@@ -65,45 +58,12 @@ COPY packages/agent-host ./packages/agent-host
 RUN pnpm --filter @codedeck/agent-host run build
 # --legacy: deploy the package's own prod dependency closure without
 # requiring inject-workspace-packages. The SDK's platform packages (the Claude
-# Code binary) go unless BUNDLE_AGENTS=1, and even then the musl ones do: the
-# runtime base is Debian (glibc).
-ARG BUNDLE_AGENTS
+# Code binary) go with it: the host installs that binary on demand at the
+# lockfile's pin, so the image must not carry another at the SDK's version.
 RUN --mount=type=cache,id=codedeck-pnpm-store,target=/root/.local/share/pnpm/store \
     pnpm --filter @codedeck/agent-host deploy --prod --legacy /deploy \
     && rm -rf /deploy/src /deploy/tsconfig.json /deploy/build.mjs \
-    && if [ "$BUNDLE_AGENTS" = 1 ]; then \
-         rm -rf /deploy/node_modules/.pnpm/@anthropic-ai+claude-agent-sdk-linux-*-musl@* \
-         && claude_bin="$(find /deploy/node_modules/.pnpm -type f -path "*/claude-agent-sdk-linux-$(node -p process.arch)/claude")" \
-         && test -n "$claude_bin" \
-         && ln -s "${claude_bin#/deploy/}" /deploy/claude; \
-       else \
-         rm -rf /deploy/node_modules/.pnpm/@anthropic-ai+claude-agent-sdk-*@*; \
-       fi
-# The DeepSeek Harness runs from a whole package tree rather than one binary,
-# so it cannot be copied in the way OpenCode is: the host's own installer —
-# the code that would fetch it on a machine with internet — lays it down here,
-# into the cache layout the host looks in, at the version and sha512
-# pnpm-lock.yaml pins. An image built without BUNDLE_AGENTS ships nothing of
-# it and installs it when someone asks for it.
-RUN mkdir -p /agents \
-    && if [ "$BUNDLE_AGENTS" = 1 ]; then \
-         CODEDECK_AGENT_CACHE=/agents node /deploy/dist/main.js install deepseek-harness; \
-       fi
-
-# ---------------------------------------------------------------------------
-FROM ${NODE_IMAGE} AS opencode
-# Keep in step with the `@opencode/client` version in pnpm-lock.yaml — the
-# agent host speaks that client's HTTP API to this binary — and with the
-# agent host's `@opencode/cli` dev dependency, which pins the build installed
-# on demand. Both are OpenCode 2.x: the 1.x packages are a different API.
-ARG OPENCODE_VERSION=2.1.4
-ARG BUNDLE_AGENTS
-RUN mkdir /out \
-    && if [ "$BUNDLE_AGENTS" = 1 ]; then \
-         npm install -g "@opencode/cli@${OPENCODE_VERSION}" \
-         && cp -L "$(readlink -f /usr/local/bin/opencode)" /out/opencode \
-         && /out/opencode --version; \
-       fi
+    && rm -rf /deploy/node_modules/.pnpm/@anthropic-ai+claude-agent-sdk-*@*
 
 # ---------------------------------------------------------------------------
 FROM ${NODE_IMAGE}
@@ -147,36 +107,28 @@ ENV CODEDECK_HOME=/data
 ENV PATH=$PATH:/data/agents/bin
 
 # Create the user (the node base image already owns UID/GID 1000 — rename it).
+# /data/agents holds the agents the host installs on demand; created and owned
+# here, it gives the volume compose mounts at that path the ownership the
+# runtime user needs to install into it.
 RUN if getent group ${GROUP_ID}; then groupmod -n codedeck $(getent group ${GROUP_ID} | cut -d: -f1); \
     else groupadd -g ${GROUP_ID} codedeck; fi \
     && if getent passwd ${USER_ID}; then usermod -l codedeck -d /home/codedeck -m $(getent passwd ${USER_ID} | cut -d: -f1); \
     else useradd -u ${USER_ID} -g codedeck -m -d /home/codedeck codedeck; fi \
-    && mkdir -p /data \
-    && chown codedeck:codedeck /data \
+    && mkdir -p /data /data/agents \
+    && chown codedeck:codedeck /data /data/agents \
     && rm -rf /home/codedeck/.codedeck \
     && ln -s /data /home/codedeck/.codedeck \
     && chown -h codedeck:codedeck /home/codedeck/.codedeck
 
 # Root-owned and read-only to the runtime user: nothing under /app is state.
 # The binary finds the agent host at agent-host/ beside it.
-COPY --from=opencode /out/ /usr/local/bin/
 COPY --from=agenthost /deploy /app/agent-host
-# Agents bundled at build time land in the cache the host installs into,
-# /data/agents. Compose keeps that cache in a volume of Docker's own, which
-# Docker fills from the image when the volume is FIRST created — so a bundle
-# reaches a new deployment, and a volume that already exists keeps what it has
-# (the agents already installed in it). Owned by the runtime user: the host
-# installs into it, and a volume takes the ownership the image gives it.
-COPY --chown=codedeck:codedeck --from=agenthost /agents/ /data/agents/
 COPY --from=bridge /codedeck-bridge /app/codedeck-bridge
 COPY --chmod=0755 docker/entrypoint.sh /app/entrypoint.sh
 COPY --chmod=0755 docker/git-credential-codedeck-secret /usr/local/bin/git-credential-codedeck-secret
 COPY --chmod=0755 docker/gh-codedeck-secret /usr/local/bin/gh
 RUN ln -s /app/codedeck-bridge /usr/local/bin/codedeck-bridge \
-    && codedeck-bridge version \
-    && if [ -e /app/agent-host/claude ]; then \
-         ln -s /app/agent-host/claude /usr/local/bin/claude && claude --version; \
-       fi
+    && codedeck-bridge version
 
 USER codedeck
 WORKDIR /data
