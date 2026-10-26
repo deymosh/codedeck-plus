@@ -60,6 +60,18 @@ public final class TerminalSession extends TerminalOutput {
     private static final int MAX_PENDING_OUTPUT_BYTES = 512 * 1024;
 
     /**
+     * Output fed off the main thread and not appended yet. Chunks that arrive
+     * while one append is queued join it, so a flood of small chunks costs one
+     * main-thread turn and one redraw per batch rather than per chunk — the
+     * main thread also carries the user's keystrokes. Guarded by itself.
+     */
+    private final ByteArrayOutputStream mIncoming = new ByteArrayOutputStream();
+
+    /** An append of {@link #mIncoming} is queued on the main thread. Guarded
+     *  by {@link #mIncoming}. */
+    private boolean mIncomingQueued;
+
+    /**
      * @param transcriptRows how many lines of scrollback the emulator keeps.
      * @param client         the {@link TerminalSessionClient} implementation the emulator
      *                       reports titles, bells and clipboard events to.
@@ -91,16 +103,30 @@ public final class TerminalSession extends TerminalOutput {
      */
     public void feed(byte[] data) {
         if (data == null || data.length == 0) return;
-        final byte[] bytes = Arrays.copyOf(data, data.length);
-        runOnMainThread(() -> {
-            if (mEmulator == null) {
-                mPendingOutput.write(bytes, 0, bytes.length);
-                trimPendingOutput();
-                return;
-            }
-            mEmulator.append(bytes, bytes.length);
-            notifyScreenUpdate();
-        });
+        synchronized (mIncoming) {
+            mIncoming.write(data, 0, data.length);
+            if (mIncomingQueued) return;
+            mIncomingQueued = true;
+        }
+        runOnMainThread(this::appendIncoming);
+    }
+
+    /** Append everything fed so far, in the order it arrived, and redraw once. */
+    private void appendIncoming() {
+        final byte[] bytes;
+        synchronized (mIncoming) {
+            bytes = mIncoming.toByteArray();
+            mIncoming.reset();
+            mIncomingQueued = false;
+        }
+        if (bytes.length == 0) return;
+        if (mEmulator == null) {
+            mPendingOutput.write(bytes, 0, bytes.length);
+            trimPendingOutput();
+            return;
+        }
+        mEmulator.append(bytes, bytes.length);
+        notifyScreenUpdate();
     }
 
     /** Tell the remote shell the new size and reflow or initialize the emulator. */
