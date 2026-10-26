@@ -69,12 +69,16 @@ const MAX_FRAME_BYTES: usize = 256 * 1024;
 /// terminal's byte offsets and asks for a replay from the ring. A lost frame
 /// costs a round trip, never the phone's other traffic.
 const TERMINAL_LANE_CAP: usize = 64;
-/// How many ordinary frames one connection may have waiting. A phone that
-/// stops reading stops its socket from draining, so the queue is the only
-/// thing between it and the bridge's memory. Past this the connection is
-/// closed and the phone reconnects and resyncs; a frame is never silently
-/// dropped on a live connection.
-const FRAME_LANE_CAP: usize = 64;
+/// Frames queued for one connection, a guard on the queue's own overhead.
+/// The real bound is [`FRAME_LANE_BYTES`]: sync sends every unacked chunk in
+/// one engine tick, and a long transcript is many large chunks, so a frame
+/// count small enough to bound memory would close a healthy phone mid-sync.
+const FRAME_LANE_CAP: usize = 4096;
+/// Bytes of frames one connection may have waiting. Past this the phone is
+/// not draining its socket: the connection is closed and it reconnects and
+/// resyncs, rather than the queue growing without limit. Sized so a whole
+/// spread of a long transcript's chunks can wait while the socket drains.
+const FRAME_LANE_BYTES: usize = 64 * 1024 * 1024;
 
 fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
@@ -123,6 +127,9 @@ struct Conn {
     /// The recipient tags its `HELLO` named: only those copies go to it.
     recipients: HashSet<String>,
     frames: mpsc::Sender<String>,
+    /// Bytes of frames queued on `frames` and not yet taken by the serve
+    /// loop. Shared with that loop, which subtracts each frame it takes.
+    queued_bytes: Rc<Cell<usize>>,
     /// Terminal output for this connection, on a lane of its own: it goes out
     /// only when `frames` has nothing waiting, so a terminal can never delay
     /// the phone's other traffic.
@@ -223,12 +230,17 @@ impl Hub {
             for (id, conn) in conns.iter().filter(|(_, c)| c.reads(identity, event)) {
                 if terminal {
                     conn.term.push(frame.clone());
-                } else if conn.frames.try_send(frame.clone()).is_err() {
-                    // The phone is not reading its socket. Closing the
-                    // connection makes it reconnect and resync, which is
-                    // better than growing this queue without limit or
-                    // silently dropping a frame on a live link.
-                    full.push(*id);
+                } else {
+                    let len = frame.len();
+                    if conn.queued_bytes.get() + len > FRAME_LANE_BYTES || conn.frames.try_send(frame.clone()).is_err() {
+                        // The phone is not reading its socket. Closing the
+                        // connection makes it reconnect and resync, which is
+                        // better than growing this queue without limit or
+                        // silently dropping a frame on a live link.
+                        full.push(*id);
+                    } else {
+                        conn.queued_bytes.set(conn.queued_bytes.get() + len);
+                    }
                 }
             }
         }
@@ -254,14 +266,21 @@ impl Hub {
             .collect()
     }
 
-    fn register(&self, identity: &str, recipients: Vec<String>) -> (u64, mpsc::Receiver<String>, Rc<TermLane>) {
+    fn register(&self, identity: &str, recipients: Vec<String>) -> (u64, mpsc::Receiver<String>, Rc<TermLane>, Rc<Cell<usize>>) {
         let id = self.next_id.get();
         self.next_id.set(id + 1);
         let (frames, rx) = mpsc::channel(FRAME_LANE_CAP);
         let term = Rc::new(TermLane::default());
-        let conn = Conn { identity: identity.to_string(), recipients: recipients.into_iter().collect(), frames, term: Rc::clone(&term) };
+        let queued_bytes = Rc::new(Cell::new(0));
+        let conn = Conn {
+            identity: identity.to_string(),
+            recipients: recipients.into_iter().collect(),
+            frames,
+            queued_bytes: Rc::clone(&queued_bytes),
+            term: Rc::clone(&term),
+        };
         self.conns.borrow_mut().insert(id, conn);
-        (id, rx, term)
+        (id, rx, term, queued_bytes)
     }
 
     fn unregister(&self, id: u64) {
@@ -563,7 +582,7 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(stream: S, hub: &Hub) {
         }
     };
 
-    let (id, mut outbound, term) = hub.register(&identity, recipients);
+    let (id, mut outbound, term, queued_bytes) = hub.register(&identity, recipients);
     log::info!("[Direct] {}... connected", short(&identity));
     let mut ok = sink.send(send(&DirectFrame::Ready)).await.is_ok();
     for event in hub.since(id, since) {
@@ -575,6 +594,7 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(stream: S, hub: &Hub) {
         // the biased select below keeps the same order while blocking.
         match outbound.try_recv() {
             Ok(text) => {
+                queued_bytes.set(queued_bytes.get().saturating_sub(text.len()));
                 ok = sink.send(Message::Text(text)).await.is_ok();
                 continue;
             }
@@ -588,7 +608,10 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(stream: S, hub: &Hub) {
         tokio::select! {
             biased;
             frame = outbound.recv() => match frame {
-                Some(text) => ok = sink.send(Message::Text(text)).await.is_ok(),
+                Some(text) => {
+                    queued_bytes.set(queued_bytes.get().saturating_sub(text.len()));
+                    ok = sink.send(Message::Text(text)).await.is_ok();
+                }
                 None => {
                     // Unpaired, or the bridge is stopping.
                     let _ = sink.send(send(&DirectFrame::Closed("closed".into()))).await;
@@ -759,13 +782,13 @@ mod tests {
         }
         // Another identity naming p's tag reads nothing of p's.
         hub.deliver("q", &copy_for("q1", now), false);
-        let (p1, _, _) = hub.register("p", vec!["p1".into()]);
-        let (q, _, _) = hub.register("q", vec!["p1".into()]);
+        let (p1, _, _, _) = hub.register("p", vec!["p1".into()]);
+        let (q, _, _, _) = hub.register("q", vec!["p1".into()]);
         assert_eq!(hub.since(p1, 0), std::slice::from_ref(&mine), "the stale one was dropped; only p1's copy");
         assert!(hub.since(p1, mine.created_at + 1).is_empty());
         assert!(hub.since(q, 0).is_empty());
         hub.set_paired(&["p".into()]);
-        let (q1, _, _) = hub.register("q", vec!["q1".into()]);
+        let (q1, _, _, _) = hub.register("q", vec!["q1".into()]);
         assert!(hub.since(q1, 0).is_empty(), "an unpaired identity's events go");
     }
 
@@ -820,18 +843,42 @@ mod tests {
         assert_eq!(last.as_deref(), Some("b"));
     }
 
+    /// A copy for a client, with `bytes` of content so its encoded frame has
+    /// a size like a sync chunk's.
+    fn big_copy_for(recipient: &str, bytes: usize, created_at: u64) -> SignedEvent {
+        SignedEvent { content: "x".repeat(bytes), ..copy_for(recipient, created_at) }
+    }
+
     #[test]
-    fn a_connection_that_stops_reading_is_closed_rather_than_growing() {
+    fn a_sync_sized_burst_of_large_chunks_does_not_close_a_healthy_connection() {
         let (inputs, _rx) = mpsc::unbounded_channel();
         let hub = Hub::new("b".into(), inputs);
         hub.set_paired(&["p".into()]);
-        let (id, mut outbound, _) = hub.register("p", vec!["p1".into()]);
-        let event = copy_for("p1", now_secs());
-        for _ in 0..FRAME_LANE_CAP {
+        let (id, _outbound, _, _) = hub.register("p", vec!["p1".into()]);
+        let event = big_copy_for("p1", 60 * 1024, now_secs());
+        // A sync sends every unacked chunk in one engine tick, so a long
+        // transcript arrives as a burst the socket has not started draining.
+        for _ in 0..200 {
             hub.deliver("p", &event, false);
         }
-        // The lane is full: one more copy cannot be queued, so the connection
-        // is dropped and its serve loop sees the channel end.
+        assert!(hub.conns.borrow().contains_key(&id), "a healthy burst stays under the byte bound");
+    }
+
+    #[test]
+    fn a_connection_that_stops_reading_is_closed_past_the_byte_bound() {
+        let (inputs, _rx) = mpsc::unbounded_channel();
+        let hub = Hub::new("b".into(), inputs);
+        hub.set_paired(&["p".into()]);
+        let (id, mut outbound, _, _) = hub.register("p", vec!["p1".into()]);
+        let event = big_copy_for("p1", 1024 * 1024, now_secs());
+        let frame_len = encode_direct_frame(&DirectFrame::Event(event.clone())).len();
+        let fits = FRAME_LANE_BYTES / frame_len;
+        for _ in 0..fits {
+            hub.deliver("p", &event, false);
+        }
+        assert!(hub.conns.borrow().contains_key(&id), "{fits} frames of {frame_len} bytes fit");
+        // One more crosses the bound: the connection is dropped and its
+        // serve loop sees the channel end.
         hub.deliver("p", &event, false);
         assert!(hub.conns.borrow().get(&id).is_none());
         while outbound.try_recv().is_ok() {}
