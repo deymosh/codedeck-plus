@@ -12,14 +12,14 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.310",
-    "@opencode/client": "2.0.28",
+    "@opencode/client": "2.1.4",
     "js-yaml": "^4.2.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {
     "@agentclientprotocol/sdk": "^1.7.0",
     "@deepseek-ai/dsh": "0.2.0-rc.2",
-    "@opencode/cli": "2.0.28",
+    "@opencode/cli": "2.1.4",
     "@qwen-code/qwen-code": "0.25.2",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.10.0",
