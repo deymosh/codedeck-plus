@@ -10,8 +10,7 @@
 //!
 //! Regenerate after a deliberate shape change:
 //! `cargo test -p client-ffi --test display_entries_corpus -- --ignored regenerate_the_fixture`
-//! then copy the file to the Android test resources path above and re-run
-//! both sides' tests.
+//! writes both copies; then re-run both sides' tests.
 
 use client_runtime::client_core::presentation::activity::build_activity;
 use client_runtime::client_core::presentation::display_entries::{
@@ -122,11 +121,31 @@ fn corpus_json() -> String {
     serde_json::to_string_pretty(&combined).unwrap()
 }
 
+/// The Android test resources' copy, which the Kotlin side decodes.
+const ANDROID_COPY: &str = "../../apps/android/app/src/test/resources/display_entries_corpus.json";
+
+/// A fixture as committed, whatever line endings a checkout gave it.
+fn normalized(text: &str) -> String {
+    text.replace("\r\n", "\n").trim().to_string()
+}
+
 #[test]
 fn matches_the_committed_fixture() {
     let actual = corpus_json();
     let expected = include_str!("../fixtures/display_entries_corpus.json");
-    assert_eq!(actual.trim(), expected.trim());
+    assert_eq!(actual.trim(), normalized(expected));
+}
+
+#[test]
+fn the_android_copy_is_the_same_fixture() {
+    // Two consumers of one shape: a copy left behind after a regeneration
+    // would have the Kotlin side test a shape Rust no longer produces.
+    let android = include_str!("../../../apps/android/app/src/test/resources/display_entries_corpus.json");
+    assert_eq!(
+        normalized(android),
+        normalized(include_str!("../fixtures/display_entries_corpus.json")),
+        "{ANDROID_COPY} differs from fixtures/display_entries_corpus.json: run regenerate_the_fixture"
+    );
 }
 
 /// `cargo test -p client-ffi --test display_entries_corpus -- --ignored
@@ -134,6 +153,7 @@ fn matches_the_committed_fixture() {
 #[test]
 #[ignore]
 fn regenerate_the_fixture() {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/display_entries_corpus.json");
-    std::fs::write(path, corpus_json() + "\n").unwrap();
+    let json = corpus_json() + "\n";
+    std::fs::write(concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/display_entries_corpus.json"), &json).unwrap();
+    std::fs::write(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(ANDROID_COPY), &json).unwrap();
 }

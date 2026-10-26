@@ -78,6 +78,10 @@ jobs:
               - '.github/workflows/ci.yml'
             rust:
               - 'crates/**'
+              # bridge-runtime's tests compile it in and check every key.
+              - 'config.example.json'
+              # client-ffi's corpus test compares the Android copy.
+              - 'apps/android/app/src/test/resources/display_entries_corpus.json'
               - 'Cargo.toml'
               - 'Cargo.lock'
               - '.github/workflows/ci.yml'
@@ -297,9 +301,9 @@ jobs:
             exit 1
           }
 
-      - name: Gradle test + Paparazzi verify
+      - name: Gradle test + Paparazzi verify + lint
         working-directory: apps/android
-        run: ./gradlew testDebugUnitTest verifyPaparazziDebug --console=plain
+        run: ./gradlew testDebugUnitTest verifyPaparazziDebug lintDebug --console=plain
 
   # The deployment side, which no other job touches: every shell script must
   # at least parse, and the bridge image must build (never pushed here). The
