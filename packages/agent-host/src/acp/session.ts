@@ -55,6 +55,11 @@ export interface AcpSessionDeps<H, E extends AcpProcessEvents> {
  *  shutdown for ever. */
 export const SESSION_REQUEST_TIMEOUT_MS = 15_000;
 
+/** After `session/cancel`, how long the prompt may stay unsettled before the
+ *  turn is ended here anyway: an agent that ignores the cancel must not keep
+ *  the phone showing a turn that will never finish. */
+export const CANCEL_GRACE_MS = 10_000;
+
 type PendingAsk = (response: RequestPermissionResponse) => void;
 
 export abstract class AcpSession<
@@ -92,6 +97,11 @@ export abstract class AcpSession<
    *  them as cancelled, so the agent is never left waiting on a decision no
    *  person can still give (and its `session/close` is not blocked on one). */
   private readonly pendingAsks = new Set<PendingAsk>();
+  /** Whether a turn this session opened is still open: an interrupt may end
+   *  it here, and its prompt settling later must not end it a second time. */
+  private turnOpen = false;
+  /** The cancel grace waiting to end a turn the agent did not settle. */
+  private cancelTimer?: NodeJS.Timeout;
 
   constructor(
     protected readonly params: StartSession,
@@ -382,6 +392,8 @@ export abstract class AcpSession<
   protected finish(error?: string): void {
     if (this.ended) return;
     this.ended = true;
+    this.turnOpen = false;
+    this.clearCancelGrace();
     this.cancelPendingAsks();
     this.abandon();
     this.ctx.emit({ type: 'ended', ...(error ? { error } : {}) });
@@ -427,17 +439,20 @@ export abstract class AcpSession<
       if (this.ended || sessionId === undefined) return;
       this.ctx.emit({ type: 'turn', state: 'running' });
       this.promptInFlight = true;
+      this.turnOpen = true;
       try {
         await this.client.request('session/prompt', { sessionId, prompt: [{ type: 'text', text }] });
       } finally {
         this.promptInFlight = false;
+        this.clearCancelGrace();
         this.promptSettled();
       }
-      this.endTurn();
+      // A turn an interrupt already ended here is not ended again.
+      if (this.turnOpen) this.endTurn();
     } catch (error) {
       if (this.ended) return;
       this.deliver({ entryType: 'error', text: error instanceof Error ? error.message : String(error), timestamp: now() });
-      this.endTurn();
+      if (this.turnOpen) this.endTurn();
     }
   }
 
@@ -446,6 +461,8 @@ export abstract class AcpSession<
    *  and a failed one end the turn too. */
   protected endTurn(): void {
     if (this.ended) return;
+    this.turnOpen = false;
+    this.clearCancelGrace();
     this.deliver({ entryType: 'turn_complete', timestamp: now() });
     this.ctx.emit({ type: 'turn', state: 'idle' });
   }
@@ -458,7 +475,35 @@ export abstract class AcpSession<
       this.client.notify('session/cancel', { sessionId });
     } catch {
       // The connection is gone; `ended` has already said so.
+      return;
     }
+    if (!this.promptInFlight) return;
+    // An agent may ignore the cancel; the turn then ends here after the
+    // grace, so the phone is not left showing it as running for ever.
+    this.clearCancelGrace();
+    this.cancelTimer = setTimeout(() => this.abandonTurn(), CANCEL_GRACE_MS);
+    this.cancelTimer.unref?.();
+  }
+
+  /** The agent did not settle its turn after a cancel: end it here, saying
+   *  so. Its prompt may still settle later; that then ends nothing twice. */
+  private abandonTurn(): void {
+    this.cancelTimer = undefined;
+    if (this.ended || !this.promptInFlight) return;
+    this.promptInFlight = false;
+    this.deliver({
+      entryType: 'notice',
+      kind: 'other',
+      text: `${this.deps.label} did not confirm stopping the turn; it was ended here. It may still be finishing in the agent.`,
+      timestamp: now(),
+    });
+    this.endTurn();
+  }
+
+  private clearCancelGrace(): void {
+    if (this.cancelTimer === undefined) return;
+    clearTimeout(this.cancelTimer);
+    this.cancelTimer = undefined;
   }
 
   abstract setOption(option: SessionOption, value: string): Promise<void>;
@@ -473,6 +518,8 @@ export abstract class AcpSession<
     const sessionId = this.nativeId;
     const process_ = this.process;
     this.ended = true;
+    this.turnOpen = false;
+    this.clearCancelGrace();
     this.cancelPendingAsks();
     if (sessionId !== undefined && process_) {
       // Closing the session lets the agent cancel its work and flush; the

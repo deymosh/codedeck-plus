@@ -81,6 +81,8 @@ export class FakeAgent {
   ignoreNewSession = false;
   /** Whether the agent answers `session/close` at all — a wedged end. */
   ignoreClose = false;
+  /** Whether the agent ignores `session/cancel` — a wedged turn. */
+  ignoresCancel = false;
   /** Scripts one turn; the default completes at once. */
   onPrompt: ((sessionId: string, text: string, agent: FakeAgent) => Promise<string> | string) | undefined;
   private nextId = 1;
@@ -117,7 +119,7 @@ export class FakeAgent {
     }
     if (message.id === undefined) {
       this.notifications.push({ method: message.method, params: message.params ?? {} });
-      if (message.method === 'session/cancel') {
+      if (message.method === 'session/cancel' && !this.ignoresCancel) {
         this.resolveTurn(message.params?.sessionId as string, 'cancelled');
       }
       return;

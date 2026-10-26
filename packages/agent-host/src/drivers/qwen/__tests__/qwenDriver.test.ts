@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { SESSION_REQUEST_TIMEOUT_MS } from '../../../acp/session';
+import { CANCEL_GRACE_MS, SESSION_REQUEST_TIMEOUT_MS } from '../../../acp/session';
 import { FakeAgent } from '../../../acp/__tests__/fakeAgent';
 import { recordingContext, type RecordingContext } from '../../../sdk/__tests__/context';
 import type { DriverSession } from '../../../sdk/driver';
@@ -682,6 +682,33 @@ describe('QwenSession shutdown', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('ends a turn locally when the agent ignores the cancel past the grace', async () => {
+    const ready = withDriver();
+    const ctx = await started(ready);
+    ready.agent.ignoresCancel = true;
+    let release: ((stop: string) => void) | undefined;
+    ready.agent.onPrompt = () => new Promise<string>((resolve) => (release = resolve));
+    ready.session.prompt('go');
+    await vi.waitFor(() => expect(ctx.events.some((e) => e.type === 'turn' && e.state === 'running')).toBe(true));
+
+    vi.useFakeTimers();
+    try {
+      await ready.session.interrupt();
+      expect(ready.agent.notifications).toContainEqual({ method: 'session/cancel', params: { sessionId: 's1' } });
+      await vi.advanceTimersByTimeAsync(CANCEL_GRACE_MS);
+      expect(ctx.entries()).toContainEqual(
+        expect.objectContaining({ entryType: 'notice', kind: 'other', text: expect.stringMatching(/ended here/) }),
+      );
+      expect(ctx.events.filter((e) => e.type === 'turn' && e.state === 'idle')).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // The agent's prompt finally settling does not end the turn a second time.
+    release?.('end_turn');
+    await vi.waitFor(() => expect(ctx.events.filter((e) => e.type === 'turn' && e.state === 'idle')).toHaveLength(1));
   });
 
   it('answers the permission ask it was still waiting on with a cancellation', async () => {
