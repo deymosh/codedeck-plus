@@ -37,6 +37,7 @@ import type {
   UsageData,
 } from '../../sdk/types';
 import { sdkMessageToEntries } from './adapter';
+import { redactSecrets } from '../../sdk/redact';
 import { ANTHROPIC_API_KEY_CREDENTIAL, buildClaudeEnv } from './env';
 import { CLAUDE_STYLE } from './style';
 import {
@@ -183,12 +184,25 @@ export interface ClaudeDriverDeps {
   readVersion?: () => Promise<string | undefined>;
 }
 
+/** The credential values one session's parameters carry. */
+function sessionSecrets(params: StartSession): string[] {
+  return [
+    ...Object.values(params.credentials ?? {}),
+    ...Object.values(params.env ?? {}),
+    ...(params.provider ? [params.provider.authToken] : []),
+  ];
+}
+
 export class ClaudeSession implements DriverSession {
   private handle: SdkSessionHandle | null = null;
   private readonly translate: TranslateContext;
   /** Told a tool name no agent's table lists, which the log then carries. */
   private readonly reportUnknownTool: (toolName: string) => void;
   private readonly resumeTarget: string | null;
+  /** Every credential value this session was handed. The SDK's errors carry
+   *  the CLI's stderr tail, which can quote the environment it ran in, so
+   *  these are removed from anything the session logs or reports. */
+  private readonly secrets: readonly string[];
   /** Coalesces the SDK's streamed deltas into `partial` events (sdk/partial):
    *  a few signed, relayed updates a second, not one per token. */
   private readonly partials: PartialCoalescer;
@@ -246,6 +260,7 @@ export class ClaudeSession implements DriverSession {
     private readonly options: ClaudeDriverOptions,
   ) {
     this.resumeTarget = params.resume ?? null;
+    this.secrets = sessionSecrets(params);
     this.reportUnknownTool = unknownToolReporter((message) => this.ctx.log(message));
     this.translate = newTranslateContext(this.reportUnknownTool);
     this.partials = new PartialCoalescer((update) => {
@@ -341,7 +356,10 @@ export class ClaudeSession implements DriverSession {
     this.ended = true;
     this.dropLiveText();
     void Promise.resolve(this.handle?.end()).catch(() => {});
-    this.ctx.emit({ type: 'ended', ...(error ? { error } : {}), ...(resumeLost ? { resumeLost } : {}) });
+    // The reason can be an SDK error quoting the CLI's stderr tail; it
+    // travels to the phone, so no credential value may survive in it.
+    const safe = error === undefined ? undefined : redactSecrets(error, this.secrets);
+    this.ctx.emit({ type: 'ended', ...(safe ? { error: safe } : {}), ...(resumeLost ? { resumeLost } : {}) });
   }
 
   private async consume(handle: SdkSessionHandle): Promise<void> {
@@ -394,12 +412,13 @@ export class ClaudeSession implements DriverSession {
     if (msg.type === 'auth_status') {
       const auth = msg as SdkAuthStatusMessage;
       if (!auth.error) return;
-      this.ctx.log(`[claude] auth error for ${this.ctx.sessionId}: ${auth.error}`);
+      const reason = redactSecrets(auth.error, this.secrets);
+      this.ctx.log(`[claude] auth error for ${this.ctx.sessionId}: ${reason}`);
       if (!this.ready) {
-        this.finish(`Authentication failed: ${auth.error}`);
+        this.finish(`Authentication failed: ${reason}`);
         return;
       }
-      this.entries([{ entryType: 'notice', kind: 'auth_error', text: `Authentication failed: ${auth.error}`, timestamp: new Date().toISOString() }]);
+      this.entries([{ entryType: 'notice', kind: 'auth_error', text: `Authentication failed: ${reason}`, timestamp: new Date().toISOString() }]);
       return;
     }
 
@@ -671,7 +690,7 @@ export class ClaudeSession implements DriverSession {
     queueMicrotask(() => {
       void this.handle?.setPermissionMode(mode).then(
         () => this.setMode(mode),
-        (err) => this.ctx.log(`[claude] could not switch ${this.ctx.sessionId} to ${mode}: ${err}`),
+        (err) => this.ctx.log(`[claude] could not switch ${this.ctx.sessionId} to ${mode}: ${redactSecrets(String(err), this.secrets)}`),
       );
     });
     return { behavior: 'allow', updatedInput: input };
@@ -775,7 +794,7 @@ export class ClaudeSession implements DriverSession {
       this.handle.getUsageSnapshot().then(
         (raw) => (raw === null || raw === undefined ? null : normalizeUsage(raw)),
         (err) => {
-          this.ctx.log(`[claude] usage failed for ${this.ctx.sessionId}: ${err}`);
+          this.ctx.log(`[claude] usage failed for ${this.ctx.sessionId}: ${redactSecrets(String(err), this.secrets)}`);
           return null;
         },
       ),

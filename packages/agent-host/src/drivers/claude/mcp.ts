@@ -15,7 +15,8 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
 import type { McpManager, McpState } from '../../sdk/driver';
-import { serverInfo } from '../../sdk/mcp';
+import { serverInfo, setupSecrets } from '../../sdk/mcp';
+import { redactSecrets } from '../../sdk/redact';
 import type { McpAction, McpServerAdd, McpServerInfo } from '../../sdk/types';
 import { failureMessage, type CliRunner } from './plugins';
 
@@ -109,12 +110,14 @@ export class ClaudeMcp implements McpManager {
     if (runs.length === 0) {
       throw new Error('Claude Code cannot switch a server off without removing it. Switch it off in a session instead.');
     }
+    // A CLI refusal can quote the JSON it was handed — env, headers and all.
+    const secrets = servers.flatMap((server) => setupSecrets(server.setup));
     for (const args of runs) {
       // A server added again replaces the old one: `add-json` refuses a
       // name that exists, so it is removed first (a missing one is fine).
       if (action === 'add') await this.run(['mcp', 'remove', '-s', 'user', '--', args[5]!], CHANGE_TIMEOUT_MS);
       const result = await this.run(args, CHANGE_TIMEOUT_MS);
-      if (result.code !== 0) throw new Error(failureMessage(result));
+      if (result.code !== 0) throw new Error(redactSecrets(failureMessage(result), secrets));
     }
     await this.onChanged().catch(() => {});
     return this.list();

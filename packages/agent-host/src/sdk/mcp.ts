@@ -4,7 +4,7 @@
  * (its arguments may carry a token); a remote one its URL without user info,
  * query or fragment; env variables and headers by name only.
  */
-import type { McpServerInfo, McpStatus } from './types';
+import type { McpServerInfo, McpServerSetup, McpStatus } from './types';
 
 /** `url` without the parts that may carry a credential. */
 export function redactUrl(url: string): string {
@@ -38,6 +38,19 @@ export function serverInfo(raw: RawServer): McpServerInfo {
     ...(raw.headerKeys?.length ? { headerKeys: [...raw.headerKeys].sort() } : {}),
     enabled: raw.enabled,
   };
+}
+
+/**
+ * The credential values one server's setup carries: env and header values,
+ * and — for a stdio server — its arguments, which commonly hold a token.
+ * These are removed from any error text about the server before it is logged
+ * or sent on.
+ */
+export function setupSecrets(setup: McpServerSetup): string[] {
+  if (setup.type === 'stdio') {
+    return [...(setup.args ?? []), ...Object.values(setup.env ?? {})];
+  }
+  return [setup.url, ...Object.values(setup.headers ?? {})];
 }
 
 /** An agent's own status word for a server, mapped onto the wire's. */

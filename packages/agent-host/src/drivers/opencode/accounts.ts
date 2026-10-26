@@ -25,6 +25,7 @@
  *    is read here, and nothing of it is passed on.
  */
 import type { OpenCodeClient } from '@opencode/client';
+import { redactSecrets } from '../../sdk/redact';
 import type { AccountChangeResult, AccountManager, SignInState } from '../../sdk/driver';
 import type { AccountChange, AccountConnection, AccountField, AccountMethod, AgentAccount, SignInStatus } from '../../sdk/types';
 
@@ -120,7 +121,12 @@ export class OpenCodeAccounts implements AccountManager {
           return { signIn: await this.cancel(client, account, change.attempt) };
       }
     } catch (err) {
-      throw new Error(reason(err));
+      // The server's refusal can repeat the key it was given, and a pasted
+      // sign-in address carries its one-time code. Neither may travel back
+      // to the phone in the error.
+      const secrets =
+        change.kind === 'key' ? [change.key] : change.kind === 'finish' ? [change.callbackUrl] : [];
+      throw new Error(redactSecrets(reason(err), secrets));
     }
   }
 

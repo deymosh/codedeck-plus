@@ -13,7 +13,8 @@
  */
 import type { OpenCodeClient } from '@opencode/client';
 import type { McpManager, McpState, SessionMcpState } from '../../sdk/driver';
-import { mcpStatus, serverInfo } from '../../sdk/mcp';
+import { mcpStatus, serverInfo, setupSecrets } from '../../sdk/mcp';
+import { redactSecrets } from '../../sdk/redact';
 import type { McpAction, McpServerAdd, McpServerInfo } from '../../sdk/types';
 
 /** A server as OpenCode v2's config holds it. Absent env or headers are left
@@ -67,9 +68,15 @@ export class OpenCodeMcp implements McpManager {
         if (missing) throw new Error(`OpenCode has no MCP server '${missing}'.`);
         for (const name of names) await this.call(`remove ${name}`, () => client.mcp.remove({ server: name }));
       } else if (action === 'add') {
+        // A refusal can quote the config it was handed — env, headers and
+        // all. The setup's credential values are removed before it travels.
+        const secrets = servers.flatMap((add) => setupSecrets(add.setup));
         for (const add of servers) {
-          await this.call(`add ${add.name}`, () =>
-            client.mcp.add({ server: add.name, config: openCodeServerConfig(add) as never }));
+          await this.call(
+            `add ${add.name}`,
+            () => client.mcp.add({ server: add.name, config: openCodeServerConfig(add) as never }),
+            secrets,
+          );
         }
       } else {
         const missing = names.find((n) => !current.has(n));
@@ -93,11 +100,11 @@ export class OpenCodeMcp implements McpManager {
     return new Set(listed.data.map((s) => s.name));
   }
 
-  private async call(what: string, work: () => Promise<unknown>): Promise<void> {
+  private async call(what: string, work: () => Promise<unknown>, secrets: readonly string[] = []): Promise<void> {
     try {
       await work();
     } catch (err) {
-      throw new Error(`OpenCode could not ${what}: ${reason(err)}`);
+      throw new Error(redactSecrets(`OpenCode could not ${what}: ${reason(err)}`, secrets));
     }
   }
 

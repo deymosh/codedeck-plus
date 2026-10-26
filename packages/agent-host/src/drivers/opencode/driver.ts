@@ -86,6 +86,7 @@ import {
 } from './server';
 import type { ProviderHttp } from '../../sdk/net';
 import { isValidProviderBaseUrl } from '../../sdk/provider';
+import { redactSecrets } from '../../sdk/redact';
 import { checkToken, listModels, OPENAI_API } from '../../sdk/providerApi';
 import type { EndpointModel } from '../../sdk/providerModels';
 import { OPENCODE_STYLE } from './style';
@@ -1926,7 +1927,12 @@ export class OpenCodeDriver implements Driver {
         ...(this.options.port !== undefined ? { port: this.options.port } : {}),
       });
     } catch (err) {
-      throw new Error(`The OpenCode server failed to start: ${err instanceof Error ? err.message : String(err)}`);
+      // A child that dies can print the environment it ran in; the provider
+      // tokens and the server's own password are the part that may not
+      // travel on to the log or the bridge.
+      const reason = err instanceof Error ? err.message : String(err);
+      const secrets = [...Object.values(setup.env), ...Object.values(setup.headers)];
+      throw new Error(`The OpenCode server failed to start: ${redactSecrets(reason, secrets)}`);
     }
     if (this.stopped) {
       await server.close();
@@ -2048,7 +2054,13 @@ export class OpenCodeDriver implements Driver {
     await this.clientPromise?.catch(() => {});
     // What the running server lists, less what the profiles it runs with
     // added: the catalog a server without them would have.
-    const read = await this.readCatalog();
+    // The running server's config holds the profiles it was started with;
+    // the ones just handed over are the other values a read failure may
+    // quote, since the client sees the same config.
+    const read = await this.readCatalog([
+      ...this.placed.map((p) => p.profile.authToken),
+      ...usable.map((p) => p.authToken),
+    ]);
     const live = read && withoutProfiles(read, this.serving);
     // It keeps what models.dev filled in, which no server lists. A server
     // that cannot say keeps the catalog it was configured from: a restart
@@ -2103,7 +2115,7 @@ export class OpenCodeDriver implements Driver {
   /** The running server's catalog (catalog.ts). None when it cannot say:
    *  with no other to go by, every profile is then a provider of its own,
    *  nothing refused or filled in. */
-  private async readCatalog(): Promise<Catalog | undefined> {
+  private async readCatalog(secrets: readonly string[] = this.placed.map((p) => p.profile.authToken)): Promise<Catalog | undefined> {
     try {
       const client = await this.clientPromise;
       if (!client) return undefined;
@@ -2132,7 +2144,10 @@ export class OpenCodeDriver implements Driver {
         connected: new Set(available.data.map((p) => p.id)),
       };
     } catch (err) {
-      this.options.log(`[opencode] could not read its provider catalog, so profiles are not checked against it: ${err instanceof Error ? err.message : String(err)}`);
+      const reason = err instanceof Error ? err.message : String(err);
+      this.options.log(
+        `[opencode] could not read its provider catalog, so profiles are not checked against it: ${redactSecrets(reason, secrets)}`,
+      );
       return undefined;
     }
   }

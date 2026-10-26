@@ -15,6 +15,7 @@
  * `deepseek/deepseek-chat`) read the same way.
  */
 import type { HttpGet } from './net';
+import { redactSecrets } from './redact';
 
 /** One model an endpoint serves. */
 export interface EndpointModel {
@@ -165,6 +166,10 @@ export async function readProviderModels(
   } catch {
     throw new Error(`'${baseUrl}' is not a URL`);
   }
+  // An HTTP client's failure can quote the request it made, headers and all.
+  // The token is the one thing that text must never carry on to a log or the
+  // phone, so every form of it that was sent is removed before anyone sees it.
+  const sent = [options.token, ...Object.values(options.headers ?? {})];
   let response: Awaited<ReturnType<HttpGet>>;
   try {
     response = await options.httpGet(url, {
@@ -172,7 +177,8 @@ export async function readProviderModels(
       ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
     });
   } catch (error) {
-    throw new Error(`${url} could not be read (${error instanceof Error ? error.message : String(error)})`);
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`${url} could not be read (${redactSecrets(reason, sent)})`);
   }
   if (response.status === 401 || response.status === 403) {
     throw new Error(`the provider refused the token (HTTP ${response.status})`);
