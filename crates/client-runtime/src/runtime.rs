@@ -1393,6 +1393,13 @@ impl Loop {
     /// until the next reconnect; the stall sweep bounds that by the cycle's
     /// own attempt count.
     fn check_sync_stalls(&mut self) {
+        // A cycle can only be served over a live socket, and this runs after
+        // the same tick may just have failed the connection into
+        // WaitingRetry: publishing there would burn an attempt on a dead
+        // socket. Reconnects reset in-flight cycles anyway.
+        if self.conn.status != ConnectionStatus::Connected {
+            return;
+        }
         let now = self.clock.now_ms();
         for (machine, effect) in self.stores.transcript.stall_sweep(now) {
             self.on_send(machine, sync_effect_to_cmd(effect), None);
