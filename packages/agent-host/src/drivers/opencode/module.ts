@@ -7,6 +7,7 @@
  * It is the agent a fresh bridge installs by itself: one coding agent that
  * works with any provider the user brings.
  */
+import * as path from 'node:path';
 import { installBinary, installedBinary, removeBinary } from '../../install/agentInstall';
 import type { DriverEnv, DriverModule } from '../../sdk/module';
 import { providerHttp } from '../../sdk/net';
@@ -37,6 +38,8 @@ export const openCodeModule: DriverModule = {
       ...(port !== undefined && Number.isInteger(port) ? { port } : {}),
       log: ctx.log,
       providerHttp,
+      // Beside the installed agents: it outlives a bridge restart the same way.
+      ...(ctx.cacheDir ? { catalogCache: path.join(ctx.cacheDir, 'opencode-catalog.json') } : {}),
     });
   },
   runtime: {

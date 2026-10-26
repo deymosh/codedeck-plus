@@ -125,6 +125,14 @@ the bridge's server: its sessions end and the bridge resumes each on the new
 server, where OpenCode still has the conversation (the transcript shows a
 restart notice). An external server gets no profiles.
 
+A bridge start does not cost that restart. The part of OpenCode's catalog the
+profiles were placed by (providers, their endpoints, the profiles' models —
+no keys) is kept beside the installed agents as `opencode-catalog.json`, so
+the server waits for the profiles and starts once, with them. Once it is up
+its own catalog is read again, and only a placement that changed with it (a
+new OpenCode release, a provider signed in to meanwhile) restarts it. The
+first start on a machine, with nothing kept yet, still starts twice.
+
 ## When a provider fails
 
 OpenCode retries a provider that fails, waiting longer each time (about a

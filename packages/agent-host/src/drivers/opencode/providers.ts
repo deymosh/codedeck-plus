@@ -62,9 +62,12 @@ export interface Served {
   ids: ReadonlySet<string>;
   /** Those that are a profile's own provider, not one of the catalog's. */
   own: ReadonlySet<string>;
+  /** The models profiles added to providers OpenCode knows, by
+   *  `<providerID>/<modelID>`. */
+  models: ReadonlySet<string>;
 }
 
-export const NOTHING_SERVED: Served = { ids: new Set(), own: new Set() };
+export const NOTHING_SERVED: Served = { ids: new Set(), own: new Set(), models: new Set() };
 
 /** The provider id a profile of its own takes: its name's, or its id's
  *  when the name has no letter or digit. */
@@ -110,12 +113,35 @@ export function placeProfiles(
   return { placed, refused };
 }
 
-/** What `placed` makes of a running server's providers. */
-export function servedBy(placed: Placement[]): Served {
+/** What `placed`, configured against `catalog`, makes of a running server's
+ *  providers. */
+export function servedBy(placed: Placement[], catalog: Catalog = EMPTY_CATALOG): Served {
   return {
     ids: new Set(placed.map((p) => p.providerId)),
     own: new Set(placed.filter((p) => !p.known).map((p) => p.providerId)),
+    models: new Set(placed.flatMap((p) => (p.known ? extraModels(p.profile, p.known, catalog).map((m) => `${p.providerId}/${m.id}`) : []))),
   };
+}
+
+/**
+ * `catalog` as OpenCode has it without what the profiles in `served` added:
+ * a running server lists their providers, their models, and the providers
+ * they signed in to as connected. Placed against what it lists, a profile
+ * would find itself; placed against this, it lands where it did on a server
+ * started without any.
+ */
+export function withoutProfiles(catalog: Catalog, served: Served): Catalog {
+  return {
+    providers: new Map([...catalog.providers].filter(([id]) => !served.own.has(id))),
+    models: new Map([...catalog.models].filter(([key, model]) => !served.own.has(model.providerID) && !served.models.has(key))),
+    connected: new Set([...catalog.connected].filter((id) => !served.ids.has(id))),
+  };
+}
+
+/** The models of a profile signing in to `known` that its catalog lacks:
+ *  the catalog's models stand, and these join them. */
+function extraModels(profile: ProviderBinding, known: ProviderInfo, catalog: Catalog): ProviderModel[] {
+  return profile.models.filter((m) => !catalog.models.has(`${known.id}/${m.id}`));
 }
 
 /** The variable profile `index`'s token reaches the server in. */
@@ -130,8 +156,7 @@ function providerEntry(placement: Placement, index: number, catalog: Catalog, se
   const { profile, known } = placement;
   const apiKey = `{env:${tokenVariable(index)}}`;
   if (known) {
-    // The catalog's models stand; the endpoint's others join them.
-    const extra = profile.models.filter((m) => !catalog.models.has(`${known.id}/${m.id}`));
+    const extra = extraModels(profile, known, catalog);
     return {
       name: profile.label || known.name,
       settings: { apiKey },
@@ -214,9 +239,10 @@ function operatorConfig(baseEnv: NodeJS.ProcessEnv): Record<string, unknown> {
   }
 }
 
-/** What makes two placements need different servers: everything their
- *  config is built from. Hashed, so the tokens are not kept around in it. */
-export function providersFingerprint(placed: Placement[]): string {
-  const parts = placed.map(({ profile: p, providerId }) => [providerId, p.id, p.label, p.baseUrl, p.authToken, p.models]);
+/** What makes two placements need different servers: the provider config
+ *  each would start one with — which the catalog fills in — and the tokens
+ *  beside it. Hashed, so the tokens are not kept around in it. */
+export function providersFingerprint(placed: Placement[], catalog: Catalog): string {
+  const parts = [providersConfig(placed, catalog), placed.map((p) => p.profile.authToken)];
   return createHash('sha256').update(JSON.stringify(parts)).digest('hex');
 }
