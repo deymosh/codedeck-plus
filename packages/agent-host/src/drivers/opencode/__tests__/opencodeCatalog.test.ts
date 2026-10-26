@@ -89,14 +89,21 @@ describe('an OpenCode driver reading its 2.x server', () => {
     provider('opencode', 'OpenCode', 'https://opencode.ai/inference/openai/v1', 'enabled'),
     provider('opencode-go', 'OpenCode Go', 'https://opencode.ai/inference/go/openai/v1'),
     provider('openrouter', 'OpenRouter', 'https://openrouter.ai/api/v1'),
+    provider('b', 'B', 'https://b.example/v1'),
+    provider('a', 'A', 'https://a.example/v1'),
   ];
+
+  /** Providers whose description fails, as a request can. */
+  const failing = new Set<string>();
 
   /** A server that registers its providers after `quietPolls` asks, lists
    *  the ones it can use and those its config adds, and describes the rest
    *  only when asked for one. */
   function serverFor(config: { providers?: Record<string, { name?: string; settings?: { baseURL?: string } }> }, quietPolls = 0) {
     let polls = 0;
-    const added = Object.entries(config.providers ?? {}).map(([id, p]) => provider(id, p.name ?? id, p.settings?.baseURL ?? '', 'enabled'));
+    // A provider the config signs in to keeps the endpoint the catalog gives it.
+    const endpoint = (id: string) => KNOWN.find((p) => p.id === id)?.settings?.baseURL as string | undefined;
+    const added = Object.entries(config.providers ?? {}).map(([id, p]) => provider(id, p.name ?? id, p.settings?.baseURL ?? endpoint(id) ?? '', 'enabled'));
     const all = new Map([...KNOWN, ...added].map((p) => [p.id, p]));
     const usable = () => (polls++ < quietPolls ? [] : [...all.values()].filter((p) => p.activation === 'enabled'));
     const at = { location: { directory: '/tmp' } };
@@ -105,6 +112,9 @@ describe('an OpenCode driver reading its 2.x server', () => {
       provider: {
         list: async () => ({ ...at, data: usable() }),
         get: async ({ providerID }: { providerID: string }) => {
+          if (failing.has(providerID)) throw new Error('fetch failed');
+          // Answers come back in any order.
+          await new Promise((resolve) => setTimeout(resolve, providerID === 'opencode-go' ? 5 : 0));
           const found = all.get(providerID);
           if (!found) throw Object.assign(new Error('Provider not found'), { name: 'ProviderNotFoundError' });
           return { ...at, data: found };
@@ -197,6 +207,38 @@ describe('an OpenCode driver reading its 2.x server', () => {
     expect(next.starts).toHaveLength(1);
     expect(next.get).not.toHaveBeenCalled();
     expect(next.starts[0]!.env!.OPENCODE_CONFIG_CONTENT).toBe(first.starts[1]!.env!.OPENCODE_CONFIG_CONTENT);
+    await driver.shutdown();
+  });
+
+  it('fills a model in from the same provider whichever answer comes back first', async () => {
+    // Two providers list the same model id with different limits: the one a
+    // profile model without an upstream is filled in from may not depend on
+    // the order provider.get answered in, or an unchanged list restarts.
+    const twice = {
+      b: { id: 'b', name: 'B', models: { m: { id: 'm', name: 'M', tool_call: true, limit: { context: 2_000, output: 2 } } } },
+      a: { id: 'a', name: 'A', models: { m: { id: 'm', name: 'M', tool_call: true, limit: { context: 1_000, output: 1 } } } },
+    };
+    const get = vi.fn(async () => ({ status: 200, text: JSON.stringify(twice) }));
+    const { driver: created, starts } = managed({ get });
+    const driver = await created;
+    const ccr: ProviderBinding = { id: 'ccr', label: 'CCR', baseUrl: 'http://192.168.1.2:3458', authToken: 'tok', models: [{ id: 'm' }] };
+    await driver.setProviders([ccr]);
+    expect(configOf(starts[1]!).providers.ccr!.models!.m!.limit).toEqual({ context: 1_000, output: 1 });
+    await driver.shutdown();
+  });
+
+  it('keeps the catalog it has when a provider cannot be described', async () => {
+    const { driver: created, starts } = managed();
+    const driver = await created;
+    const openrouter: ProviderBinding = { id: 'or', label: 'My OR', baseUrl: 'https://openrouter.ai/api', authToken: 'tok', models: [{ id: 'plain/chat' }] };
+    await driver.setProviders([openrouter]);
+    expect(starts).toHaveLength(2);
+    // The next read cannot describe a provider: that is no reason to place
+    // the profiles any differently, and restart for it.
+    failing.add('opencode-go');
+    await driver.setProviders([openrouter]);
+    expect(starts).toHaveLength(2);
+    failing.clear();
     await driver.shutdown();
   });
 

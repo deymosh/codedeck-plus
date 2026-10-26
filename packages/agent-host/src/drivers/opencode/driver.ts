@@ -1709,10 +1709,12 @@ export interface OpenCodeDriverOptions {
 export const CATALOG_WAIT_MS = 3_000;
 
 /** Wait for a just-started server to list a provider, at most `waitMs`. A
- *  server that cannot be asked has nothing to wait for. */
-async function catalogRegistered(client: OpenCodeClient, waitMs: number): Promise<void> {
+ *  server that cannot be asked, or a host shutting down, has nothing to wait
+ *  for. (One whose config disables every provider never lists one: it costs
+ *  the whole wait, once per start.) */
+async function catalogRegistered(client: OpenCodeClient, waitMs: number, stopped: () => boolean): Promise<void> {
   const deadline = Date.now() + waitMs;
-  while (Date.now() < deadline) {
+  while (Date.now() < deadline && !stopped()) {
     try {
       if ((await client.provider.list()).data.length > 0) return;
     } catch {
@@ -1938,7 +1940,7 @@ export class OpenCodeDriver implements Driver {
     this.options.log(`[opencode] started ${server.url} (pid ${server.pid ?? '?'})${added}`);
     const client = this.connect({ baseUrl: server.url, headers: setup.headers });
     // Nothing reads the providers or the models before they are there.
-    await catalogRegistered(client, this.options.catalogWaitMs ?? CATALOG_WAIT_MS);
+    await catalogRegistered(client, this.options.catalogWaitMs ?? CATALOG_WAIT_MS, () => this.stopped);
     // Everything waits on this start (the client promise), so nothing reads
     // the models before they are current.
     if (firstStart) {
@@ -2035,7 +2037,9 @@ export class OpenCodeDriver implements Driver {
     const first = this.firstProviders;
     if (first) {
       // The first start is waiting for these: it starts with them, placed
-      // against the kept catalog, and is checked against its own below.
+      // against the kept catalog — filled in first, so that a refresh due
+      // now is not a restart later — and is checked against its own below.
+      this.catalog = await this.fillIn(usable, this.catalog);
       this.placed = placeProfiles(usable, this.catalog).placed;
       first();
     }
@@ -2047,10 +2051,10 @@ export class OpenCodeDriver implements Driver {
     const read = await this.readCatalog();
     const live = read && withoutProfiles(read, this.serving);
     // It keeps what models.dev filled in, which no server lists. A server
-    // started from the kept catalog that cannot say otherwise keeps that
-    // catalog: a restart would only place the profiles knowing less.
-    const known = live ? { ...withModels(live, this.catalog.models), ...filled(this.catalog) } : first ? this.catalog : EMPTY_CATALOG;
-    const catalog = await this.fillIn(usable, known);
+    // that cannot say keeps the catalog it was configured from: a restart
+    // would only place the profiles knowing less.
+    const known = live ? { ...withModels(live, this.catalog.models), ...filled(this.catalog) } : this.catalog;
+    const catalog = await this.fillIn(usable, known, live);
     const { placed, refused } = placeProfiles(usable, catalog);
     this.placed = placed;
     this.catalog = catalog;
@@ -2074,7 +2078,7 @@ export class OpenCodeDriver implements Driver {
   /** `catalog` with the models.dev records of the profiles' own models it
    *  does not describe — asked for once per process, and not again for a
    *  day once it has filled a catalog in. */
-  private async fillIn(profiles: ProviderBinding[], catalog: Catalog): Promise<Catalog> {
+  private async fillIn(profiles: ProviderBinding[], catalog: Catalog, live?: Catalog): Promise<Catalog> {
     const source = modelsDevSource(process.env);
     const http = this.options.providerHttp;
     if (!source || !http) return catalog;
@@ -2090,7 +2094,10 @@ export class OpenCodeDriver implements Driver {
       this.modelsDev = undefined;
       return catalog;
     }
-    return { ...withModels(catalog, listed), filledAt: Date.now() };
+    // A fresh list replaces what an earlier one filled in; what the server
+    // itself describes stands over both. The day counts whether or not the
+    // list had the model: one it lacks is not asked about again until then.
+    return { ...catalog, models: new Map([...catalog.models, ...listed, ...(live?.models ?? [])]), filledAt: Date.now() };
   }
 
   /** The running server's catalog (catalog.ts). None when it cannot say:
@@ -2109,12 +2116,18 @@ export class OpenCodeDriver implements Driver {
         try {
           const provider = (await client.provider.get({ providerID: id })).data;
           providers.set(provider.id, provider);
-        } catch {
-          // An integration that is no model provider (a web search).
+        } catch (err) {
+          // An integration that is no model provider (a web search) is not
+          // found; any other failure leaves the read incomplete, and a
+          // provider missing from it would move the profiles placed by it.
+          if (!isNotFound(err)) throw err;
         }
       });
       return {
-        providers,
+        // By id: the first provider listing a model is the one a profile
+        // model is filled in from, so the order may not depend on which
+        // answer came back first.
+        providers: new Map([...providers].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))),
         models: new Map(models.data.map((m) => [`${m.providerID}/${m.modelID}`, serverModel(m)])),
         connected: new Set(available.data.map((p) => p.id)),
       };
