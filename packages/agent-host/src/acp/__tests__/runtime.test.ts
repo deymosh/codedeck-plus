@@ -75,4 +75,22 @@ describe('AcpRuntime process reuse', () => {
     fresh.release();
     await runtime.close();
   });
+
+  it('closes a superseded process at shutdown even while its session still runs', async () => {
+    let version = 0;
+    const runtime = new TestRuntime(() => version);
+    const events: AcpProcessEvents = { ended: () => {} };
+    const old = await runtime.acquire({ A: '1' }, events);
+    version = 1;
+    const fresh = await runtime.acquire({ A: '1' }, events);
+
+    // The host shuts down without waiting for sessions to release: both
+    // processes must go, not just the one the map still names.
+    await runtime.close();
+    expect(runtime.agents).toHaveLength(2);
+    expect(runtime.agents[0]!.child.killed).toContain('SIGTERM');
+    expect(runtime.agents[1]!.child.killed).toContain('SIGTERM');
+    expect(old.alive).toBe(false);
+    expect(fresh.alive).toBe(false);
+  });
 });

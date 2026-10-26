@@ -293,6 +293,10 @@ class AgentProcess<H> implements AcpProcess<H> {
  */
 export abstract class AcpRuntime<H = undefined, E extends AcpProcessEvents = AcpProcessEvents> {
   private readonly contexts = new Map<string, Context<H>>();
+  /** Contexts replaced by a newer configuration version. Their own sessions
+   *  still hold them, so they are not the map's any more; they are kept here
+   *  until the last session lets go, so `close()` can still close them. */
+  private readonly superseded = new Set<Context<H>>();
   protected readonly log: (message: string) => void;
   private stopping = false;
 
@@ -333,8 +337,9 @@ export abstract class AcpRuntime<H = undefined, E extends AcpProcessEvents = Acp
   /** Close every process. Called on host shutdown. */
   async close(): Promise<void> {
     this.stopping = true;
-    const contexts = [...this.contexts.values()];
+    const contexts = [...this.contexts.values(), ...this.superseded];
     this.contexts.clear();
+    this.superseded.clear();
     await Promise.all(
       contexts.map(async (context) => {
         context.closing = true;
@@ -373,7 +378,15 @@ export abstract class AcpRuntime<H = undefined, E extends AcpProcessEvents = Acp
         clearTimeout(existing.timer);
         existing.timer = undefined;
       }
-      if (existing.sessions === 0) void existing.live?.close();
+      existing.closing = true;
+      if (existing.sessions === 0) {
+        this.forget(key, existing);
+        void existing.live?.close();
+      } else {
+        // Sessions still on it will release it; until then the host's
+        // shutdown has to be able to find it.
+        this.superseded.add(existing);
+      }
     }
     const context: Context<H> = { key, version, opened: undefined as never, sessions: 0, closing: false };
     this.contexts.set(key, context);
@@ -434,10 +447,14 @@ export abstract class AcpRuntime<H = undefined, E extends AcpProcessEvents = Acp
    *  the next session starts a new one. */
   private forget(key: string, context: Context<H>, process_?: AgentProcess<H>): void {
     const current = this.contexts.get(key);
-    if (current !== context) return;
-    if (process_ && current.live && current.live !== process_) return;
-    if (current.timer) clearTimeout(current.timer);
-    this.contexts.delete(key);
+    if (current === context) {
+      if (process_ && current.live && current.live !== process_) return;
+      if (current.timer) clearTimeout(current.timer);
+      this.contexts.delete(key);
+    }
+    // A superseded context is not in the map: once it is forgotten (closed or
+    // its start failed) nothing else may try to close it again.
+    this.superseded.delete(context);
   }
 
   /** One session let go: close the process once nobody is using it, after a
