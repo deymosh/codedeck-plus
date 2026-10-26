@@ -179,7 +179,7 @@ describe('Claude session lifecycle', () => {
       await vi.advanceTimersByTimeAsync(PROBE_TIMEOUT_MS);
       expect(ctx.events.find((e) => e.type === 'ended')).toMatchObject({
         type: 'ended',
-        error: expect.stringMatching(/did not respond within 60s/),
+        error: expect.stringMatching(/did not respond within 120s/),
       });
     } finally {
       vi.useRealTimers();

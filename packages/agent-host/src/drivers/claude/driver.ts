@@ -71,8 +71,10 @@ const DEFAULT_MODE = 'plan';
 const DEFAULT_EFFORT = 'medium';
 /** How long a fresh session's control-channel probe may take before the CLI
  *  is taken to be unresponsive: a session that never confirms would
- *  otherwise neither report `ready` nor end. */
-export const PROBE_TIMEOUT_MS = 60_000;
+ *  otherwise neither report `ready` nor end. Generous because the first
+ *  start also pays for extracting the binary (and an antivirus scan of it on
+ *  Windows); the same bound as the ACP `initialize` handshake. */
+export const PROBE_TIMEOUT_MS = 120_000;
 
 export const CLAUDE_MODES: OptionChoice[] = [
   { id: 'plan', label: 'Plan', description: 'Plan first; nothing runs until you approve the plan' },
