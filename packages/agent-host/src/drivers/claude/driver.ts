@@ -69,6 +69,10 @@ const DEFAULT_MODE = 'plan';
 /** Opus 5.5's own default, set explicitly so every session's effort is
  *  known rather than left to whatever the model or CLI picks. */
 const DEFAULT_EFFORT = 'medium';
+/** How long a fresh session's control-channel probe may take before the CLI
+ *  is taken to be unresponsive: a session that never confirms would
+ *  otherwise neither report `ready` nor end. */
+export const PROBE_TIMEOUT_MS = 60_000;
 
 export const CLAUDE_MODES: OptionChoice[] = [
   { id: 'plan', label: 'Plan', description: 'Plan first; nothing runs until you approve the plan' },
@@ -295,14 +299,29 @@ export class ClaudeSession implements DriverSession {
     } else {
       // The SDK emits `init` only after the first user message, so a fresh
       // idle session is confirmed by a control-channel round trip instead.
-      handle.probeReady().then(
-        () => this.markReady(),
-        (err) => {
-          if (!this.ready) this.finish(`SDK session did not respond: ${err}`);
-        },
-      );
+      this.probe(handle);
     }
     this.consuming = this.consume(handle).catch((err) => this.finish(`SDK stream consumer failed: ${err}`));
+  }
+
+  /** Confirm a fresh session with the control channel, bounded: a CLI that
+   *  never answers leaves the session with neither `ready` nor `ended`, so
+   *  past the deadline it is ended with a reason the phone can show. */
+  private probe(handle: SdkSessionHandle): void {
+    const timer = setTimeout(() => {
+      if (!this.ready) this.finish(`SDK session did not respond within ${PROBE_TIMEOUT_MS / 1000}s`);
+    }, PROBE_TIMEOUT_MS);
+    timer.unref?.();
+    handle.probeReady().then(
+      () => {
+        clearTimeout(timer);
+        this.markReady();
+      },
+      (err) => {
+        clearTimeout(timer);
+        if (!this.ready) this.finish(`SDK session did not respond: ${err}`);
+      },
+    );
   }
 
   private markReady(): void {

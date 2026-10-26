@@ -7,9 +7,9 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { ClaudeMcp } from '../mcp';
-import { ClaudeDriver, PLAN_APPROVAL_OPTIONS, unsupportedModelReason } from '../driver';
+import { ClaudeDriver, PLAN_APPROVAL_OPTIONS, PROBE_TIMEOUT_MS, unsupportedModelReason } from '../driver';
 import type {
   ModelDiscoveryOptions,
   SdkCanUseTool,
@@ -168,6 +168,22 @@ describe('Claude session lifecycle', () => {
     facade.nextProbe = Promise.reject(new Error('spawn ENOENT'));
     const { ctx } = start({}, {}, facade);
     expect((await ctx.ended()).error).toMatch(/did not respond.*spawn ENOENT/);
+  });
+
+  it('a probe that never answers ends the session instead of waiting for ever', async () => {
+    vi.useFakeTimers();
+    try {
+      const facade = new ScriptedFacade();
+      facade.nextProbe = new Promise<void>(() => {});
+      const { ctx } = start({}, {}, facade);
+      await vi.advanceTimersByTimeAsync(PROBE_TIMEOUT_MS);
+      expect(ctx.events.find((e) => e.type === 'ended')).toMatchObject({
+        type: 'ended',
+        error: expect.stringMatching(/did not respond within 60s/),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('init reports the conversation id, the resolved model and the actual mode', async () => {
