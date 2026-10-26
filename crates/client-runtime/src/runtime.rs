@@ -1149,8 +1149,10 @@ impl Loop {
                     log::info!("core: Start (status was {:?})", self.conn.status);
                     // A stop still waiting on its `away` is taken back.
                     self.stop_epoch += 1;
+                    // The transition into `Connecting` arms the watchdog; a
+                    // second start while already connecting/connected leaves
+                    // the one already armed alone.
                     self.dispatch(ConnectionEvent::ConnectRequested);
-                    self.arm_stale_watchdog();
                     self.links_on = true;
                     self.sync_direct_links();
                     self.sync_backup_sub();
@@ -1266,9 +1268,7 @@ impl Loop {
                     self.check_connected_relays_changed();
                     self.check_sync_stalls();
                     self.renew_presence();
-                    if self.conn.status != ConnectionStatus::Stopped {
-                        self.arm_stale_watchdog();
-                    }
+                    self.sync_stale_watchdog();
                 }
                 Msg::RelayEvent(event) => self.on_relay_event(event).await,
                 Msg::NoteStoredSeen(ts) => {
@@ -1356,6 +1356,9 @@ impl Loop {
             self.observer
                 .connection_changed(self.conn.status, self.conn.needs_pairing_check, &connected);
             self.state_changed(SliceId::Connection);
+        }
+        if after.0 != before.0 {
+            self.sync_stale_watchdog();
         }
     }
 
@@ -1514,6 +1517,22 @@ impl Loop {
             let _ = tx.send(msg);
         })
         .abort_handle()
+    }
+
+    /// Keep the watchdog armed exactly where it has work to do: expire a
+    /// connect attempt, check a live socket's heartbeats and relays, renew
+    /// presence, re-drive silent sync cycles. A hidden app ("paused") is
+    /// still `Connected` — its foreground service keeps the socket — so
+    /// pausing must NOT disarm it: a dead subscription detected while the
+    /// user is not looking is what keeps notifications arriving. Offline,
+    /// WaitingRetry, Idle and Stopped have no socket and no cycle in flight;
+    /// their own online/retry/start events re-arm it.
+    fn sync_stale_watchdog(&mut self) {
+        if stale_watchdog_needed(self.conn.status) {
+            self.arm_stale_watchdog();
+        } else {
+            abort(&mut self.stale_timer);
+        }
     }
 
     fn arm_stale_watchdog(&mut self) {
@@ -2731,6 +2750,12 @@ impl FileSendCtx {
         }
     }
 
+}
+
+/// The watchdog has useful work only while an attempt is in flight or a
+/// socket is live.
+fn stale_watchdog_needed(status: ConnectionStatus) -> bool {
+    matches!(status, ConnectionStatus::Connecting | ConnectionStatus::Connected)
 }
 
 /// True when a `Connecting` attempt has outlived [`CONNECT_DEADLINE_MS`].

@@ -743,6 +743,24 @@ async fn a_socket_drop_backs_off_and_reconnects() {
         .await;
 }
 
+#[test]
+fn the_watchdog_is_armed_only_where_it_has_work() {
+    for status in [
+        ConnectionStatus::Idle,
+        ConnectionStatus::Connecting,
+        ConnectionStatus::Connected,
+        ConnectionStatus::WaitingRetry,
+        ConnectionStatus::Offline,
+        ConnectionStatus::Stopped,
+    ] {
+        assert_eq!(
+            stale_watchdog_needed(status),
+            matches!(status, ConnectionStatus::Connecting | ConnectionStatus::Connected),
+            "{status:?}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn a_connect_that_never_reaches_eose_is_abandoned_and_retried() {
     LocalSet::new()
