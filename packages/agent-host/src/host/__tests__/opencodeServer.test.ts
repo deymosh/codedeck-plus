@@ -61,7 +61,13 @@ function fakeClient(stream: () => AsyncGenerator<Record<string, unknown>>): Open
     message: { list: vi.fn(async () => ({ data: [], cursor: {} })) },
     command: { list: vi.fn(async () => ({ location: { directory: '/tmp' }, data: [] })) },
     mcp: { list: vi.fn(async () => ({ location: { directory: '/tmp' }, data: [] })) },
-    provider: { list: vi.fn(async () => ({ location: { directory: '/tmp' }, data: [] })) },
+    // A server lists the provider it can use once it has registered it.
+    provider: {
+      list: vi.fn(async () => ({
+        location: { directory: '/tmp' },
+        data: [{ id: 'opencode', name: 'OpenCode', activation: 'enabled', package: '@opencode/ai/providers/openai-compatible' }],
+      })),
+    },
     model: {
       list: vi.fn(async () => ({
         location: { directory: '/tmp' },
