@@ -533,6 +533,8 @@ export class OpenCodeSession implements DriverSession {
 
   /** Resolves once the OpenCode session exists server-side. */
   private readonly ready: Promise<{ client: OpenCodeClient; session: SessionInfo }>;
+  /** Whether the server it runs on is up: until then nothing runs on it. */
+  private serverUp = false;
   private readonly catalog: () => Promise<OpenCodeCatalog>;
 
   constructor(
@@ -553,6 +555,10 @@ export class OpenCodeSession implements DriverSession {
     // A level the model lacks is ignored by OpenCode: the session starts on
     // the model's default rather than failing.
     this.variant = params.effort && params.effort !== DEFAULT_VARIANT ? params.effort : undefined;
+    clientPromise.then(
+      () => (this.serverUp = true),
+      () => {},
+    );
     this.ready = this.init(clientPromise, params);
     // init() reports its own failure as `ended`; nothing else awaits this
     // rejection except prompt/interrupt, which catch it themselves.
@@ -1635,6 +1641,10 @@ export class OpenCodeSession implements DriverSession {
     this.partials.reset();
     // The session is gone from this client: no shell event will arrive for it.
     this.shells.clear();
+    // A server still to start (waiting for its provider profiles, or being
+    // installed) runs nothing of this session's, and may not start before
+    // the host stops waiting on this end.
+    if (!this.serverUp) return;
     try {
       const { client, session } = await this.ready;
       await client.session.interrupt({ sessionID: session.id });

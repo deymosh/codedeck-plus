@@ -271,8 +271,15 @@ describe('an OpenCode driver with a kept catalog', () => {
   it('starts nothing when shut down while waiting', async () => {
     const file = cacheFile();
     writeCatalogCache(file, catalog, [], () => {});
+    // Written over, as every set-providers does.
+    writeCatalogCache(file, catalog, [], () => {});
     const { driver: created, starts } = managed(file);
     const driver = await created;
+    const session = driver.startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp', resume: 'n1' }, recordingContext());
+    // The host ends its sessions before it shuts the driver down: an end
+    // must not wait for a server that is waiting for its profiles.
+    const ended = await Promise.race([session.end().then(() => true), new Promise((resolve) => setTimeout(() => resolve(false), 1_000))]);
+    expect(ended).toBe(true);
     await driver.shutdown();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(starts).toHaveLength(0);

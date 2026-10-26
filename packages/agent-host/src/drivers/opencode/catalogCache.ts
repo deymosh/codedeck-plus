@@ -61,15 +61,15 @@ export function catalogSnapshot(catalog: Catalog, placed: Placement[]): unknown 
 }
 
 /** Keep `catalog` and the placement made against it for the next start.
- *  Best effort: without the file, the next start is simply a slower one. */
+ *  Best effort: without the file, the next start is simply a slower one.
+ *  Written in place, not renamed into it: the agent cache can sit on a
+ *  filesystem that refuses to rename a file it has just seen written (see
+ *  agentInstall.ts), and a file cut short reads as no cache at all. */
 export function writeCatalogCache(file: string, catalog: Catalog, placed: Placement[], log: (message: string) => void): void {
-  const temporary = `${file}.${process.pid}.tmp`;
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(temporary, JSON.stringify(catalogSnapshot(catalog, placed)));
-    fs.renameSync(temporary, file);
+    fs.writeFileSync(file, JSON.stringify(catalogSnapshot(catalog, placed)));
   } catch (err) {
-    fs.rmSync(temporary, { force: true });
     log(`[opencode] could not keep its provider catalog for the next start: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
