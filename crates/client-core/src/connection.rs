@@ -34,6 +34,10 @@ pub struct ReconnectConfig {
     pub max_ms: u64,
     pub jitter_fraction: f64,
     pub heartbeat_stale_after_ms: u64,
+    /// How long a connect attempt may stay `Connecting` before it counts as
+    /// dead. `SocketOpen` is EOSE, so this has to cover the dial, NIP-42 AUTH
+    /// and the initial REQs; it scales with the transport's own slowness.
+    pub connect_deadline_ms: u64,
 }
 
 pub const DEFAULT_RECONNECT_CONFIG: ReconnectConfig = ReconnectConfig {
@@ -41,6 +45,7 @@ pub const DEFAULT_RECONNECT_CONFIG: ReconnectConfig = ReconnectConfig {
     max_ms: RECONNECT_MAX_MS,
     jitter_fraction: RECONNECT_JITTER_FRACTION,
     heartbeat_stale_after_ms: HEARTBEAT_STALE_AFTER_MS,
+    connect_deadline_ms: 45_000,
 };
 
 pub const TOR_RECONNECT_CONFIG: ReconnectConfig = ReconnectConfig {
@@ -48,6 +53,7 @@ pub const TOR_RECONNECT_CONFIG: ReconnectConfig = ReconnectConfig {
     max_ms: 60_000,
     jitter_fraction: RECONNECT_JITTER_FRACTION,
     heartbeat_stale_after_ms: 240_000,
+    connect_deadline_ms: 90_000,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -435,6 +441,15 @@ mod tests {
         assert_eq!(d(3), 16_000);
         assert_eq!(d(4), RECONNECT_MAX_MS);
         assert_eq!(d(50), RECONNECT_MAX_MS);
+    }
+
+    #[test]
+    fn the_tor_config_scales_the_connect_deadline_with_the_slower_transport() {
+        const { assert!(DEFAULT_RECONNECT_CONFIG.connect_deadline_ms == 45_000) };
+        const { assert!(TOR_RECONNECT_CONFIG.connect_deadline_ms == 90_000) };
+        const { assert!(TOR_RECONNECT_CONFIG.connect_deadline_ms > DEFAULT_RECONNECT_CONFIG.connect_deadline_ms) };
+        // The deadline covers a whole slow dial, so it exceeds the backoff cap.
+        const { assert!(TOR_RECONNECT_CONFIG.connect_deadline_ms > TOR_RECONNECT_CONFIG.max_ms) };
     }
 
     #[test]

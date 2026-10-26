@@ -43,7 +43,7 @@ use tokio::task::AbortHandle;
 use client_core::notifications::session_notify_tag;
 use client_core::stores::ui::UiEffect;
 
-use crate::dispatch::{PairDeadline, RouteResult, Router, Send as RouteSend, StoreId};
+use crate::dispatch::{sync_effect_to_cmd, PairDeadline, RouteResult, Router, Send as RouteSend, StoreId};
 use crate::intent::{apply as apply_intent, Intent, IntentCtx, IntentResult, SessionFileSend, UndoTimer};
 use crate::nostr_client::{NostrClient, NostrClientHost, NostrEvent};
 use crate::ports::{
@@ -482,6 +482,7 @@ impl Core {
             entropy,
             observer,
             conn: initial_connection_state(),
+            connecting_since: None,
             nostr,
             ws,
             api: BridgeApi::new(),
@@ -541,6 +542,11 @@ impl Core {
     /// A host watches it to fail loudly instead of rendering a dead core.
     pub async fn closed(&self) {
         self.tx.closed().await;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn tick(&self) {
+        let _ = self.tx.send(Msg::StaleWatchdog);
     }
 
     pub fn start(&self) {
@@ -1017,6 +1023,10 @@ struct Loop {
     entropy: Rc<dyn Entropy>,
     observer: Rc<dyn CoreObserver>,
     conn: ConnectionState,
+    /// When the current `Connecting` attempt began (ms); `None` in every other
+    /// status. [`CONNECT_DEADLINE_MS`] turns an attempt that never reaches EOSE
+    /// into the ordinary close/backoff path.
+    connecting_since: Option<u64>,
     nostr: NostrClient<WsTransport, LoopHost>,
     ws: WsTransport,
     api: BridgeApi,
@@ -1133,8 +1143,10 @@ impl Loop {
                     log::info!("core: Start (status was {:?})", self.conn.status);
                     // A stop still waiting on its `away` is taken back.
                     self.stop_epoch += 1;
+                    // The transition into `Connecting` arms the watchdog; a
+                    // second start while already connecting/connected leaves
+                    // the one already armed alone.
                     self.dispatch(ConnectionEvent::ConnectRequested);
-                    self.arm_stale_watchdog();
                     self.links_on = true;
                     self.sync_direct_links();
                     self.sync_backup_sub();
@@ -1245,12 +1257,12 @@ impl Loop {
                     self.dispatch(ConnectionEvent::SocketClose { random });
                 }
                 Msg::StaleWatchdog => {
+                    self.check_connect_deadline();
                     self.check_stale_heartbeats();
                     self.check_connected_relays_changed();
+                    self.check_sync_stalls();
                     self.renew_presence();
-                    if self.conn.status != ConnectionStatus::Stopped {
-                        self.arm_stale_watchdog();
-                    }
+                    self.sync_stale_watchdog();
                 }
                 Msg::RelayEvent(event) => self.on_relay_event(event).await,
                 Msg::NoteStoredSeen(ts) => {
@@ -1327,6 +1339,7 @@ impl Loop {
         let before = (self.conn.status, self.conn.needs_pairing_check);
         let result = connection_reducer(&self.conn, &event, &self.reconnect);
         self.conn = result.state;
+        self.track_connecting_since(before.0);
         for effect in result.effects {
             self.apply(effect);
         }
@@ -1337,6 +1350,59 @@ impl Loop {
             self.observer
                 .connection_changed(self.conn.status, self.conn.needs_pairing_check, &connected);
             self.state_changed(SliceId::Connection);
+        }
+        if after.0 != before.0 {
+            self.sync_stale_watchdog();
+        }
+    }
+
+    /// Start (or keep) the connect-attempt clock only while `Connecting`.
+    fn track_connecting_since(&mut self, was: ConnectionStatus) {
+        match (was, self.conn.status) {
+            (ConnectionStatus::Connecting, ConnectionStatus::Connecting) => {}
+            (_, ConnectionStatus::Connecting) => {
+                self.connecting_since = Some(self.clock.now_ms());
+            }
+            _ => self.connecting_since = None,
+        }
+    }
+
+    /// An attempt that never reached EOSE within the config's connect
+    /// deadline: the socket may be open while AUTH or the initial REQs never
+    /// complete, and nothing else watches `Connecting`. Report it as a lost
+    /// socket so the FSM's normal backoff and retry path runs.
+    fn check_connect_deadline(&mut self) {
+        // A hidden, dozing app is not a slow connect: no time passes against
+        // the attempt while it is paused. The resume that brings it back
+        // re-dials (OpenSocket), which restarts the clock for the new attempt.
+        if !self.conn.visible {
+            return;
+        }
+        let deadline_ms = self.reconnect.connect_deadline_ms;
+        if !connect_attempt_expired(self.conn.status, self.connecting_since, self.clock.now_ms(), deadline_ms) {
+            return;
+        }
+        self.connecting_since = None;
+        log::warn!("connection: no EOSE within {deadline_ms}ms — abandoning the attempt");
+        let random = Some(self.entropy.unit());
+        self.dispatch(ConnectionEvent::SocketClose { random });
+    }
+
+    /// Re-request sessions whose sync cycle has gone silent. A lost
+    /// `sync-request` or `sync-end` would otherwise leave the gap unfilled
+    /// until the next reconnect; the stall sweep bounds that by the cycle's
+    /// own attempt count.
+    fn check_sync_stalls(&mut self) {
+        // A cycle can only be served over a live socket, and this runs after
+        // the same tick may just have failed the connection into
+        // WaitingRetry: publishing there would burn an attempt on a dead
+        // socket. Reconnects reset in-flight cycles anyway.
+        if self.conn.status != ConnectionStatus::Connected {
+            return;
+        }
+        let now = self.clock.now_ms();
+        for (machine, effect) in self.stores.transcript.stall_sweep(now) {
+            self.on_send(machine, sync_effect_to_cmd(effect), None);
         }
     }
 
@@ -1370,6 +1436,11 @@ impl Loop {
     fn apply(&mut self, effect: ConnectionEffect) {
         match effect {
             ConnectionEffect::OpenSocket => {
+                // Every OpenSocket is a real dial — including the FSM's
+                // re-dial when a resume lands in `Connecting` — so the
+                // deadline runs from now, not from when the status first
+                // became `Connecting`.
+                self.connecting_since = Some(self.clock.now_ms());
                 log::info!(
                     "connection: OpenSocket — dialing {} configured relay(s), proxy={:?}",
                     self.ws.relay_count(),
@@ -1459,6 +1530,22 @@ impl Loop {
             let _ = tx.send(msg);
         })
         .abort_handle()
+    }
+
+    /// Keep the watchdog armed exactly where it has work to do: expire a
+    /// connect attempt, check a live socket's heartbeats and relays, renew
+    /// presence, re-drive silent sync cycles. A hidden app ("paused") is
+    /// still `Connected` — its foreground service keeps the socket — so
+    /// pausing must NOT disarm it: a dead subscription detected while the
+    /// user is not looking is what keeps notifications arriving. Offline,
+    /// WaitingRetry, Idle and Stopped have no socket and no cycle in flight;
+    /// their own online/retry/start events re-arm it.
+    fn sync_stale_watchdog(&mut self) {
+        if stale_watchdog_needed(self.conn.status) {
+            self.arm_stale_watchdog();
+        } else {
+            abort(&mut self.stale_timer);
+        }
     }
 
     fn arm_stale_watchdog(&mut self) {
@@ -2676,6 +2763,18 @@ impl FileSendCtx {
         }
     }
 
+}
+
+/// The watchdog has useful work only while an attempt is in flight or a
+/// socket is live.
+fn stale_watchdog_needed(status: ConnectionStatus) -> bool {
+    matches!(status, ConnectionStatus::Connecting | ConnectionStatus::Connected)
+}
+
+/// True when a `Connecting` attempt has outlived `deadline_ms`.
+fn connect_attempt_expired(status: ConnectionStatus, since: Option<u64>, now: u64, deadline_ms: u64) -> bool {
+    status == ConnectionStatus::Connecting
+        && since.is_some_and(|at| now.saturating_sub(at) >= deadline_ms)
 }
 
 fn incoming_of(event: &NostrEvent) -> IncomingEvent<'_> {
