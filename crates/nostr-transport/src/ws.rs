@@ -1063,6 +1063,11 @@ impl WsTransport {
             if st.conns.get(relay).is_none_or(|c| c.generation != generation) {
                 return;
             }
+            // Settled meanwhile (the AUTH deadline elapsed): this signature
+            // answered a challenge the connection no longer has.
+            if st.router.auth_is_settled(relay) {
+                return;
+            }
             st.router.auth_sent(relay, &event.id);
             if let Some(c) = st.conns.get(relay) {
                 c.send(frames::auth_frame(&event));
@@ -2202,6 +2207,33 @@ mod tests {
                 assert_eq!(mock.next_frame().await, first, "the same event, re-sent");
                 mock.push(format!(r#"["OK","{id}",true,""]"#));
                 assert_eq!(handle.await.unwrap().verdict, PublishVerdict::Accepted);
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn a_repeated_auth_challenge_costs_one_identity_signature() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let t = transport(&mock, &phone);
+                t.ensure_connected();
+                wait_until(|| !t.connected_relays().is_empty()).await;
+
+                mock.push(r#"["AUTH","chal-1"]"#.to_string());
+                let first = mock.next_frame().await;
+                assert!(first.starts_with(r#"["AUTH","#), "{first}");
+
+                for challenge in ["chal-2", "chal-3"] {
+                    mock.push(format!(r#"["AUTH","{challenge}"]"#));
+                }
+                assert_eq!(
+                    mock.frame_within(Duration::from_millis(300)).await,
+                    None,
+                    "a repeated challenge must not be signed again"
+                );
+                t.shutdown();
             })
             .await;
     }

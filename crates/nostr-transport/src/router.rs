@@ -134,6 +134,11 @@ struct RelayAuth {
     pending: Option<String>,
     /// The relay's answer to our last AUTH: `Some(true)` accepted.
     accepted: Option<bool>,
+    /// This connection's challenge has been handed to the signer. One
+    /// connection gets at most one identity signature, however often the
+    /// relay repeats its challenge: on the phone the identity may live in a
+    /// signer app that prompts the user for each one.
+    answered: bool,
     /// Subs / events refused with `auth-required:` before AUTH settled.
     waiting_subs: HashSet<String>,
     waiting_events: HashSet<String>,
@@ -311,12 +316,21 @@ impl Router {
     }
 
     /// We answered `relay`'s challenge with the AUTH event `auth_event_id`;
-    /// the relay's `OK` for that id settles it.
+    /// the relay's `OK` for that id settles it. A settled AUTH is never
+    /// reopened: a signature that arrives too late is not an answer to this
+    /// connection anymore.
     pub fn auth_sent(&mut self, relay: &str, auth_event_id: &str) {
         if let Some(a) = self.auth.get_mut(relay) {
-            a.pending = Some(auth_event_id.to_string());
-            a.accepted = None;
+            if a.accepted.is_none() {
+                a.pending = Some(auth_event_id.to_string());
+            }
         }
+    }
+
+    /// Whether `relay`'s AUTH on this connection is already settled — so a
+    /// signature that arrives now must not be sent.
+    pub fn auth_is_settled(&self, relay: &str) -> bool {
+        self.auth.get(relay).is_some_and(|a| a.accepted.is_some())
     }
 
     /// The connection's AUTH deadline elapsed with no answer from the relay.
@@ -395,10 +409,25 @@ impl Router {
                 }
             }
             RelayMessage::Auth { challenge } => {
-                out.push(RouterAction::NeedAuth {
-                    relay: relay.to_string(),
-                    challenge,
-                });
+                let progress = self.auth.get(relay).map(|a| (a.answered, a.accepted));
+                match progress {
+                    // Already answered on this connection — being signed,
+                    // awaiting the relay's OK, accepted, or refused: never a
+                    // second signature. A challenge after acceptance revokes
+                    // nothing; NIP-42 lets a relay rotate challenges, and a
+                    // relay that really wants AUTH again says so with an
+                    // auth-required CLOSED or OK.
+                    Some((true, _)) | Some((_, Some(_))) => {}
+                    _ => {
+                        if let Some(a) = self.auth.get_mut(relay) {
+                            a.answered = true;
+                        }
+                        out.push(RouterAction::NeedAuth {
+                            relay: relay.to_string(),
+                            challenge,
+                        });
+                    }
+                }
             }
             // NOTICE is logged by the socket layer; COUNT / future verbs ignored.
             RelayMessage::Notice { .. } | RelayMessage::Unknown { .. } => {}
@@ -807,6 +836,65 @@ mod tests {
             r.route(R1, RelayMessage::Auth { challenge: "chal".into() }),
             vec![RouterAction::NeedAuth { relay: R1.into(), challenge: "chal".into() }]
         );
+    }
+
+    #[test]
+    fn one_challenge_per_connection_is_answered_and_a_repeat_is_not() {
+        let mut r = Router::new();
+        r.relay_connected(R1);
+        assert_eq!(
+            r.route(R1, RelayMessage::Auth { challenge: "a".into() }),
+            vec![RouterAction::NeedAuth { relay: R1.into(), challenge: "a".into() }]
+        );
+        // A repeat while the first answer is still with the signer costs no
+        // second signature.
+        assert!(r.route(R1, RelayMessage::Auth { challenge: "b".into() }).is_empty());
+        r.auth_sent(R1, "auth-1");
+        // Nor does one while the relay has not answered our AUTH yet.
+        assert!(r.route(R1, RelayMessage::Auth { challenge: "c".into() }).is_empty());
+        r.route(R1, ok("auth-1", true, ""));
+        // A challenge after acceptance is ignored too: the connection stays
+        // authenticated and nothing is signed.
+        assert!(r.route(R1, RelayMessage::Auth { challenge: "d".into() }).is_empty());
+        assert!(r.auth_is_settled(R1));
+        // A fresh connection gets its own answer.
+        r.relay_connected(R1);
+        assert_eq!(
+            r.route(R1, RelayMessage::Auth { challenge: "e".into() }),
+            vec![RouterAction::NeedAuth { relay: R1.into(), challenge: "e".into() }]
+        );
+    }
+
+    #[test]
+    fn a_challenge_after_acceptance_is_ignored_and_the_sub_stays_authenticated() {
+        let mut r = Router::new();
+        r.relay_connected(R1);
+        r.open_sub("s1", &[R1.to_string()]);
+        r.route(R1, RelayMessage::Auth { challenge: "a".into() });
+        r.auth_sent(R1, "auth-1");
+        r.route(R1, closed("s1", "auth-required: x"));
+        // Accepted: the sub is re-sent once.
+        assert_eq!(
+            r.route(R1, ok("auth-1", true, "")),
+            vec![RouterAction::ResubAfterAuth { relay: R1.into(), sub_id: "s1".into() }]
+        );
+
+        // A fresh challenge on the same connection is ignored: no signature,
+        // no refusal, and the connection stays authenticated.
+        assert!(r.route(R1, RelayMessage::Auth { challenge: "again".into() }).is_empty());
+        assert!(r.auth_is_settled(R1));
+        assert_eq!(
+            r.route(R1, RelayMessage::Eose { sub_id: "s1".into() }),
+            vec![RouterAction::Eose { sub_id: "s1".into() }],
+            "the sub is still carried on the relay"
+        );
+
+        // A relay that really wants re-auth refuses with auth-required; after
+        // acceptance that is the existing final "not welcome" path.
+        assert!(r
+            .route(R1, closed("s1", "auth-required: again"))
+            .iter()
+            .any(|a| matches!(a, RouterAction::SubClosed { .. })));
     }
 
     #[test]
