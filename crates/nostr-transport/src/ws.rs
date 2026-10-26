@@ -1055,6 +1055,17 @@ impl WsTransport {
             Ok(event) => event,
             Err(err) => {
                 log::warn!("ws: could not sign the AUTH answer for {relay}: {err}");
+                // No AUTH is in flight, so no deadline will fire: settle what
+                // already waits on this AUTH here, and let a later challenge
+                // on this connection try again.
+                let actions = {
+                    let mut st = self.state.borrow_mut();
+                    if st.conns.get(relay).is_none_or(|c| c.generation != generation) {
+                        return;
+                    }
+                    st.router.auth_sign_failed(relay)
+                };
+                self.apply(actions, None);
                 return;
             }
         };
@@ -1696,6 +1707,70 @@ mod tests {
                 self.0.sign_auth(&relay, &challenge, now_ms).await
             })
         }
+    }
+
+    /// A signer whose first attempt fails (the user dismissed the prompt),
+    /// then signs. The failure is local: no AUTH frame is sent.
+    struct FlakySigner {
+        key: Keypair,
+        attempts: Cell<u32>,
+    }
+    impl AuthSigner for FlakySigner {
+        fn sign_auth(
+            &self,
+            relay: &str,
+            challenge: &str,
+            now_ms: u64,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<SignedEvent, String>> + '_>> {
+            let attempt = self.attempts.get();
+            self.attempts.set(attempt + 1);
+            let (relay, challenge) = (relay.to_string(), challenge.to_string());
+            let key = self.key.clone();
+            Box::pin(async move {
+                if attempt == 0 {
+                    return Err("the user dismissed the prompt".to_string());
+                }
+                key.sign_auth(&relay, &challenge, now_ms).await
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_auth_signature_releases_the_sub_and_a_new_challenge_retries() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let t = WsTransport::new(WsConfig {
+                    relays: vec![mock.url.clone()],
+                    auth: Rc::new(FlakySigner { key: phone.clone(), attempts: Cell::new(0) }),
+                    proxy: None,
+                });
+                t.ensure_connected();
+                let (_sub, seen) = recording_sub(&t, &phone);
+                let _req = mock.next_frame().await;
+
+                // The relay challenges, the signer fails (no AUTH frame), and
+                // the relay refuses the REQ for auth: the sub must not wait on
+                // an answer that will never come.
+                mock.push(r#"["AUTH","chal-1"]"#.to_string());
+                mock.push(r#"["CLOSED","cd-1","auth-required: sign in"]"#.to_string());
+                wait_until(|| seen.closes.get() == 1).await;
+                assert_eq!(seen.eoses.get(), 0);
+
+                // A fresh challenge on the same connection is tried again.
+                mock.push(r#"["AUTH","chal-2"]"#.to_string());
+                let auth = mock.next_frame().await;
+                assert!(auth.starts_with(r#"["AUTH","#), "{auth}");
+                let v: Vec<Value> = serde_json::from_str(&auth).unwrap();
+                assert!(v[1]["tags"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|tag| tag[0] == "challenge" && tag[1] == "chal-2"));
+                t.shutdown();
+            })
+            .await;
     }
 
     #[tokio::test]
