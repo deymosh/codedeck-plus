@@ -15,6 +15,7 @@
  * interleaved line is not worth losing every running session over. A closed
  * stdio is the end: every pending request is rejected and `closed` settles.
  */
+import { StringDecoder } from 'node:string_decoder';
 import type {
   AgentNotificationParamsByMethod,
   AgentRequestParamsByMethod,
@@ -85,6 +86,9 @@ export class AcpClient {
   private unknownRequest: ((method: string, params: unknown) => Promise<unknown> | undefined) | undefined;
   private nextId = 1;
   private buffer = '';
+  /** A character whose bytes straddle two chunks waits in here, so a
+   *  multi-byte UTF-8 sequence is never decoded as U+FFFD. */
+  private readonly decoder = new StringDecoder('utf8');
   private ending: AcpClosed | undefined;
   private readonly done: Promise<AcpClosed>;
   private settleDone!: (closed: AcpClosed) => void;
@@ -96,7 +100,7 @@ export class AcpClient {
     this.done = new Promise((resolve) => {
       this.settleDone = resolve;
     });
-    this.onData = (chunk) => this.receive(chunk.toString());
+    this.onData = (chunk) => this.receive(typeof chunk === 'string' ? chunk : this.decoder.write(chunk));
     this.onEnd = () => this.finish({ error: 'the agent closed its output' });
     this.onError = (error) => this.finish({ error: error.message });
     options.stdout.on('data', this.onData as (chunk: unknown) => void);

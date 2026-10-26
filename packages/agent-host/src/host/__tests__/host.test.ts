@@ -6,12 +6,12 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import type { Driver } from '../../sdk/driver';
 import type { DriverModule } from '../../sdk/module';
 import { FakeDriver } from '../../drivers/fake/driver';
 import { Agents } from '../agents';
-import { AgentHost, parseBridgeFrame } from '../host';
+import { AgentHost, END_SESSION_TIMEOUT_MS, parseBridgeFrame } from '../host';
 import type { AgentInfo } from '../../sdk/types';
 
 interface Frame {
@@ -173,6 +173,81 @@ describe('AgentHost', () => {
     await Promise.all([ending, deleting]);
     expect(log).toEqual(['ended', 'deleted n1 in /w']);
     expect(out.find((f) => f.id === 'd1')).toEqual({ v: 1, id: 'd1', kind: 'ack' });
+  });
+
+  it('end-session settles the ask the session is waiting on, so its end can finish', async () => {
+    let answered!: () => void;
+    const asked = new Promise<void>((resolve) => (answered = resolve));
+    let outcome: string | undefined;
+    let ended = false;
+    const driver: Driver = {
+      info: () => ({ id: 'asker', displayName: 'Asker', modes: [], efforts: [], supports: {} as AgentInfo['supports'], credentials: [] }),
+      startSession: (_params, ctx) => ({
+        prompt: () => {
+          void ctx
+            .requestPermission({
+              requestId: 'r1',
+              toolName: 'Bash',
+              kind: 'execute',
+              title: 'run a command',
+              locations: [],
+              options: [{ id: 'allow', label: 'Allow', kind: 'allow_once' }],
+            })
+            .then((answer) => {
+              outcome = answer.outcome;
+              answered();
+            });
+        },
+        interrupt: async () => {},
+        setOption: async () => {},
+        getUsage: async () => null,
+        end: async () => {
+          await asked;
+          ended = true;
+        },
+      }),
+      listModels: async () => ({ models: [] }),
+    };
+    const out: Frame[] = [];
+    const host = new AgentHost(Agents.of([driver]), { write: (l) => out.push(JSON.parse(l) as Frame), log: () => {} }, '9.9.9');
+    const send = (id: string, kind: string, payload: Record<string, unknown>) =>
+      host.handleLine(JSON.stringify({ v: 1, id, kind, payload }));
+    await send('st', 'start-session', { sessionId: 's1', agent: 'asker', cwd: '/w' });
+    await send('p', 'prompt', { sessionId: 's1', text: 'go' });
+    await vi.waitFor(() => expect(out.some((f) => f.kind === 'request-permission')).toBe(true));
+
+    await send('e', 'end-session', { sessionId: 's1' });
+    expect(out.find((f) => f.id === 'e')).toMatchObject({ kind: 'ack' });
+    expect(outcome).toBe('cancelled');
+    expect(ended).toBe(true);
+  });
+
+  it('end-session acknowledges even when the agent never finishes ending', async () => {
+    vi.useFakeTimers();
+    try {
+      const driver: Driver = {
+        info: () => ({ id: 'stuck', displayName: 'Stuck', modes: [], efforts: [], supports: {} as AgentInfo['supports'], credentials: [] }),
+        startSession: () => ({
+          prompt: () => {},
+          interrupt: async () => {},
+          setOption: async () => {},
+          getUsage: async () => null,
+          end: () => new Promise<void>(() => {}),
+        }),
+        listModels: async () => ({ models: [] }),
+      };
+      const out: Frame[] = [];
+      const host = new AgentHost(Agents.of([driver]), { write: (l) => out.push(JSON.parse(l) as Frame), log: () => {} }, '9.9.9');
+      const send = (id: string, kind: string, payload: Record<string, unknown>) =>
+        host.handleLine(JSON.stringify({ v: 1, id, kind, payload }));
+      await send('st', 'start-session', { sessionId: 's1', agent: 'stuck', cwd: '/w' });
+      const ending = send('e', 'end-session', { sessionId: 's1' });
+      await vi.advanceTimersByTimeAsync(END_SESSION_TIMEOUT_MS);
+      await ending;
+      expect(out.find((f) => f.id === 'e')).toMatchObject({ kind: 'ack' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('deleting a conversation of an agent that keeps none is acknowledged', async () => {

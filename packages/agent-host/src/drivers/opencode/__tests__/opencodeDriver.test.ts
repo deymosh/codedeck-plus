@@ -1280,6 +1280,7 @@ describe('an OpenCode server it starts', () => {
     await create();
     expect(asMock(client.event.subscribe)).not.toHaveBeenCalled();
   });
+
 });
 
 describe('an OpenCode server started for the first time that cannot be asked', () => {

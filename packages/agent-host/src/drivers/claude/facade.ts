@@ -722,7 +722,10 @@ export function buildQueryOptions(
     permissionMode: toClaudePermissionMode(opts.permissionMode),
     abortController,
     canUseTool: opts.canUseTool,
-    settingSources: ['user', 'project'],
+    // `local` is the project's `settings.local.json`, which the driver also
+    // counts as a hook source: leaving it out would run a phone session with
+    // different settings from the user's own terminal in the same project.
+    settingSources: ['user', 'project', 'local'],
     // A hook's answer arrives just before the ask it causes, so the driver
     // can tell a hook's ask from Claude Code's own.
     includeHookEvents: true,

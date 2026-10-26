@@ -7,9 +7,9 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { ClaudeMcp } from '../mcp';
-import { ClaudeDriver, PLAN_APPROVAL_OPTIONS, unsupportedModelReason } from '../driver';
+import { ClaudeDriver, PLAN_APPROVAL_OPTIONS, PROBE_TIMEOUT_MS, unsupportedModelReason } from '../driver';
 import type {
   ModelDiscoveryOptions,
   SdkCanUseTool,
@@ -168,6 +168,22 @@ describe('Claude session lifecycle', () => {
     facade.nextProbe = Promise.reject(new Error('spawn ENOENT'));
     const { ctx } = start({}, {}, facade);
     expect((await ctx.ended()).error).toMatch(/did not respond.*spawn ENOENT/);
+  });
+
+  it('a probe that never answers ends the session instead of waiting for ever', async () => {
+    vi.useFakeTimers();
+    try {
+      const facade = new ScriptedFacade();
+      facade.nextProbe = new Promise<void>(() => {});
+      const { ctx } = start({}, {}, facade);
+      await vi.advanceTimersByTimeAsync(PROBE_TIMEOUT_MS);
+      expect(ctx.events.find((e) => e.type === 'ended')).toMatchObject({
+        type: 'ended',
+        error: expect.stringMatching(/did not respond within 120s/),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('init reports the conversation id, the resolved model and the actual mode', async () => {
@@ -364,15 +380,21 @@ describe('Claude turn state and context', () => {
 });
 
 describe('Claude permission policy', () => {
-  it('the auto-approve mode allows without asking', async () => {
+  it('the auto-approve mode allows without asking, and the tool keeps its input', async () => {
     const { ctx, canUseTool } = start({ mode: 'default' });
-    expect(await ask(canUseTool, 'Bash', { command: 'rm -rf build' })).toMatchObject({ behavior: 'allow' });
+    expect(await ask(canUseTool, 'Bash', { command: 'rm -rf build' })).toEqual({
+      behavior: 'allow',
+      updatedInput: { command: 'rm -rf build' },
+    });
     expect(ctx.permissions).toEqual([]);
   });
 
   it('otherwise the user decides, on a card describing the call', async () => {
     const { ctx, canUseTool } = start({ mode: 'acceptEdits' }, { permission: () => ({ outcome: 'selected', optionId: 'allow' }) });
-    expect(await ask(canUseTool, 'Bash', { command: 'npm test' }, { title: 'Claude wants to run npm test' })).toMatchObject({ behavior: 'allow' });
+    expect(await ask(canUseTool, 'Bash', { command: 'npm test' }, { title: 'Claude wants to run npm test' })).toEqual({
+      behavior: 'allow',
+      updatedInput: { command: 'npm test' },
+    });
     expect(ctx.permissions).toEqual([{
       requestId: 'toolu_1',
       toolName: 'Bash',
@@ -392,7 +414,7 @@ describe('Claude permission policy', () => {
     const always = start({ mode: 'acceptEdits' }, { permission: () => ({ outcome: 'selected', optionId: 'allow_always' }) });
     expect(await ask(always.canUseTool, 'Bash', { command: 'ls' })).toEqual({
       behavior: 'allow',
-      updatedInput: {},
+      updatedInput: { command: 'ls' },
       updatedPermissions: [{ type: 'addRules', rules: [{ toolName: 'Bash' }], behavior: 'allow', destination: 'projectSettings' }],
     });
     const denied = start({ mode: 'acceptEdits' });
@@ -427,7 +449,10 @@ describe('Claude permission policy', () => {
     }));
 
     const deploy = { command: 'make deploy' };
-    expect(await ask(canUseTool, 'Bash', deploy, { decisionReason: '\u001b[1mDeploys need a human\u001b[0m' })).toMatchObject({ behavior: 'allow' });
+    expect(await ask(canUseTool, 'Bash', deploy, { decisionReason: '\u001b[1mDeploys need a human\u001b[0m' })).toEqual({
+      behavior: 'allow',
+      updatedInput: deploy,
+    });
     expect(ctx.permissions[0]).toMatchObject({
       reason: 'Deploys need a human',
       hook: 'PreToolUse:Bash',
@@ -465,7 +490,10 @@ describe('Claude permission policy', () => {
 
   it('plan approval: an approving option continues in that mode, revise keeps planning', async () => {
     const approve = start({ mode: 'plan' }, { plan: () => ({ outcome: 'selected', optionId: 'acceptEdits' }) });
-    expect(await ask(approve.canUseTool, 'ExitPlanMode', { plan: '1. x' })).toMatchObject({ behavior: 'allow' });
+    expect(await ask(approve.canUseTool, 'ExitPlanMode', { plan: '1. x' })).toEqual({
+      behavior: 'allow',
+      updatedInput: { plan: '1. x' },
+    });
     expect(approve.ctx.plans[0]?.options).toEqual(PLAN_APPROVAL_OPTIONS);
     // `revise` is the choice the user's feedback goes with.
     expect(approve.ctx.plans[0]?.revise).toBe('revise');

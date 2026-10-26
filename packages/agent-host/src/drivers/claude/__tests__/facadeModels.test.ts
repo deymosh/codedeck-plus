@@ -138,6 +138,10 @@ describe('buildQueryOptions (CDX-062 fallbackModel tri-state)', () => {
   it('asks for partial messages, so the reply streams while it is written', () => {
     expect(buildQueryOptions(baseOpts()).includePartialMessages).toBe(true);
   });
+
+  it('loads the local settings source too, so a phone session obeys settings.local.json', () => {
+    expect(buildQueryOptions(baseOpts()).settingSources).toEqual(['user', 'project', 'local']);
+  });
 });
 
 describe('isProviderBoundSession (CDX-071)', () => {

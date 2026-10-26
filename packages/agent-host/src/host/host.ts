@@ -30,6 +30,25 @@ export interface HostIo {
 
 type Reply = Extract<BridgeMessage, { kind: 'permission-outcome' | 'plan-outcome' | 'question-outcome' }>;
 
+/** A request the host sends the bridge that a running session waits on. */
+type SessionRequest = Extract<HostMessage, { kind: 'request-permission' | 'ask-question' | 'request-plan-approval' }>;
+
+/** How long ending a session may take before the host stops waiting. A
+ *  session that cannot be stopped — a wedged agent, a reply that never comes
+ *  — must not hold end-session or the host's own shutdown open for ever. */
+export const END_SESSION_TIMEOUT_MS = 15_000;
+
+/** Why a request the session had outstanding was answered with nothing. */
+const SESSION_ENDED_REASON = 'The session ended before it was answered.';
+
+/** One request the host is waiting on, and what to answer it with if its
+ *  session ends first. */
+interface PendingRequest {
+  settle: (reply: Reply | null) => void;
+  sessionId: string;
+  cancelled: Reply;
+}
+
 interface SessionSlot {
   agent: string;
   session: DriverSession | null;
@@ -66,7 +85,7 @@ export class AgentHost {
   /** Sessions an `end-session` is still stopping: what deleting their
    *  conversation waits for, since lines are handled concurrently. */
   private readonly ending = new Map<string, Promise<void>>();
-  private readonly pending = new Map<string, (reply: Reply | null) => void>();
+  private readonly pending = new Map<string, PendingRequest>();
   private nextRequestId = 0;
   private shuttingDown = false;
 
@@ -91,13 +110,13 @@ export class AgentHost {
     const id = frame.id ?? undefined;
     const message = frame as unknown as BridgeMessage;
     if (isReply(message)) {
-      const settle = id !== undefined ? this.pending.get(id) : undefined;
-      if (!settle) {
+      const pending = id !== undefined ? this.pending.get(id) : undefined;
+      if (!pending) {
         this.io.log(`[agent-host] reply ${message.kind} for unknown request ${String(id)}`);
         return;
       }
       this.pending.delete(id!);
-      settle(message);
+      pending.settle(message);
       return;
     }
     if (id === undefined) {
@@ -130,11 +149,12 @@ export class AgentHost {
   /** End every session and settle every open request. Called on stdin EOF. */
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
-    for (const settle of this.pending.values()) settle(null);
+    for (const request of this.pending.values()) request.settle(null);
     this.pending.clear();
-    const ends = [...this.sessions.values()].map((slot) => {
+    const ends = [...this.sessions.entries()].map(([sessionId, slot]) => {
       slot.closed = true;
-      return slot.session?.end().catch(() => {});
+      this.cancelSessionRequests(sessionId);
+      return bounded(slot.session?.end(), END_SESSION_TIMEOUT_MS);
     });
     this.sessions.clear();
     await Promise.all(ends);
@@ -145,8 +165,11 @@ export class AgentHost {
    *  removed). */
   private async endSessionsOf(agent: string, reason: string): Promise<void> {
     const slots = [...this.sessions.entries()].filter(([, slot]) => slot.agent === agent);
-    for (const [sessionId, slot] of slots) this.emit(sessionId, slot, { type: 'ended', error: reason });
-    await Promise.all(slots.map(([, slot]) => slot.session?.end().catch(() => {})));
+    for (const [sessionId, slot] of slots) {
+      this.emit(sessionId, slot, { type: 'ended', error: reason });
+      this.cancelSessionRequests(sessionId);
+    }
+    await Promise.all(slots.map(([, slot]) => bounded(slot.session?.end(), END_SESSION_TIMEOUT_MS)));
   }
 
   private async handleRequest(message: BridgeMessage): Promise<HostMessage> {
@@ -168,13 +191,15 @@ export class AgentHost {
         const { sessionId } = message.payload;
         const slot = this.sessions.get(sessionId);
         this.sessions.delete(sessionId);
+        // A card still on the phone has nobody to answer it now: settle it,
+        // so the agent's driver can finish stopping the session.
+        this.cancelSessionRequests(sessionId);
         if (slot) {
           slot.closed = true;
-          const ending = Promise.resolve(slot.session?.end());
-          const settled = ending.catch(() => {});
-          this.ending.set(sessionId, settled);
-          void settled.finally(() => {
-            if (this.ending.get(sessionId) === settled) this.ending.delete(sessionId);
+          const ending = bounded(slot.session?.end(), END_SESSION_TIMEOUT_MS);
+          this.ending.set(sessionId, ending);
+          void ending.finally(() => {
+            if (this.ending.get(sessionId) === ending) this.ending.delete(sessionId);
           });
           await ending;
         }
@@ -354,19 +379,35 @@ export class AgentHost {
     this.write(undefined, { kind: 'session-event', payload: { sessionId, event } });
     if (event.type === 'ended') {
       slot.closed = true;
+      this.cancelSessionRequests(sessionId);
       if (this.sessions.get(sessionId) === slot) this.sessions.delete(sessionId);
     }
   }
 
   /** Send a request to the bridge; resolves with its reply, or null when the
    *  host shuts down first. */
-  private request(message: HostMessage): Promise<Reply | null> {
+  private request(message: SessionRequest): Promise<Reply | null> {
     if (this.shuttingDown) return Promise.resolve(null);
     const id = `h${++this.nextRequestId}`;
     return new Promise((resolve) => {
-      this.pending.set(id, resolve);
+      this.pending.set(id, {
+        settle: resolve,
+        sessionId: message.payload.sessionId,
+        cancelled: cancelledReply(message),
+      });
       this.write(id, message);
     });
+  }
+
+  /** Answer whatever this session still has outstanding with a cancellation:
+   *  the driver is waiting on those to answer its agent, and nobody can
+   *  decide for a session that is ending. */
+  private cancelSessionRequests(sessionId: string): void {
+    for (const [id, pending] of [...this.pending]) {
+      if (pending.sessionId !== sessionId) continue;
+      this.pending.delete(id);
+      pending.settle(pending.cancelled);
+    }
   }
 
   private reply(id: string, message: HostMessage): void {
@@ -418,6 +459,32 @@ function ack(): HostMessage {
 
 function cancelled(): { outcome: 'cancelled'; reason: string } {
   return { outcome: 'cancelled', reason: 'The agent host is shutting down' };
+}
+
+/** A request's own cancellation reply, for a session that ended first. */
+function cancelledReply(message: SessionRequest): Reply {
+  switch (message.kind) {
+    case 'request-permission':
+      return { kind: 'permission-outcome', payload: { outcome: 'cancelled', reason: SESSION_ENDED_REASON } };
+    case 'ask-question':
+      return { kind: 'question-outcome', payload: { outcome: 'cancelled', reason: SESSION_ENDED_REASON } };
+    case 'request-plan-approval':
+      return { kind: 'plan-outcome', payload: { outcome: 'cancelled', reason: SESSION_ENDED_REASON } };
+  }
+}
+
+/** Wait for `promise`, but no longer than `ms`. */
+async function bounded(promise: Promise<unknown> | undefined, ms: number): Promise<void> {
+  if (!promise) return;
+  let timer: NodeJS.Timeout | undefined;
+  await Promise.race([
+    promise.catch(() => {}),
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, ms);
+      timer.unref?.();
+    }),
+  ]);
+  if (timer) clearTimeout(timer);
 }
 
 function selectOutcome(reply: Reply | null, kind: 'permission-outcome'): SelectOutcome {
