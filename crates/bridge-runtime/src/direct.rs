@@ -69,6 +69,12 @@ const MAX_FRAME_BYTES: usize = 256 * 1024;
 /// terminal's byte offsets and asks for a replay from the ring. A lost frame
 /// costs a round trip, never the phone's other traffic.
 const TERMINAL_LANE_CAP: usize = 64;
+/// How many ordinary frames one connection may have waiting. A phone that
+/// stops reading stops its socket from draining, so the queue is the only
+/// thing between it and the bridge's memory. Past this the connection is
+/// closed and the phone reconnects and resyncs; a frame is never silently
+/// dropped on a live connection.
+const FRAME_LANE_CAP: usize = 64;
 
 fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
@@ -116,7 +122,7 @@ struct Conn {
     identity: String,
     /// The recipient tags its `HELLO` named: only those copies go to it.
     recipients: HashSet<String>,
-    frames: mpsc::UnboundedSender<String>,
+    frames: mpsc::Sender<String>,
     /// Terminal output for this connection, on a lane of its own: it goes out
     /// only when `frames` has nothing waiting, so a terminal can never delay
     /// the phone's other traffic.
@@ -211,13 +217,29 @@ impl Hub {
             outbox.push_back((identity.to_string(), event.clone()));
         }
         let frame = encode_direct_frame(&DirectFrame::Event(event.clone()));
-        for conn in self.conns.borrow().values().filter(|c| c.reads(identity, event)) {
-            if terminal {
-                conn.term.push(frame.clone());
-            } else {
-                let _ = conn.frames.send(frame.clone());
+        let mut full = Vec::new();
+        {
+            let conns = self.conns.borrow();
+            for (id, conn) in conns.iter().filter(|(_, c)| c.reads(identity, event)) {
+                if terminal {
+                    conn.term.push(frame.clone());
+                } else if conn.frames.try_send(frame.clone()).is_err() {
+                    // The phone is not reading its socket. Closing the
+                    // connection makes it reconnect and resync, which is
+                    // better than growing this queue without limit or
+                    // silently dropping a frame on a live link.
+                    full.push(*id);
+                }
             }
         }
+        if full.is_empty() {
+            return;
+        }
+        let mut conns = self.conns.borrow_mut();
+        for id in &full {
+            conns.remove(id);
+        }
+        log::warn!("[Direct] Closed {} connection(s) that stopped reading", full.len());
     }
 
     /// What was published for connection `id` from `since` (seconds) on.
@@ -232,10 +254,10 @@ impl Hub {
             .collect()
     }
 
-    fn register(&self, identity: &str, recipients: Vec<String>) -> (u64, mpsc::UnboundedReceiver<String>, Rc<TermLane>) {
+    fn register(&self, identity: &str, recipients: Vec<String>) -> (u64, mpsc::Receiver<String>, Rc<TermLane>) {
         let id = self.next_id.get();
         self.next_id.set(id + 1);
-        let (frames, rx) = mpsc::unbounded_channel();
+        let (frames, rx) = mpsc::channel(FRAME_LANE_CAP);
         let term = Rc::new(TermLane::default());
         let conn = Conn { identity: identity.to_string(), recipients: recipients.into_iter().collect(), frames, term: Rc::clone(&term) };
         self.conns.borrow_mut().insert(id, conn);
@@ -796,6 +818,24 @@ mod tests {
             last = Some(f);
         }
         assert_eq!(last.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn a_connection_that_stops_reading_is_closed_rather_than_growing() {
+        let (inputs, _rx) = mpsc::unbounded_channel();
+        let hub = Hub::new("b".into(), inputs);
+        hub.set_paired(&["p".into()]);
+        let (id, mut outbound, _) = hub.register("p", vec!["p1".into()]);
+        let event = copy_for("p1", now_secs());
+        for _ in 0..FRAME_LANE_CAP {
+            hub.deliver("p", &event, false);
+        }
+        // The lane is full: one more copy cannot be queued, so the connection
+        // is dropped and its serve loop sees the channel end.
+        hub.deliver("p", &event, false);
+        assert!(hub.conns.borrow().get(&id).is_none());
+        while outbound.try_recv().is_ok() {}
+        assert!(matches!(outbound.try_recv(), Err(mpsc::error::TryRecvError::Disconnected)));
     }
 
     #[test]
