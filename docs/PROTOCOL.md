@@ -70,7 +70,10 @@ Nothing in the wire names a particular coding agent. The heartbeat carries
 `efforts[]`, `defaultMode`, `defaultEffort`, `defaultPersona`, `supports {models, usage,
 providers, providerModels, interrupt, commands, plugins, mcp, tasks,
 permissionRules, accounts, personas}`, `credentials[]` status,
-`install` (below) and `styleHash` (see [Agent styles](#agent-styles)). Phones build every
+`install` (below), `styleHash` (see [Agent styles](#agent-styles)) and
+`version`, the agent's own release once a ready one has said it (shown where
+the agent is described, so no session opens with a line naming it; about 15
+bytes per agent in each heartbeat). Phones build every
 picker from it and offer a feature only when the session's agent `supports`
 it. Mode, effort and model values are opaque strings the bridge validates
 against the catalog.
@@ -927,9 +930,12 @@ The bridge's ids are `b1, b2, …`; the host's are `h1, h2, …`.
 that) and `styleHash` (the bridge hashes the `style` it carries), plus
 `credentials[].envVar` and `unavailableReason`. The host
 reports a change to one with the notification `agent-changed {agent:
-AgentInfo}` (an install starting, finishing or failing, a removal); the
+AgentInfo}` (an install starting, finishing or failing, a removal, or the
+agent's `version` read after it became ready — the read may spawn the
+agent's binary, so `initialize` does not wait for it); the
 bridge replaces that entry, and once the agent is no longer installing
-starts the sessions that waited on it.
+starts the sessions that waited on it — but not again for a change that
+only adds the `version`.
 
 ### Host → bridge
 
@@ -973,7 +979,9 @@ restart.
    efforts, `supports`, credentials, and its `style` — the look of its own
    terminal UI, kept in the folder's `style.ts`, each value taken from the
    agent's own source; check that Android draws each glyph as text, not as
-   an emoji); `startSession()` returns a
+   an emoji); `version()`, when it can tell, the agent's release (read once,
+   in the background; the catalog carries it, so no session announces it);
+   `startSession()` returns a
    `DriverSession` and reports through the `SessionContext` it is handed —
    `emit()` session events, `requestPermission()` / `askQuestion()` /
    `requestPlanApproval()` when the user must decide.
