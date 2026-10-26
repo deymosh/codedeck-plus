@@ -240,15 +240,14 @@ export abstract class AcpSession<
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         this.ctx.log(`[${this.deps.tag}] could not resume ${resume} (${reason}) — starting a fresh session`);
-        this.deliver({
-          entryType: 'notice',
-          kind: 'session_restart',
-          text:
-            `${this.deps.label} could not continue this conversation — starting a fresh one in the same workspace. ` +
-            'The transcript is preserved, but the model does not remember earlier turns.',
-          timestamp: now(),
-        });
+        this.deliverResumeLost();
       }
+    } else if (resume) {
+      // The agent cannot continue a conversation at all. The bridge asked
+      // for one, so the fresh session it gets instead is not a silent swap:
+      // the model has not seen the earlier turns.
+      this.ctx.log(`[${this.deps.tag}] cannot resume ${resume}: the agent offers no session/resume — starting a fresh session`);
+      this.deliverResumeLost();
     }
     const created = await this.client.request(
       'session/new',
@@ -256,6 +255,19 @@ export abstract class AcpSession<
       { timeoutMs: SESSION_REQUEST_TIMEOUT_MS },
     );
     return { sessionId: created.sessionId, configOptions: created.configOptions ?? [], modes: created.modes, resumed: false };
+  }
+
+  /** Say that the conversation asked for could not be continued: the person
+   *  has to know the model will not remember earlier turns. */
+  private deliverResumeLost(): void {
+    this.deliver({
+      entryType: 'notice',
+      kind: 'session_restart',
+      text:
+        `${this.deps.label} could not continue this conversation — starting a fresh one in the same workspace. ` +
+        'The transcript is preserved, but the model does not remember earlier turns.',
+      timestamp: now(),
+    });
   }
 
   /** The process this session shares went away, taking the session with it. */

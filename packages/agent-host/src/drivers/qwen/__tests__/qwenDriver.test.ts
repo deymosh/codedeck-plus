@@ -666,6 +666,15 @@ describe('QwenSession resume', () => {
     expect(ready.agent.newSessions).toHaveLength(1);
     expect(ctx.entries()[0]).toMatchObject({ entryType: 'notice', kind: 'session_restart' });
   });
+
+  it('says so when the agent offers no resume at all, rather than swapping silently', async () => {
+    const ready = withDriver();
+    ready.agent.supportsResume = false;
+    const ctx = await started(ready, { resume: 'old-session' });
+    expect(ready.agent.resumed).toEqual([]);
+    expect(ready.agent.newSessions).toHaveLength(1);
+    expect(ctx.entries()[0]).toMatchObject({ entryType: 'notice', kind: 'session_restart' });
+  });
 });
 
 describe('QwenSession shutdown', () => {

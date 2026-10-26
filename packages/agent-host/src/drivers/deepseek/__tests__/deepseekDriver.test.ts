@@ -513,13 +513,16 @@ describe('DeepSeekSession resume', () => {
   it.each([
     ['leaves the capability out', false],
     ['sets the capability to null', 'null'],
-  ] as const)('does not try a resume when the harness %s', async (_case, supportsResume) => {
+  ] as const)('starts fresh with a notice when the harness %s', async (_case, supportsResume) => {
     const ready = withDriver();
     ready.harness.supportsResume = supportsResume;
     const ctx = await started(ready, { resume: 'old-session' });
     expect(ready.harness.resumed).toEqual([]);
     expect(ready.harness.newSessions).toHaveLength(1);
-    expect(ctx.entries().some((entry) => entry.entryType === 'notice')).toBe(false);
+    // The bridge asked for a conversation this harness cannot continue: the
+    // person is told, rather than shown a fresh session as if it were it.
+    expect(ctx.entries()[0]).toMatchObject({ entryType: 'notice', kind: 'session_restart' });
+    expect(ctx.logs.some((line) => /offers no session\/resume/.test(line))).toBe(true);
   });
 });
 
