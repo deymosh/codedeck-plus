@@ -41,9 +41,8 @@ fn pairing_a_phone_end_to_end() {
     let req = json!({"v":12,"type":"pair-request","npub":"n","pubkeyHex":"spoofed","label":"Pixel","token":token});
     rig.phone_event(&phone, req, Via::Pairing);
     let effects = rig.take();
-    assert!(effects.iter().any(|e| matches!(e, Effect::PairingClosed { reason: PairingCloseReason::Paired, phone: Some(p) } if p.pubkey_hex == phone.pubkey_hex)));
+    assert!(effects.iter().any(|e| matches!(e, Effect::PairingClosed { reason: PairingCloseReason::Paired, phone: Some(p) } if p.pubkey_hex == phone.pubkey_hex && p.label == "Pixel")));
     assert!(effects.iter().any(|e| matches!(e, Effect::Resubscribe)));
-    assert!(effects.iter().any(|e| matches!(e, Effect::RegisterPhone { label, .. } if label == "Pixel")));
     let acks: Vec<_> = effects
         .iter()
         .filter_map(|e| match e {

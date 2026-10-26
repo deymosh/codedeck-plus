@@ -241,10 +241,9 @@ crates/protocol          the phone wire: messages, total codec, kinds, ranges,
   host's types). Keep the decoders total.
 - **When a Tor/SOCKS proxy is set, ALL Nostr traffic goes through it — on the
   bridge and on the phone alike.** Nostr traffic is anything to a relay or a
-  Blossom server: relay connections, Blossom uploads and downloads, and the
-  bridge's pubkey registration on a relay's or Blossom server's admin
-  endpoint. No path to one may bypass the proxy while it is set (loopback,
-  which never leaves the machine, excepted). Other outbound calls (provider
+  Blossom server: relay connections, Blossom uploads and downloads. No path
+  to one may bypass the proxy while it is set (loopback, which never leaves
+  the machine, excepted). Other outbound calls (provider
   token checks, the agents' own API traffic) do not use it and are not a
   proxy bypass. A machine's direct link is not Nostr traffic either — it goes
   to the user's own bridge on a network they set up (LAN, VPN) and is dialled

@@ -268,10 +268,6 @@ pub enum Effect {
     PairingClosed { reason: PairingCloseReason, phone: Option<PairedPhone> },
     /// Tell the operator something (desktop notification / log line).
     Notify { level: NotifyLevel, text: String },
-    /// Register a freshly paired phone with services that gate on pubkey (a
-    /// write-restricted relay, the image server). Best effort; a failure is
-    /// the runtime's to report.
-    RegisterPhone { pubkey_hex: String, label: String },
     /// Read `git rev-parse HEAD` in `cwd`; answer with [`Input::GitHead`].
     ReadGitHead { session_id: String, cwd: String },
     /// Fetch / reassemble an uploaded image into the workspace; answer with

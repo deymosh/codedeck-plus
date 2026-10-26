@@ -122,7 +122,6 @@ impl Engine {
             }),
         );
         self.out.push(Effect::Notify { level: NotifyLevel::Info, text: format!("Phone \"{label}\" paired") });
-        self.out.push(Effect::RegisterPhone { pubkey_hex: from.to_string(), label });
     }
 
     /// The owner unpaired an identity on the machine. Everything it could

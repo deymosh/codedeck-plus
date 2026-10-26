@@ -312,13 +312,10 @@ const SETTINGS = {
   relays: { label: "Relays", kind: "list", hint: "One per line: wss://, or ws:// only to an .onion address." },
   "direct.endpoints": { label: "Direct link addresses", kind: "list", hint: "Where phones dial the bridge, in order. One per line." },
   transcriptKeepLast: { label: "Transcripts kept", kind: "number", hint: "The newest this many; empty keeps them all." },
-  relayRegisterToken: { label: "Relay admin token", kind: "secret", needs: "relayRegisterEndpoint" },
-  blossomRegisterToken: { label: "Blossom admin token", kind: "secret", needs: "blossomRegisterEndpoint" },
 };
 const FIXED_LABELS = {
   workspaceRoots: "Workspace", torProxyUrl: "Tor proxy", nodePath: "Node", agentHostPath: "Agent host",
   testMode: "Test mode", "direct.listen": "Direct link listens on", "direct.onionListen": "Onion listener",
-  relayRegisterEndpoint: "Relay admin endpoint", blossomRegisterEndpoint: "Blossom admin endpoint",
 };
 // The form is built once per visit to the tab, so a poll does not wipe what
 // is being typed.
@@ -336,18 +333,13 @@ async function settings() {
   if (status !== 200) return;
   settingsShown = true;
   const fields = body.fields || [];
-  const byKey = Object.fromEntries(fields.map((f) => [f.key, f]));
-  // A token is offered only beside its endpoint: one without the other does nothing.
-  const editable = fields.filter((f) => f.editable && SETTINGS[f.key]
-    && (!SETTINGS[f.key].needs || (byKey[SETTINGS[f.key].needs] && byKey[SETTINGS[f.key].needs].value)));
+  const editable = fields.filter((f) => f.editable && SETTINGS[f.key]);
   $("settings-fields").replaceChildren(...editable.map((f) => {
     const spec = SETTINGS[f.key];
     let input;
     if (spec.kind === "list") {
       input = el("textarea", { rows: "3", spellcheck: "false", class: "mono" });
       input.value = (f.value || []).join("\n");
-    } else if (spec.kind === "secret") {
-      input = el("input", { type: "password", placeholder: f.set ? "Set — type to replace" : "Not set" });
     } else {
       input = el("input", { type: spec.kind === "number" ? "number" : "text", min: "0" });
       input.value = f.value ?? "";
@@ -356,11 +348,8 @@ async function settings() {
     input.dataset.kind = spec.kind;
     if (f.overridden) input.disabled = true;
     const note = f.overridden ? "Set by a flag or an environment variable, which wins over the file." : spec.hint;
-    const clear = spec.kind === "secret" && f.set && !f.overridden
-      ? el("label", { class: "check small dim" }, el("input", { type: "checkbox", "data-clear": f.key }), " Clear it")
-      : null;
     return el("label", { class: "field" }, el("span", { class: "field-label" }, spec.label), input,
-      note ? el("span", { class: "dim small" }, note) : null, clear);
+      note ? el("span", { class: "dim small" }, note) : null);
   }));
   $("settings-fixed").replaceChildren(...fields.filter((f) => !f.editable).flatMap((f) => [
     el("dt", {}, FIXED_LABELS[f.key] || f.key), el("dd", { class: "mono" }, shownValue(f.value)),
@@ -370,13 +359,10 @@ async function settings() {
 $("settings-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const set = {};
-  const secrets = {};
   for (const input of $("settings-fields").querySelectorAll("[data-key]")) {
     if (input.disabled) continue;
     const { key, kind } = input.dataset;
-    if (kind === "secret") {
-      if (input.value) secrets[key] = input.value;
-    } else if (kind === "list") {
+    if (kind === "list") {
       set[key] = input.value.split("\n").map((line) => line.trim()).filter(Boolean);
     } else if (kind === "number") {
       set[key] = input.value === "" ? null : Number(input.value);
@@ -384,13 +370,11 @@ $("settings-form").addEventListener("submit", async (event) => {
       set[key] = input.value.trim();
     }
   }
-  for (const box of $("settings-fields").querySelectorAll("[data-clear]")) if (box.checked) secrets[box.dataset.clear] = null;
   const result = $("settings-result");
-  const answer = await api("/api/config", "POST", { set, secrets });
+  const answer = await api("/api/config", "POST", { set });
   if (answer.status === 200) {
     result.className = "small ok";
     result.textContent = "Saved. Restart the bridge to apply it.";
-    for (const input of $("settings-fields").querySelectorAll("input[type=password]")) input.value = "";
   } else {
     result.className = "small error";
     result.textContent = answer.body.error ? `${SETTINGS[answer.body.key]?.label || answer.body.key}: ${answer.body.error}` : "The bridge did not save it.";

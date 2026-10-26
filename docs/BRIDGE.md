@@ -163,8 +163,6 @@ you need.
 | `claudePath` | `CODEDECK_CLAUDE_PATH` / `--claude-path` | A specific `claude` binary instead of the bundled one |
 | `openCodeServerUrl`, `openCodePath`, `openCodePort` | `CODEDECK_OPENCODE_*` | The OpenCode server: an external one, or how the bridge runs its own — see [`OPENCODE.md`](OPENCODE.md) |
 | `deepseekPath` | `CODEDECK_DEEPSEEK_PATH` / `--deepseek-path` | A DeepSeek Harness CLI to run instead of the one this build installs — see [`DEEPSEEK.md`](DEEPSEEK.md) |
-| `relayRegisterEndpoint` / `relayRegisterToken` | `CODEDECK_RELAY_REGISTER_ENDPOINT` / `..._TOKEN` | Register paired phones on a write-restricted relay (https only — the token is an admin secret) |
-| `blossomRegisterEndpoint` / `blossomRegisterToken` | `CODEDECK_BLOSSOM_REGISTER_ENDPOINT` / `..._TOKEN` | The same for a Blossom server, so a phone's attachments do not fall back to relay chunking |
 | `transcriptKeepLast` | `CODEDECK_TRANSCRIPT_KEEP_LAST` | Entries kept per session transcript (default 5000; 0 keeps all) |
 | `agentHostPath`, `nodePath` | `CODEDECK_AGENT_HOST` / `--agent-host`, `CODEDECK_NODE_PATH` | Where the agent host and Node are (defaults: `agent-host/` beside the binary; the `node` beside the binary, else `node` on `PATH`) |
 | `direct.listen` | `CODEDECK_DIRECT_LISTEN` / `--direct-listen` | Serve phones directly over `wss://` on this `ip:port` (e.g. `0.0.0.0:7447`); off by default |
@@ -175,11 +173,10 @@ you need.
 | `audit.maxDays`, `audit.maxBytes`, `audit.syslog` | — | Terminal recording retention (default 90 days / 1 GiB, 0 = no limit) and whether each audit line is also copied to the system log (default: off) |
 
 When a Tor proxy is set, all Nostr traffic goes through it: relay
-connections, file downloads from a Blossom server, and pubkey registration on
-the relay's or Blossom server's admin endpoint (loopback endpoints excepted).
-Without one those go direct and a `.onion` cannot be reached; `http://` is
-accepted only for a `.onion`. The agents' own API calls and provider token
-checks never use the proxy.
+connections and file downloads from a Blossom server (loopback endpoints
+excepted). Without one those go direct and a `.onion` cannot be reached;
+`http://` is accepted only for a `.onion`. The agents' own API calls and
+provider token checks never use the proxy.
 
 ### Direct link
 
@@ -251,11 +248,10 @@ with `web-browsers-request` and ends one of with `web-browser-sign-out`, both
 served from one place so the two paths never disagree; `GET /api/devices`
 shows the paired identities and their clients (labels and key expiries, never
 a key);
-`GET /api/config` shows the config as it is in effect (a secret only as
-set/not set, and each field whether a flag or environment variable overrides
-the file) and `POST /api/config` changes the safe set — the machine name,
-the relays, the direct endpoints, the transcript retention and the relay /
-Blossom registration tokens — validating each and rewriting `config.json`
+`GET /api/config` shows the config as it is in effect (and each field whether
+a flag or environment variable overrides the file) and `POST /api/config`
+changes the safe set — the machine name, the relays, the direct endpoints and
+the transcript retention — validating each and rewriting `config.json`
 keeping every other key.
 
 Because a LAN or VPN is not a trusted place, the page refuses a `Host` that
@@ -331,7 +327,7 @@ In `<home>`:
 - `sessions/transcripts/<session>.jsonl` — one transcript per session.
 - `bridge.lock` — held while a bridge runs, so two never share one identity;
   `bridge.pid` beside it names the process holding it.
-- `config.json` — optional; tightened to 0600 when read (it may hold admin tokens).
+- `config.json` — optional; tightened to 0600 when read.
 - `web-sessions.json` — the signed-in browsers of the web page, keyed by the
   cookie's SHA-256 (never a token), 0600. Deleting it signs every browser out.
 - `direct/cert.der`, `direct/key.der` — the direct link's certificate and its
