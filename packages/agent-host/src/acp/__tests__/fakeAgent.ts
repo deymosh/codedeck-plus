@@ -79,6 +79,10 @@ export class FakeAgent {
   newSessionError: string | undefined;
   /** Whether the agent answers `session/new` at all — a wedged start. */
   ignoreNewSession = false;
+  /** Hold the NEXT `session/new` until `answerNewSession()`: a start that
+   *  times out and only then creates its session. */
+  holdNextNewSession = false;
+  private heldNew?: { id: number | string; params: Record<string, unknown> };
   /** Whether the agent answers `session/close` at all — a wedged end. */
   ignoreClose = false;
   /** Whether the agent ignores `session/cancel` — a wedged turn. */
@@ -149,6 +153,11 @@ export class FakeAgent {
         return;
       case 'session/new': {
         if (this.ignoreNewSession) return;
+        if (this.holdNextNewSession) {
+          this.holdNextNewSession = false;
+          this.heldNew = { id, params };
+          return;
+        }
         if (this.newSessionError !== undefined) {
           this.errorReply(id, -32602, `Invalid params: ${this.newSessionError}`);
           return;
@@ -243,6 +252,16 @@ export class FakeAgent {
   }
 
   private readonly turnIds = new Map<string, number | string>();
+
+  /** Answer the `session/new` held by `holdNextNewSession`, as an agent that
+   *  was merely slow does. */
+  answerNewSession(): void {
+    const held = this.heldNew;
+    if (!held) return;
+    this.heldNew = undefined;
+    this.newSessions.push(held.params);
+    this.reply(held.id, { sessionId: `s${this.newSessions.length}`, configOptions: this.options, modes: this.modes });
+  }
 
   /** Finish the turn running in `sessionId`, as an agent does for a cancelled
    *  prompt. */

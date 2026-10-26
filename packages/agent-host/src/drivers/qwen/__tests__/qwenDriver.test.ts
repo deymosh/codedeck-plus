@@ -238,6 +238,30 @@ describe('QwenSession startup', () => {
     }
   });
 
+  it('closes the session an agent creates after the start request timed out', async () => {
+    const ready = withDriver();
+    // A live session keeps the shared process (and connection) up while the
+    // next start times out.
+    await started(ready);
+    ready.agent.holdNextNewSession = true;
+    vi.useFakeTimers();
+    try {
+      const ctx = recordingContext();
+      ready.driver.startSession(start({ sessionId: 'b2' }), ctx);
+      await vi.advanceTimersByTimeAsync(SESSION_REQUEST_TIMEOUT_MS);
+      expect(ctx.events.find((event) => event.type === 'ended')).toMatchObject({
+        error: expect.stringMatching(/session\/new did not answer/),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // The agent finally answers, naming the session it created; it is not
+    // this driver's to keep, so it is closed rather than orphaned.
+    ready.agent.answerNewSession();
+    await vi.waitFor(() => expect(ready.agent.closed).toEqual(['s2']));
+  });
+
   it('applies the mode and the model a session was started with', async () => {
     const ready = withDriver();
     await started(ready, { mode: 'plan', model: 'glm-5.3' });

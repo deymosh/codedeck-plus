@@ -235,11 +235,7 @@ export abstract class AcpSession<
     // only an object (even an empty one) advertises `session/resume`.
     if (resume && resumable != null) {
       try {
-        const resumed = await this.client.request(
-          'session/resume',
-          { sessionId: resume, cwd: this.cwd, mcpServers: [] },
-          { timeoutMs: SESSION_REQUEST_TIMEOUT_MS },
-        );
+        const resumed = await this.sessionRequest('session/resume', { sessionId: resume, cwd: this.cwd, mcpServers: [] });
         return { sessionId: resume, configOptions: resumed.configOptions ?? [], modes: resumed.modes, resumed: true };
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
@@ -253,12 +249,65 @@ export abstract class AcpSession<
       this.ctx.log(`[${this.deps.tag}] cannot resume ${resume}: the agent offers no session/resume — starting a fresh session`);
       this.deliverResumeLost();
     }
-    const created = await this.client.request(
-      'session/new',
-      { cwd: this.cwd, mcpServers: [] },
-      { timeoutMs: SESSION_REQUEST_TIMEOUT_MS },
-    );
+    const created = await this.sessionRequest('session/new', { cwd: this.cwd, mcpServers: [] });
     return { sessionId: created.sessionId, configOptions: created.configOptions ?? [], modes: created.modes, resumed: false };
+  }
+
+  /**
+   * A `session/new` or `session/resume` with a deadline. A reply that
+   * arrives after the deadline is not necessarily worthless: an agent that
+   * created the session late leaves it behind, and the next session this
+   * driver opens would not own it. A late answer that names a session is
+   * therefore closed, best effort.
+   */
+  private sessionRequest(
+    method: 'session/new',
+    params: { cwd: string; mcpServers: [] },
+  ): Promise<{ sessionId: string; configOptions?: SessionConfigOption[]; modes?: SessionModeState | null }>;
+  private sessionRequest(
+    method: 'session/resume',
+    params: { sessionId: string; cwd: string; mcpServers: [] },
+  ): Promise<{ configOptions?: SessionConfigOption[]; modes?: SessionModeState | null }>;
+  private async sessionRequest(
+    method: 'session/new' | 'session/resume',
+    params: { sessionId?: string; cwd: string; mcpServers: [] },
+  ): Promise<unknown> {
+    const client = this.client;
+    const request =
+      method === 'session/new'
+        ? client.request('session/new', params as { cwd: string; mcpServers: [] })
+        : client.request('session/resume', params as { sessionId: string; cwd: string; mcpServers: [] });
+    let timedOut = false;
+    void request.then(
+      (result) => {
+        if (!timedOut) return;
+        const sessionId = (result as { sessionId?: unknown } | null)?.sessionId;
+        if (typeof sessionId === 'string' && sessionId !== '') this.closeOrphanSession(client, sessionId);
+      },
+      () => {},
+    );
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        request,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            timedOut = true;
+            reject(new Error(`${method} did not answer within ${SESSION_REQUEST_TIMEOUT_MS}ms`));
+          }, SESSION_REQUEST_TIMEOUT_MS);
+          timer.unref?.();
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  /** Close a session the agent created after its start was given up on. The
+   *  connection may be gone by now, so this is best effort. */
+  private closeOrphanSession(client: AcpClient, sessionId: string): void {
+    this.ctx.log(`[${this.deps.tag}] closing ${sessionId}: its start had already timed out`);
+    void client.request('session/close', { sessionId }, { timeoutMs: SESSION_REQUEST_TIMEOUT_MS }).catch(() => {});
   }
 
   /** Say that the conversation asked for could not be continued: the person
