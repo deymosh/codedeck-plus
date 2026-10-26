@@ -16,6 +16,9 @@ pub struct MockRelay {
     pub url: String,
     inbound: mpsc::UnboundedReceiver<String>,
     outbound: mpsc::UnboundedSender<String>,
+    /// One signal per accepted TCP connection, in accept order. Frames alone
+    /// cannot say WHICH connection carried them; this can.
+    accepted: mpsc::UnboundedReceiver<()>,
 }
 
 impl MockRelay {
@@ -30,6 +33,16 @@ impl MockRelay {
     /// The next text frame the client sends within `wait`, if any.
     pub async fn frame_within(&mut self, wait: Duration) -> Option<String> {
         tokio::time::timeout(wait, self.inbound.recv()).await.ok().flatten()
+    }
+
+    /// Wait up to `wait` for the next TCP connection to be accepted.
+    pub async fn next_accept(&mut self, wait: Duration) -> bool {
+        tokio::time::timeout(wait, self.accepted.recv()).await.ok().flatten().is_some()
+    }
+
+    /// Whether a connection was accepted and nobody consumed it yet.
+    pub fn try_accept(&mut self) -> bool {
+        self.accepted.try_recv().is_ok()
     }
 
     /// Push a text frame to the client.
@@ -49,9 +62,11 @@ pub async fn mock_relay() -> MockRelay {
     let port = listener.local_addr().unwrap().port();
     let (in_tx, inbound) = mpsc::unbounded_channel::<String>();
     let (outbound, mut out_rx) = mpsc::unbounded_channel::<String>();
+    let (accept_tx, accepted) = mpsc::unbounded_channel::<()>();
     tokio::spawn(async move {
         loop {
             let Ok((tcp, _)) = listener.accept().await else { return };
+            let _ = accept_tx.send(());
             let Ok(mut ws) = tokio_tungstenite::accept_async(tcp).await else { continue };
             loop {
                 tokio::select! {
@@ -74,5 +89,6 @@ pub async fn mock_relay() -> MockRelay {
         url: format!("ws://127.0.0.1:{port}"),
         inbound,
         outbound,
+        accepted,
     }
 }
