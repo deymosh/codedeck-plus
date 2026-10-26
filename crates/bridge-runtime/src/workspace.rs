@@ -58,25 +58,17 @@ fn confine(root: &Path, requested: &str) -> Option<PathBuf> {
     Some(out)
 }
 
-/// Make `dir` a git repository, on a thread of its own: this port is called
-/// from the engine, which runs on the bridge's one event-loop thread, and
-/// launching a process there would stall every phone link until it returns.
-/// The directory itself is already created when this is called, so nothing
-/// that waits on the session's path depends on the command finishing.
+/// Make `dir` a git repository. Called when a folder is created, which is
+/// rare, and `git init` is quick; starting it on another thread would race
+/// the new session's `git rev-parse HEAD` and could leave a half-made `.git`
+/// for a session that starts at once.
 fn git_init(dir: &Path) {
     if dir.join(".git").exists() {
         return;
     }
-    let dir = dir.to_path_buf();
-    let spawned_dir = dir.clone();
-    let spawned = std::thread::Builder::new().name("git-init".into()).spawn(move || {
-        match Command::new("git").arg("-C").arg(&dir).args(["init", "--quiet"]).status() {
-            Ok(s) if s.success() => log::info!("[Workspace] git init {}", dir.display()),
-            other => log::warn!("[Workspace] git init failed in {}: {other:?} (continuing)", dir.display()),
-        }
-    });
-    if let Err(e) = spawned {
-        log::warn!("[Workspace] could not start git init in {}: {e} (continuing)", spawned_dir.display());
+    match Command::new("git").arg("-C").arg(dir).args(["init", "--quiet"]).status() {
+        Ok(s) if s.success() => log::info!("[Workspace] git init {}", dir.display()),
+        other => log::warn!("[Workspace] git init failed in {}: {other:?} (continuing)", dir.display()),
     }
 }
 
