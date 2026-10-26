@@ -120,11 +120,25 @@ struct Inner {
     /// The newest event seen (seconds), where the next connection resumes.
     newest: Cell<u64>,
     ping_every: Cell<Duration>,
+    /// Skips the backoff wait (the network came back).
     wake: Notify,
+    /// Ends the live link now; the serve loop wakes even from a socket write
+    /// that a bridge which stopped reading has left blocked.
+    close: Notify,
     task: RefCell<Option<AbortHandle>>,
 }
 
 impl Inner {
+    /// End the live link now: stop accepting publishes and wake the serve
+    /// loop, even one parked in a socket write. Dropping the sender alone
+    /// leaves a writer blocked behind a bridge that stopped reading, so the
+    /// loop never reaches its cleanup: the link would look up forever and
+    /// never redial.
+    fn close_link(&self) {
+        self.up.borrow_mut().take();
+        self.close.notify_one();
+    }
+
     /// Forget every publish awaiting an OK. Dropping the senders resolves the
     /// callers as unanswered, and releases the bytes they reserved.
     fn clear_pending(&self) {
@@ -157,6 +171,7 @@ impl DirectLink {
             newest: Cell::new(now_secs().saturating_sub(FIRST_RESUME_SECS)),
             ping_every: Cell::new(PING_EVERY),
             wake: Notify::new(),
+            close: Notify::new(),
             task: RefCell::default(),
         }));
         let runner = link.clone();
@@ -209,7 +224,7 @@ impl DirectLink {
                 "[Direct] outbound budget ({} bytes) exceeded — closing the link",
                 self.0.budget.get()
             );
-            self.0.up.borrow_mut().take();
+            self.0.close_link();
             return None;
         }
         let (tx, rx) = oneshot::channel();
@@ -323,9 +338,13 @@ impl DirectLink {
                         Message::Text(text) => text.len(),
                         _ => 0,
                     };
-                    if sink.send(message).await.is_err() {
-                        break;
-                    }
+                    // Raced against the close signal: a bridge that stopped
+                    // reading can leave this write pending forever.
+                    let written = tokio::select! {
+                        result = sink.send(message) => result.is_ok(),
+                        _ = self.0.close.notified() => false,
+                    };
+                    if !written { break; }
                     // Written: it no longer occupies the outbound queue.
                     self.0.queued_bytes.set(self.0.queued_bytes.get().saturating_sub(len));
                 }
@@ -334,9 +353,11 @@ impl DirectLink {
                         log::info!("[Direct] {endpoint} went silent");
                         break;
                     }
-                    if sink.send(Message::Ping(Vec::new())).await.is_err() {
-                        break;
-                    }
+                    let written = tokio::select! {
+                        result = sink.send(Message::Ping(Vec::new())) => result.is_ok(),
+                        _ = self.0.close.notified() => false,
+                    };
+                    if !written { break; }
                 }
                 incoming = source.next() => {
                     last_heard = Instant::now();
@@ -350,6 +371,8 @@ impl DirectLink {
                         Some(Ok(_)) => {}
                     }
                 }
+                // Idle close: nothing is being written, so end at once.
+                _ = self.0.close.notified() => break,
             }
         }
         self.0.up.borrow_mut().take();
@@ -519,19 +542,14 @@ impl ServerCertVerifier for Pinned {
 mod tests {
     use super::*;
     use protocol::crypto::generate_keypair;
+    use tokio::net::TcpListener;
     use tokio::task::LocalSet;
 
-    fn link_with(endpoints: &[&str], pin: Option<&str>, proxy: Option<&str>) -> DirectLink {
-        // Not started: only `usable` is exercised.
+    fn link_with_handlers(config: DirectConfig, handlers: DirectHandlers) -> DirectLink {
+        // Not started: the caller drives `connect` / `serve` itself.
         DirectLink(Rc::new(Inner {
-            config: DirectConfig {
-                endpoints: endpoints.iter().map(|e| e.to_string()).collect(),
-                cert_sha256: pin.map(str::to_string),
-                proxy: proxy.map(str::to_string),
-                recipients: Vec::new(),
-                auth: Rc::new(generate_keypair()),
-            },
-            handlers: DirectHandlers { on_event: Rc::new(|_| {}), on_state: Rc::new(|_| {}) },
+            config,
+            handlers,
             up: RefCell::default(),
             pending: RefCell::default(),
             queued_bytes: Cell::new(0),
@@ -540,8 +558,23 @@ mod tests {
             newest: Cell::new(0),
             ping_every: Cell::new(PING_EVERY),
             wake: Notify::new(),
+            close: Notify::new(),
             task: RefCell::default(),
         }))
+    }
+
+    fn link_with(endpoints: &[&str], pin: Option<&str>, proxy: Option<&str>) -> DirectLink {
+        // Not started: only `usable` is exercised.
+        link_with_handlers(
+            DirectConfig {
+                endpoints: endpoints.iter().map(|e| e.to_string()).collect(),
+                cert_sha256: pin.map(str::to_string),
+                proxy: proxy.map(str::to_string),
+                recipients: Vec::new(),
+                auth: Rc::new(generate_keypair()),
+            },
+            DirectHandlers { on_event: Rc::new(|_| {}), on_state: Rc::new(|_| {}) },
+        )
     }
 
     const ALL: [&str; 5] = [
@@ -643,6 +676,73 @@ mod tests {
                 // and the link is still up.
                 assert_eq!(link.0.queued_bytes.get(), len);
                 assert!(link.0.up.borrow().is_some());
+            })
+            .await;
+    }
+
+    async fn wait_until(mut cond: impl FnMut() -> bool) {
+        for _ in 0..300 {
+            if cond() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("condition never became true");
+    }
+
+    #[tokio::test]
+    async fn closing_the_link_ends_a_serve_blocked_on_a_write_and_reports_it_down() {
+        LocalSet::new()
+            .run_until(async {
+                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let url = format!("ws://{}", listener.local_addr().unwrap());
+                let server = tokio::spawn(async move {
+                    let (tcp, _) = listener.accept().await.unwrap();
+                    let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+                    // Never read: once the socket buffers fill, a write blocks.
+                    tokio::time::sleep(Duration::from_secs(10)).await;
+                    let _ = ws.close(None).await;
+                });
+
+                let states: Rc<RefCell<Vec<Option<String>>>> = Rc::default();
+                let recorded = Rc::clone(&states);
+                let link = link_with_handlers(
+                    DirectConfig {
+                        endpoints: Vec::new(),
+                        cert_sha256: None,
+                        proxy: None,
+                        recipients: Vec::new(),
+                        auth: Rc::new(generate_keypair()),
+                    },
+                    DirectHandlers {
+                        on_event: Rc::new(|_| {}),
+                        on_state: Rc::new(move |state| recorded.borrow_mut().push(state)),
+                    },
+                );
+
+                let ws = dial(&url, None, None).await.unwrap();
+                let serving = link.clone();
+                let endpoint = url.clone();
+                let serve = tokio::task::spawn_local(async move { serving.serve(ws, &endpoint).await });
+                wait_until(|| states.borrow().last().is_some_and(|s| s.is_some())).await;
+
+                // Larger than the socket buffers: with a peer that never
+                // reads, the serve loop cannot finish this write.
+                let ev = a_signed_event("big", &"x".repeat(8 * 1024 * 1024));
+                let publisher = link.clone();
+                let publish =
+                    tokio::task::spawn_local(async move { publisher.publish(&ev, Duration::from_secs(10)).await });
+                tokio::time::sleep(Duration::from_millis(200)).await;
+
+                link.0.close_link();
+                tokio::time::timeout(Duration::from_secs(2), serve)
+                    .await
+                    .expect("the link ended despite the blocked write")
+                    .unwrap();
+                assert!(states.borrow().last().is_some_and(|s| s.is_none()), "the link reported itself down");
+                assert!(publish.await.unwrap().is_none(), "the pending publish was failed");
+
+                server.abort();
             })
             .await;
     }
