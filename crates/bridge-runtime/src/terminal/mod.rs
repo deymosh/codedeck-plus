@@ -588,12 +588,34 @@ fn kill_first(killer: &mut Box<dyn ChildKiller + Send + Sync>, note: String) -> 
 /// Hand the shell a built environment: `env_clear` first, because a
 /// [`CommandBuilder`] seeds itself with the bridge's own environment (the
 /// one that may hold the agents' provider keys), and then only what a shell
-/// needs to work.
+/// needs to work — plus where this bridge keeps its state and agents, so a
+/// `codedeck-bridge agents …` typed into it acts on this bridge's.
 fn apply_env(cmd: &mut CommandBuilder, shell: &str) {
     cmd.env_clear();
-    for (name, value) in built_env(shell) {
+    for (name, value) in built_env(shell).into_iter().chain(bridge_settings(|name| std::env::var(name).ok())) {
         cmd.env(name, value);
     }
+}
+
+/// The bridge's own settings a shell is given: locations, never secrets.
+/// Each is named here; anything not named stays out, whatever it holds.
+const BRIDGE_SETTINGS: [&str; 3] = ["CODEDECK_HOME", "CODEDECK_AGENT_CACHE", "CODEDECK_NPM_REGISTRY"];
+
+/// The [`BRIDGE_SETTINGS`] `var` has. A registry address that carries a
+/// user or password (`https://user:token@mirror/`) is a credential, so it
+/// stays out.
+fn bridge_settings(var: impl Fn(&str) -> Option<String>) -> Vec<(&'static str, String)> {
+    BRIDGE_SETTINGS
+        .into_iter()
+        .filter_map(|name| var(name).filter(|value| !value.is_empty()).map(|value| (name, value)))
+        .filter(|(name, value)| *name != "CODEDECK_NPM_REGISTRY" || !has_userinfo(value))
+        .collect()
+}
+
+/// Whether a URL names a user (and so perhaps a password) before its host.
+fn has_userinfo(url: &str) -> bool {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    rest.split(['/', '?', '#']).next().is_some_and(|authority| authority.contains('@'))
 }
 
 /// The variables the shell is given, and no others.
@@ -780,6 +802,27 @@ mod tests {
             .await;
     }
 
+    #[test]
+    fn a_shell_learns_where_the_bridge_keeps_things_and_no_credential() {
+        let env = |registry: &'static str| {
+            move |name: &str| match name {
+                "CODEDECK_HOME" => Some("/srv/codedeck".to_string()),
+                "CODEDECK_NPM_REGISTRY" => Some(registry.to_string()),
+                "CODEDECK_GITHUB_TOKEN" => Some("ghp_secret".to_string()),
+                _ => None,
+            }
+        };
+        assert_eq!(
+            bridge_settings(env("https://mirror.lan/npm/")),
+            vec![("CODEDECK_HOME", "/srv/codedeck".to_string()), ("CODEDECK_NPM_REGISTRY", "https://mirror.lan/npm/".to_string())]
+        );
+        // A registry address with a user in it is a credential.
+        assert_eq!(bridge_settings(env("https://me:tok@mirror.lan/")), vec![("CODEDECK_HOME", "/srv/codedeck".to_string())]);
+        // An `@` past the host is a path, not a user.
+        assert!(!has_userinfo("https://mirror.lan/@scope/pkg"));
+        assert!(has_userinfo("mirror.lan@evil"));
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn the_shell_gets_a_built_environment_and_nothing_of_the_bridges() {
@@ -805,7 +848,7 @@ mod tests {
                     text.lines().filter_map(|line| line.split_once('=').map(|(name, _)| name)).collect();
                 for name in names {
                     assert!(
-                        ["PATH", "HOME", "USER", "LANG", "SHELL", "TERM"].contains(&name),
+                        ["PATH", "HOME", "USER", "LANG", "SHELL", "TERM"].contains(&name) || BRIDGE_SETTINGS.contains(&name),
                         "the shell was given a variable it should not have: {name}"
                     );
                 }
