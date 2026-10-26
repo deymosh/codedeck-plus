@@ -59,9 +59,9 @@ describe('opencodeTool', () => {
 
 /**
  * The tools a session can call by name, recorded from the sources of the
- * version the lockfile pins (2.0.28), with the arguments each one requires:
+ * version the lockfile pins (2.1.4), with the arguments each one requires:
  * `export const name` and `export const Input` in
- * `packages/core/src/tool/plugin/*.ts` at tag v2.0.28, plus the `execute`
+ * `packages/core/src/tool/plugin/*.ts` at tag v2.1.4, plus the `execute`
  * tool out of `packages/codemode`.
  *
  * Every tool there is `codemode: false`, which is what puts it on the
@@ -87,6 +87,8 @@ const PUBLISHED: Record<string, readonly string[]> = {
   subagent: ['agent', 'description', 'prompt'],
   skill: ['id'],
   question: ['questions'],
+  // Only while the config sets `experimental.todo`.
+  todowrite: ['todos'],
 };
 
 /** The call a tool must at least be able to carry. The rest of its arguments
