@@ -139,9 +139,23 @@ impl Transcripts for FileTranscripts {
     fn load(&mut self) -> Result<BTreeMap<String, u64>, String> {
         let mut highs = BTreeMap::new();
         for entry in fs::read_dir(&self.dir).map_err(|e| e.to_string())? {
-            let name = entry.map_err(|e| e.to_string())?.file_name().to_string_lossy().into_owned();
+            let name = match entry {
+                Ok(e) => e.file_name().to_string_lossy().into_owned(),
+                Err(e) => {
+                    log::warn!("[Transcripts] Skipping an unreadable directory entry: {e}");
+                    continue;
+                }
+            };
             let Some(session_id) = session_of(&name) else { continue };
-            let lines = self.lines(&session_id)?;
+            // One unreadable transcript must not cost every other session its
+            // seq high: this file is skipped, the rest are loaded.
+            let lines = match self.lines(&session_id) {
+                Ok(lines) => lines,
+                Err(e) => {
+                    log::warn!("[Transcripts] {name}: skipped, cannot read it: {e}");
+                    continue;
+                }
+            };
             let entries: Vec<SyncEntry> = lines.iter().filter_map(|l| parse_line(l)).collect();
             let present = lines.iter().filter(|l| !l.trim().is_empty()).count();
             let high = entries.iter().map(|e| e.seq).max().unwrap_or(0);
@@ -295,6 +309,19 @@ mod tests {
         t.remove("s").unwrap();
         assert!(t.read("s", (1, 100)).unwrap().is_empty());
         assert!(!dir.path().join("s.jsonl").exists(), "reading after a removal does not recreate it");
+    }
+
+    #[test]
+    fn an_unreadable_transcript_is_skipped_not_fatal() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut t = FileTranscripts::open(dir.path()).unwrap();
+        t.append("good", 1, &entry("a")).unwrap();
+        // Something that is named like a transcript but cannot be read as
+        // one: a directory, whose read fails on every platform.
+        fs::create_dir(dir.path().join("bad.jsonl")).unwrap();
+        let highs = t.load().unwrap();
+        assert_eq!(highs.get("good"), Some(&1));
+        assert!(!highs.contains_key("bad"), "the bad file is skipped, the good one keeps its seq high");
     }
 
     #[test]
