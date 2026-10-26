@@ -64,6 +64,12 @@ use crate::view::{
 const RESUME_HEARD_WITHIN_MS: u64 = 90_000;
 /// How often the CDX-020 dead-subscription watchdog re-checks while connected.
 const STALE_WATCHDOG_EVERY: Duration = Duration::from_secs(30);
+/// How long a connect attempt may stay in `Connecting`. The FSM's `SocketOpen`
+/// is EOSE, not the TCP/WebSocket handshake: a relay that accepts the socket
+/// but never finishes AUTH and the initial REQs would otherwise leave the
+/// phone waiting forever, because heartbeat staleness is only checked while
+/// `Connected`. Tor is slow, so this is generous.
+const CONNECT_DEADLINE_MS: u64 = 45_000;
 /// The longest a stop waits for its `away` to go out.
 const AWAY_WAIT: Duration = Duration::from_secs(2);
 /// How long a change of what this client watches is coalesced before it is
@@ -482,6 +488,7 @@ impl Core {
             entropy,
             observer,
             conn: initial_connection_state(),
+            connecting_since: None,
             nostr,
             ws,
             api: BridgeApi::new(),
@@ -541,6 +548,11 @@ impl Core {
     /// A host watches it to fail loudly instead of rendering a dead core.
     pub async fn closed(&self) {
         self.tx.closed().await;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn tick(&self) {
+        let _ = self.tx.send(Msg::StaleWatchdog);
     }
 
     pub fn start(&self) {
@@ -1017,6 +1029,10 @@ struct Loop {
     entropy: Rc<dyn Entropy>,
     observer: Rc<dyn CoreObserver>,
     conn: ConnectionState,
+    /// When the current `Connecting` attempt began (ms); `None` in every other
+    /// status. [`CONNECT_DEADLINE_MS`] turns an attempt that never reaches EOSE
+    /// into the ordinary close/backoff path.
+    connecting_since: Option<u64>,
     nostr: NostrClient<WsTransport, LoopHost>,
     ws: WsTransport,
     api: BridgeApi,
@@ -1245,6 +1261,7 @@ impl Loop {
                     self.dispatch(ConnectionEvent::SocketClose { random });
                 }
                 Msg::StaleWatchdog => {
+                    self.check_connect_deadline();
                     self.check_stale_heartbeats();
                     self.check_connected_relays_changed();
                     self.renew_presence();
@@ -1327,6 +1344,7 @@ impl Loop {
         let before = (self.conn.status, self.conn.needs_pairing_check);
         let result = connection_reducer(&self.conn, &event, &self.reconnect);
         self.conn = result.state;
+        self.track_connecting_since(before.0);
         for effect in result.effects {
             self.apply(effect);
         }
@@ -1338,6 +1356,31 @@ impl Loop {
                 .connection_changed(self.conn.status, self.conn.needs_pairing_check, &connected);
             self.state_changed(SliceId::Connection);
         }
+    }
+
+    /// Start (or keep) the connect-attempt clock only while `Connecting`.
+    fn track_connecting_since(&mut self, was: ConnectionStatus) {
+        match (was, self.conn.status) {
+            (ConnectionStatus::Connecting, ConnectionStatus::Connecting) => {}
+            (_, ConnectionStatus::Connecting) => {
+                self.connecting_since = Some(self.clock.now_ms());
+            }
+            _ => self.connecting_since = None,
+        }
+    }
+
+    /// An attempt that never reached EOSE within [`CONNECT_DEADLINE_MS`]: the
+    /// socket may be open while AUTH or the initial REQs never complete, and
+    /// nothing else watches `Connecting`. Report it as a lost socket so the
+    /// FSM's normal backoff and retry path runs.
+    fn check_connect_deadline(&mut self) {
+        if !connect_attempt_expired(self.conn.status, self.connecting_since, self.clock.now_ms()) {
+            return;
+        }
+        self.connecting_since = None;
+        log::warn!("connection: no EOSE within {CONNECT_DEADLINE_MS}ms — abandoning the attempt");
+        let random = Some(self.entropy.unit());
+        self.dispatch(ConnectionEvent::SocketClose { random });
     }
 
     /// CDX-020: every paired machine's heartbeat went stale while
@@ -2676,6 +2719,12 @@ impl FileSendCtx {
         }
     }
 
+}
+
+/// True when a `Connecting` attempt has outlived [`CONNECT_DEADLINE_MS`].
+fn connect_attempt_expired(status: ConnectionStatus, since: Option<u64>, now: u64) -> bool {
+    status == ConnectionStatus::Connecting
+        && since.is_some_and(|at| now.saturating_sub(at) >= CONNECT_DEADLINE_MS)
 }
 
 fn incoming_of(event: &NostrEvent) -> IncomingEvent<'_> {

@@ -74,6 +74,16 @@ async fn core_for_ports(
     spy: Rc<Spy>,
     ports: CorePorts,
 ) -> Core {
+    core_for_ports_clock(mock, phone, spy, ports, Rc::new(FixedClock(RefCell::new(1_000_000)))).await
+}
+
+async fn core_for_ports_clock(
+    mock: &MockRelay,
+    phone: &Keypair,
+    spy: Rc<Spy>,
+    ports: CorePorts,
+    clock: Rc<FixedClock>,
+) -> Core {
     let core = Core::spawn(
         CoreConfig {
             identity: Rc::new(crate::signer::LocalSigner(phone.clone())),
@@ -84,7 +94,7 @@ async fn core_for_ports(
         },
         ports,
         spy,
-        Rc::new(FixedClock(RefCell::new(1_000_000))),
+        clock,
         Rc::new(ZeroEntropy),
     )
     .await;
@@ -728,6 +738,45 @@ async fn a_socket_drop_backs_off_and_reconnects() {
             assert!(
                 statuses.iter().filter(|(s, _)| *s == ConnectionStatus::Connecting).count() >= 2,
                 "expected a second Connecting after backoff: {statuses:?}"
+            );
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn a_connect_that_never_reaches_eose_is_abandoned_and_retried() {
+    LocalSet::new()
+        .run_until(async {
+            // The relay accepts the socket and reads the REQs, but never
+            // sends EOSE — the FSM's `SocketOpen`, and the only thing that
+            // ends `Connecting`.
+            let mock = mock_relay().await;
+            let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+            let spy = Rc::new(Spy::default());
+            let clock = Rc::new(FixedClock(RefCell::new(1_000_000)));
+            let core = core_for_ports_clock(
+                &mock,
+                &phone,
+                Rc::clone(&spy),
+                CorePorts::default(),
+                Rc::clone(&clock),
+            )
+            .await;
+            core.set_machines(vec![generate_keypair().pubkey_hex]);
+            core.start();
+            settle().await;
+            assert_eq!(core.connection_status().await.0, ConnectionStatus::Connecting);
+
+            *clock.0.borrow_mut() += CONNECT_DEADLINE_MS + 1_000;
+            core.tick();
+            settle().await; // fast_reconnect's 40ms retry has fired by now
+
+            let statuses: Vec<ConnectionStatus> =
+                spy.statuses.lock().unwrap().iter().map(|(s, _)| *s).collect();
+            assert!(statuses.contains(&ConnectionStatus::WaitingRetry), "{statuses:?}");
+            assert!(
+                statuses.windows(2).any(|w| w == [ConnectionStatus::WaitingRetry, ConnectionStatus::Connecting]),
+                "the abandoned attempt went through backoff and retried: {statuses:?}"
             );
         })
         .await;
