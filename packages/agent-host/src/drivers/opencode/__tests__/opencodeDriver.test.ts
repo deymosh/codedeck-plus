@@ -719,7 +719,6 @@ describe('OpenCode compaction', () => {
     ]));
     await ctx.ended();
     expect(ctx.entries().filter((e) => e.entryType === 'status').map((e) => (e as { text: string }).text)).toEqual([
-      'OpenCode session started',
       'OpenCode is compacting the conversation to make room in the context.',
       'Compacted the conversation to make room: OpenCode continues from a summary of it.',
     ]);
@@ -735,7 +734,6 @@ describe('OpenCode compaction', () => {
     ]));
     await ctx.ended();
     expect(ctx.entries().filter((e) => e.entryType === 'status').map((e) => (e as { text: string }).text)).toEqual([
-      'OpenCode session started',
       'Compacted the conversation: OpenCode continues from a summary of it.',
     ]);
   });
@@ -1166,21 +1164,25 @@ describe('OpenCode live reply text', () => {
   });
 });
 
-describe('OpenCode session start line', () => {
+describe('the OpenCode version', () => {
   const statuses = (ctx: ReturnType<typeof start>) =>
     ctx.entries().filter((e) => e.entryType === 'status').map((e) => (e as { text: string }).text);
 
-  it('a new session says the server version once', async () => {
-    const client = clientWith(turn('hi'), { server: { info: vi.fn(async () => ({ version: '2.0.28' })) } });
-    const ctx = start(client);
-    await ctx.ended();
-    expect(statuses(ctx)).toEqual(['OpenCode 2.0.28']);
+  it("is the server's own, for the catalog", async () => {
+    const client = clientWith([], { server: { info: vi.fn(async () => ({ version: '2.0.28' })) } });
+    const driver = await OpenCodeDriver.create({ serverUrl: 'http://127.0.0.1:4100', log: () => {}, connect: () => client });
+    expect(await driver.version()).toBe('2.0.28');
   });
 
-  it('a resumed session does not say it again', async () => {
+  it('is undefined when the server cannot say', async () => {
+    const client = clientWith([], { server: { info: vi.fn(async () => { throw new Error('down'); }) } });
+    const driver = await OpenCodeDriver.create({ serverUrl: 'http://127.0.0.1:4100', log: () => {}, connect: () => client });
+    expect(await driver.version()).toBeUndefined();
+  });
+
+  it('is not announced by a new session', async () => {
     const client = clientWith(turn('hi'), { server: { info: vi.fn(async () => ({ version: '2.0.28' })) } });
-    asMock(client.session.get).mockResolvedValue({ id: 'ses_1', title: 'T' });
-    const ctx = start(client, { resume: 'ses_1' });
+    const ctx = start(client);
     await ctx.ended();
     expect(statuses(ctx)).toEqual([]);
   });

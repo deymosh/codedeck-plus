@@ -32,6 +32,8 @@ interface Entry {
   installing: Promise<void> | null;
   /** Why the last install failed, until the next one starts. */
   failure: string | null;
+  /** The agent's release, once its driver has told it. */
+  version?: string;
 }
 
 /** Everything off: what a driver supports is known once it is built. */
@@ -109,6 +111,7 @@ export class Agents {
     }
     const agents = new Agents(entries, base.log);
     for (const entry of entries.values()) {
+      if (entry.driver) agents.readVersion(entry);
       if (!entry.driver && entry.module.installByDefault && !wasRemoved(base.cacheDir, entry.module.id)) {
         base.log(`[agents] ${entry.module.label} is the default agent and is not on this machine — installing it`);
         agents.begin(entry);
@@ -183,6 +186,7 @@ export class Agents {
     entry.driver = null;
     entry.removable = false;
     entry.failure = null;
+    delete entry.version;
     this.changed(entry);
     if (!driver) return;
     await endSessions(`${module.label} was removed from this machine.`);
@@ -214,6 +218,7 @@ export class Agents {
         entry.driver = await module.create(ctx);
         entry.removable = !module.runtime!.find(ctx);
         this.log(`[agents] ${module.label} is installed`);
+        this.readVersion(entry);
       } catch (err) {
         entry.failure = errorText(err);
         this.log(`[agents] ${module.label} could not be installed: ${entry.failure}`);
@@ -225,13 +230,36 @@ export class Agents {
     this.changed(entry);
   }
 
+  /**
+   * Read a ready agent's release in the background and, once known, tell
+   * the bridge (`agent-changed`): the catalog is sent before it, so starting
+   * up never waits on the agent's binary. A driver that was removed or
+   * replaced meanwhile keeps the answer out.
+   */
+  private readVersion(entry: Entry): void {
+    const driver = entry.driver;
+    if (!driver?.version) return;
+    driver.version().then(
+      (version) => {
+        if (!version || entry.driver !== driver || entry.version === version) return;
+        entry.version = version;
+        this.changed(entry);
+      },
+      (err: unknown) => this.log(`[agents] could not read ${entry.module.label}'s version: ${errorText(err)}`),
+    );
+  }
+
   private changed(entry: Entry): void {
     this.onChange(this.info(entry));
   }
 
   private info(entry: Entry): AgentInfo {
     if (entry.driver) {
-      return { ...entry.driver.info(), install: { state: 'ready', ...(entry.removable ? { removable: true } : {}) } };
+      return {
+        ...entry.driver.info(),
+        install: { state: 'ready', ...(entry.removable ? { removable: true } : {}) },
+        ...(entry.version ? { version: entry.version } : {}),
+      };
     }
     const install: AgentInstall = entry.installing
       ? { state: 'installing' }

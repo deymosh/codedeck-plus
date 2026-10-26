@@ -7,9 +7,10 @@
 import { installBinary, installedBinary, removeBinary } from '../../install/agentInstall';
 import type { DriverEnv, DriverModule } from '../../sdk/module';
 import { httpPost, providerHttp } from '../../sdk/net';
+import { binaryVersion } from '../../sdk/version';
 import { ClaudeDriver } from './driver';
 import { RealSdkFacade, resolveClaudeExecutable } from './facade';
-import { bundledClaudeExecutable, claudeBinary } from './install';
+import { bundledClaudeExecutable, claudeBinary, pinnedClaudeVersion } from './install';
 import { TestModeSdkFacade } from './testModeFacade';
 
 const testMode = (ctx: DriverEnv): boolean => ctx.env.CODEDECK_TEST_MODE === '1';
@@ -40,6 +41,11 @@ export const claudeModule: DriverModule = {
       discoverModels: !test,
       managePlugins: !test,
       manageMcp: !test,
+      // The SDK's own binary (bundled or installed on demand) is the release
+      // its manifest names; one of the machine's own has to say.
+      ...(!test
+        ? { readVersion: () => (claudePath && claudePath !== bundledClaudeExecutable() ? binaryVersion(claudePath) : pinnedClaudeVersion()) }
+        : {}),
     });
   },
   runtime: {

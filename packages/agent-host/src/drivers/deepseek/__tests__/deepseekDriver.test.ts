@@ -165,19 +165,18 @@ describe('DeepSeekSession startup', () => {
       { sessionId: 's1', configId: 'reasoning_effort', value: 'low' },
     ]);
     expect(infoEvents(ctx)[0]).toEqual({ type: 'info', nativeSessionId: 's1', model: 'DeepSeek-V4-Pro', mode: 'ask' });
-    // No manifest in this fake tree: the line goes without a version.
-    expect(ctx.entries()).toEqual([expect.objectContaining({ entryType: 'status', text: 'DeepSeek Harness session started' })]);
+    // The release is the catalog's: a new session announces nothing.
+    expect(ctx.entries()).toEqual([]);
   });
 
-  it("opens with the harness's version, read from its package rather than its placeholder agentInfo", async () => {
+  it("reports the harness's version, read from its package rather than its placeholder agentInfo", async () => {
     const root = mkdtempSync(path.join(tmpdir(), 'dsh-tree-'));
     const pkg = path.join(root, 'node_modules', '@deepseek-ai', 'dsh');
     mkdirSync(path.join(pkg, 'lib'), { recursive: true });
     writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.0-rc.2' }));
     writeFileSync(path.join(pkg, 'lib', 'bin.js'), '');
     const ready = withDriver({ dshPath: path.join(pkg, 'lib', 'bin.js') });
-    const ctx = await started(ready);
-    expect(ctx.entries()).toEqual([expect.objectContaining({ entryType: 'status', text: 'DeepSeek Harness 0.2.0-rc.2' })]);
+    expect(await ready.driver.version()).toBe('0.2.0-rc.2');
   });
 
   it('accepts a model named by its plain id, as a provider profile names one', async () => {
@@ -287,26 +286,25 @@ describe('DeepSeekSession updates', () => {
     ready.harness.toolResult('s1', 'c2', '');
     ready.harness.toolCall('s1', 'c3', 'todo_write', { todos: [{ content: 'Ship it', status: 'in_progress' }] });
 
-    await vi.waitFor(() => expect(ctx.entries()).toHaveLength(10));
+    await vi.waitFor(() => expect(ctx.entries()).toHaveLength(9));
     const entries = ctx.entries();
-    expect(entries[0]).toMatchObject({ entryType: 'status' });
-    expect(entries[1]).toMatchObject({ entryType: 'thinking', text: 'weighing options' });
-    expect(entries[2]).toMatchObject({ entryType: 'text', role: 'agent', text: 'Here is the plan.' });
-    expect(entries[3]).toMatchObject({
+    expect(entries[0]).toMatchObject({ entryType: 'thinking', text: 'weighing options' });
+    expect(entries[1]).toMatchObject({ entryType: 'text', role: 'agent', text: 'Here is the plan.' });
+    expect(entries[2]).toMatchObject({
       entryType: 'tool_call',
       callId: 'c1',
       kind: 'execute',
       title: 'npm ci…',
       input: 'npm ci\nnpm test',
     });
-    expect(entries[4]).toMatchObject({ entryType: 'tool_result', callId: 'c1', text: 'all green' });
-    expect(entries[5]).toMatchObject({ entryType: 'tool_call', callId: 'c2', kind: 'edit', locations: ['src/a.ts'] });
+    expect(entries[3]).toMatchObject({ entryType: 'tool_result', callId: 'c1', text: 'all green' });
+    expect(entries[4]).toMatchObject({ entryType: 'tool_call', callId: 'c2', kind: 'edit', locations: ['src/a.ts'] });
     // An empty result still marks the call finished, and the file change is
     // reconstructed from the call's own arguments.
-    expect(entries[6]).toMatchObject({ entryType: 'tool_result', callId: 'c2', text: '' });
-    expect(entries[7]).toMatchObject({ entryType: 'diff', path: 'src/a.ts', callId: 'c2' });
-    expect(entries[8]).toMatchObject({ entryType: 'tool_call', callId: 'c3', kind: 'think' });
-    expect(entries[9]).toMatchObject({ entryType: 'todos', items: [{ text: 'Ship it', status: 'in_progress' }] });
+    expect(entries[5]).toMatchObject({ entryType: 'tool_result', callId: 'c2', text: '' });
+    expect(entries[6]).toMatchObject({ entryType: 'diff', path: 'src/a.ts', callId: 'c2' });
+    expect(entries[7]).toMatchObject({ entryType: 'tool_call', callId: 'c3', kind: 'think' });
+    expect(entries[8]).toMatchObject({ entryType: 'todos', items: [{ text: 'Ship it', status: 'in_progress' }] });
   });
 
   it('reports how full the context is, and only when it changed', async () => {
@@ -329,7 +327,7 @@ describe('DeepSeekSession updates', () => {
     const ctx = await started(ready);
     ready.harness.message('other', 'not mine');
     await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(ctx.entries().map((entry) => entry.entryType)).toEqual(['status']);
+    expect(ctx.entries()).toEqual([]);
   });
 });
 

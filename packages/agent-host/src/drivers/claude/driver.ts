@@ -172,6 +172,9 @@ export interface ClaudeDriverDeps {
   /** Manage the user-scope MCP servers through the same CLI. */
   manageMcp?: boolean;
   runCli?: CliRunner;
+  /** Read the release of the `claude` sessions run (the catalog's
+   *  `version`). */
+  readVersion?: () => Promise<string | undefined>;
 }
 
 export class ClaudeSession implements DriverSession {
@@ -180,8 +183,6 @@ export class ClaudeSession implements DriverSession {
   /** Told a tool name no agent's table lists, which the log then carries. */
   private readonly reportUnknownTool: (toolName: string) => void;
   private readonly resumeTarget: string | null;
-  /** Whether the version line was said: once, when a new session starts. */
-  private announced = false;
   /** Coalesces the SDK's streamed deltas into `partial` events (sdk/partial):
    *  a few signed, relayed updates a second, not one per token. */
   private readonly partials: PartialCoalescer;
@@ -405,13 +406,6 @@ export class ClaudeSession implements DriverSession {
         ...(modelChanged ? { model: initModel } : {}),
       });
       this.markReady();
-      // Every turn starts with an init, but the version is said once, when
-      // the session starts — as the CLI's own welcome does. A resumed session
-      // said it when it started, so it does not say it again.
-      if (!this.announced && !this.resumeTarget && typeof init.claude_code_version === 'string') {
-        this.entries([{ entryType: 'status', text: `Claude Code ${init.claude_code_version}`, timestamp: new Date().toISOString() }]);
-      }
-      this.announced = true;
     }
 
     if (msg.type === 'system' && (msg as { subtype?: string }).subtype === 'session_state_changed') {
@@ -810,6 +804,10 @@ export class ClaudeDriver implements Driver {
       // Reloading plugins also reloads the MCP servers a session loads.
       this.mcp = new ClaudeMcp(options.runCli ?? execCli(() => this.cliPath()), () => this.reloadPlugins());
     }
+  }
+
+  version(): Promise<string | undefined> {
+    return this.options.readVersion?.() ?? Promise.resolve(undefined);
   }
 
   /** The binary plugin commands run: the one sessions use, waiting for an

@@ -175,16 +175,10 @@ describe('Claude session lifecycle', () => {
     handle.push(init());
     await ctx.waitFor((e) => e.type === 'info' && e.nativeSessionId === 'native-1');
     expect(ctx.events).toContainEqual({ type: 'info', nativeSessionId: 'native-1', mode: 'plan', model: 'claude-sonnet-5' });
-    // …and says the version once: every turn starts with an init.
+    // The version is the catalog's: no init, the first or any later one,
+    // adds a row.
     handle.push(init());
     await ctx.waitFor((e) => e.type === 'info' && ctx.events.filter((x) => x.type === 'info').length >= 2);
-    expect(ctx.entries()).toEqual([expect.objectContaining({ entryType: 'status', text: 'Claude Code 2.1.220' })]);
-  });
-
-  it('a resumed session does not say its version again', async () => {
-    const { ctx, handle } = start({ resume: 'native-1' });
-    handle.push(init());
-    await ctx.waitFor((e) => e.type === 'info' && e.nativeSessionId === 'native-1');
     expect(ctx.entries()).toEqual([]);
   });
 
