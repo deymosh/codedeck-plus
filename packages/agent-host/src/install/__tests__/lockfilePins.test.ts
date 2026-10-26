@@ -181,6 +181,21 @@ describe('packageTree', () => {
   });
 });
 
+describe('docker/Dockerfile', () => {
+  it('bakes the OpenCode the lockfile pins', () => {
+    // A `BUNDLE_AGENTS=1` image installs OpenCode by this argument, not from
+    // the lockfile: a stale default puts an older server on PATH than the
+    // client the host speaks to it with.
+    const dockerfile = fs.readFileSync(path.resolve(__dirname, '../../../../../docker/Dockerfile'), 'utf8');
+    const baked = /^ARG OPENCODE_VERSION=(\S+)$/m.exec(dockerfile)?.[1];
+    const lockfile = fs.readFileSync(LOCKFILE_PATH, 'utf8');
+    const pinned = platformPackages(lockfile, runtimeTreeNames(lockfile))['@opencode/cli']?.version;
+    // Neither may go missing unnoticed: two undefineds would agree.
+    expect(pinned).toMatch(/^\d+\.\d+\.\d+/);
+    expect(baked).toBe(pinned);
+  });
+});
+
 describe('src/generated/dshPackages.ts', () => {
   it('matches pnpm-lock.yaml', async () => {
     const lockfile = fs.readFileSync(LOCKFILE_PATH, 'utf8');

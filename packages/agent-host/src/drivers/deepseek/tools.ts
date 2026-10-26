@@ -45,6 +45,8 @@ export const DEEPSEEK_TOOLS: ToolDialects = {
   pwsh: { kind: ToolKind.Execute, title: runTitle, detail: (input) => str(input.command) },
   job_kill: { kind: ToolKind.Execute, title: (input) => str(input.job_id) },
   interrupt_agent: { kind: ToolKind.Execute, title: killTitle },
+  // Reads the session's working directory, or changes it when given `cd`.
+  working_directory: { kind: ToolKind.Execute, title: (input) => (str(input.cd) ? `cd ${str(input.cd)}` : 'pwd') },
 
   // --- files ---
   read: { kind: ToolKind.Read, title: fileOf },
