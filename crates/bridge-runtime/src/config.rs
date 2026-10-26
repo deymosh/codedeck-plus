@@ -904,6 +904,20 @@ mod tests {
         assert!(err.contains("invalid config"));
     }
 
+    #[test]
+    fn a_config_file_with_the_removed_register_keys_still_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("config.json"),
+            r#"{"machineName":"old","relayRegisterEndpoint":"https://relay.example/admin","relayRegisterToken":"t","blossomRegisterEndpoint":"https://blossom.example/admin","blossomRegisterToken":"t"}"#,
+        )
+        .unwrap();
+        let config = load(&Flags { home: Some(dir.path().into()), ..Default::default() }).unwrap();
+        if env("CODEDECK_MACHINE_NAME").is_none() {
+            assert_eq!(config.machine, "old", "the keys are ignored, not rejected");
+        }
+    }
+
     const ALL: WebListeners = WebListeners { direct: true, onion: true };
 
     #[test]
