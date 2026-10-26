@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use bridge_core::ports::Store;
 use protocol::crypto::{generate_keypair, keypair_from_secret_hex, Keypair};
@@ -117,14 +118,44 @@ fn write_doc(path: &Path, doc: &StateDoc) -> Result<(), String> {
     write_private(path, &json).map_err(|e| format!("cannot write {}: {e}", path.display()))
 }
 
+/// How long the writer waits before retrying a failed snapshot. After these
+/// attempts it waits for the next snapshot: if the disk is still failing,
+/// retrying the same bytes adds nothing, and the newest snapshot is tried as
+/// a fresh one with its own budget. A transient failure is therefore not
+/// left as a silently stale `state.json`.
+#[cfg(not(test))]
+const RETRY_DELAYS: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(5)];
+#[cfg(test)]
+const RETRY_DELAYS: [Duration; 2] = [Duration::from_millis(20), Duration::from_millis(50)];
+
 fn writer_loop(path: &Path, rx: Receiver<Job>) {
-    while let Ok(Job { doc, ack }) = rx.recv() {
-        let mut acks: Vec<Sender<Result<(), String>>> = ack.into_iter().collect();
-        let doc = coalesce(doc, &mut acks, &rx);
-        let result = write_doc(path, &doc);
-        if let Err(e) = &result {
-            log::warn!("[State] {e}");
-        }
+    loop {
+        let (mut doc, mut acks): (StateDoc, Vec<Sender<Result<(), String>>>) = match rx.recv() {
+            Ok(Job { doc, ack }) => (doc, ack.into_iter().collect()),
+            Err(_) => break,
+        };
+        doc = coalesce(doc, &mut acks, &rx);
+        let mut delays = RETRY_DELAYS.into_iter();
+        let result = loop {
+            match write_doc(path, &doc) {
+                Ok(()) => break Ok(()),
+                Err(e) => {
+                    log::warn!("[State] {e}");
+                    let Some(delay) = delays.next() else { break Err(e) };
+                    // Wait out the delay, but a newer snapshot supersedes the
+                    // one that failed.
+                    match rx.recv_timeout(delay) {
+                        Ok(Job { doc: newer, ack }) => {
+                            doc = newer;
+                            acks.extend(ack);
+                            doc = coalesce(doc, &mut acks, &rx);
+                        }
+                        Err(mpsc::RecvTimeoutError::Timeout) => {}
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break Err(e),
+                    }
+                }
+            }
+        };
         for ack in acks {
             let _ = ack.send(result.clone());
         }
@@ -320,6 +351,27 @@ mod tests {
         let again = StateFile::open(dir.path()).unwrap();
         assert_eq!(again.identity().unwrap().pubkey_hex, keys.pubkey_hex);
         assert_eq!(again.get("pairedPhones").as_deref(), Some("[1]"));
+    }
+
+    #[test]
+    fn a_failed_write_is_retried_before_it_is_given_up_and_the_next_snapshot_lands() {
+        let dir = tempfile::tempdir().unwrap();
+        // The parent directory does not exist yet: every attempt fails.
+        let path = dir.path().join("sub").join("state.json");
+        let writer = Writer::spawn(path.clone());
+        let mut doc = StateDoc::default();
+        doc.kv.insert("k".into(), "v".into());
+        let started = std::time::Instant::now();
+        assert!(writer.write_now(doc.clone()).is_err());
+        assert!(
+            started.elapsed() >= Duration::from_millis(60),
+            "the failed write waited for its retries before giving up"
+        );
+        // The disk recovers; the next snapshot is a fresh write, not a
+        // permanently stale file.
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        writer.write_now(doc).unwrap();
+        assert!(std::fs::read_to_string(&path).unwrap().contains("\"v\""));
     }
 
     #[test]
