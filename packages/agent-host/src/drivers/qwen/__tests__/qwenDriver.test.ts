@@ -363,32 +363,9 @@ describe('QwenSession updates', () => {
     ready.agent.message('s1', '');
     ready.agent.thought('s1', 'weighing options');
     ready.agent.message('s1', 'Here is the plan.');
-    // The first update carries the title and no arguments, as Qwen Code sends it.
-    ready.agent.send('session/update', {
-      sessionId: 's1',
-      update: {
-        sessionUpdate: 'tool_call',
-        toolCallId: 'c1',
-        title: 'Shell',
-        kind: 'execute',
-        status: 'pending',
-        rawInput: {},
-        _meta: { toolName: 'run_shell_command' },
-      },
-    });
-    // The running update carries the arguments.
-    ready.agent.send('session/update', {
-      sessionId: 's1',
-      update: {
-        sessionUpdate: 'tool_call_update',
-        toolCallId: 'c1',
-        status: 'in_progress',
-        title: 'Shell: npm ci',
-        kind: 'execute',
-        rawInput: { command: 'npm ci\nnpm test' },
-        _meta: { toolName: 'run_shell_command' },
-      },
-    });
+    // The first update carries the title and no arguments; the arguments
+    // arrive in the update that starts the call, as Qwen Code sends them.
+    ready.agent.toolCall('s1', 'c1', 'run_shell_command', { command: 'npm ci\nnpm test' });
     ready.agent.toolResult('s1', 'c1', 'all green');
 
     await vi.waitFor(() => expect(ctx.entries().filter((entry) => entry.entryType === 'tool_result')).toHaveLength(1));

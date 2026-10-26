@@ -203,8 +203,9 @@ const DEEPSEEK: Profile = {
   },
   configRefusal(configId, value, options) {
     if (configId === 'model') return `Invalid params: unknown model option: ${value}`;
-    const current = asRecord(options.find((entry) => asRecord(entry).id === configId)).currentValue;
-    return `Invalid params: unknown reasoning effort for ${harnessModelId(typeof current === 'string' ? current : '')}: ${value}`;
+    // The harness names the model the effort was refused for.
+    const model = asRecord(options.find((entry) => asRecord(entry).id === 'model')).currentValue;
+    return `Invalid params: unknown reasoning effort for ${harnessModelId(typeof model === 'string' ? model : '')}: ${value}`;
   },
   unknownConfigRefusal(configId) {
     return `Invalid params: unknown session config option: ${configId}`;
@@ -291,7 +292,8 @@ const QWEN: Profile = {
   },
   configRefusal(configId, value, options) {
     if (configId === 'model') return `Invalid params: Model '${value}' not found for authType 'openai'`;
-    const offered = offeredValues(options);
+    const option = options.find((entry) => asRecord(entry).id === configId);
+    const offered = offeredValues(option === undefined ? [] : [option]);
     // The message puts the provider default first, then the option list.
     const choices = ['default', ...offered.filter((entry) => entry !== 'default')].join(', ');
     return `Invalid params: Unknown reasoning effort: ${value}. Choose one of: ${choices}`;

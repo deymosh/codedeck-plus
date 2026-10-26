@@ -51,7 +51,7 @@ function withDriver(
   options: { env?: NodeJS.ProcessEnv; httpGet?: HttpGet; providerHttp?: ProviderHttp; log?: (line: string) => void } = {},
 ) {
   const home = harnessHome();
-  const agent = new FakeAgent();
+  const agent = new FakeAgent('deepseek');
   agent.options = configOptions();
   const spawns: Array<{ command: string; args: string[]; env: Record<string, string> }> = [];
   const logs: string[] = [];
