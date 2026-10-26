@@ -7,10 +7,11 @@
 //! file without it) and recovers the highest seq from what remains.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use bridge_core::ports::Transcripts;
 use protocol::common::OutputEntry;
@@ -18,6 +19,12 @@ use protocol::events::SyncEntry;
 use protocol::ranges::SeqRange;
 
 use crate::state::write_private;
+
+/// Attempts to read a transcript when the bridge starts, and the wait
+/// between them: start-up is when a transient lock or a slow mount is the
+/// likeliest reason a file cannot be read yet.
+const START_READ_ATTEMPTS: usize = 3;
+const START_READ_RETRY: Duration = Duration::from_millis(100);
 
 pub struct FileTranscripts {
     dir: PathBuf,
@@ -27,6 +34,10 @@ pub struct FileTranscripts {
     cache: RefCell<Option<Cached>>,
     #[cfg(test)]
     parses: std::cell::Cell<usize>,
+    /// Sessions whose transcript could not be read at start, so their
+    /// highest seq is unknown. Appending would start again at seq 1 over
+    /// lines that are still there, so these are not written at all.
+    refused: HashSet<String>,
 }
 
 struct Cached {
@@ -76,6 +87,7 @@ impl FileTranscripts {
             cache: RefCell::new(None),
             #[cfg(test)]
             parses: std::cell::Cell::new(0),
+            refused: HashSet::new(),
         })
     }
 
@@ -89,6 +101,24 @@ impl FileTranscripts {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
             Err(e) => Err(e.to_string()),
         }
+    }
+
+    /// `lines`, retried a couple of times: load runs at start-up, when a
+    /// transient lock or a slow mount is the likeliest reason a file cannot
+    /// be read yet. A session that stays unreadable is remembered in
+    /// `refused`; appending to it would reuse seqs over its existing lines.
+    fn read_at_start(&self, session_id: &str) -> Result<Vec<String>, String> {
+        let mut last = String::new();
+        for attempt in 0..START_READ_ATTEMPTS {
+            if attempt > 0 {
+                std::thread::sleep(START_READ_RETRY);
+            }
+            match self.lines(session_id) {
+                Ok(lines) => return Ok(lines),
+                Err(e) => last = e,
+            }
+        }
+        Err(last)
     }
 
     /// The session's entries, in seq order. This is the one place a transcript
@@ -139,6 +169,7 @@ impl FileTranscripts {
 impl Transcripts for FileTranscripts {
     fn load(&mut self) -> Result<BTreeMap<String, u64>, String> {
         let mut highs = BTreeMap::new();
+        self.refused.clear();
         for entry in fs::read_dir(&self.dir).map_err(|e| e.to_string())? {
             let name = match entry {
                 Ok(e) => e.file_name().to_string_lossy().into_owned(),
@@ -149,11 +180,16 @@ impl Transcripts for FileTranscripts {
             };
             let Some(session_id) = session_of(&name) else { continue };
             // One unreadable transcript must not cost every other session its
-            // seq high: this file is skipped, the rest are loaded.
-            let lines = match self.lines(&session_id) {
+            // seq high: this file is skipped, the rest are loaded. Its own
+            // high is unknown, though, so appends to it are refused rather
+            // than restarting at seq 1 over the lines still in the file.
+            let lines = match self.read_at_start(&session_id) {
                 Ok(lines) => lines,
                 Err(e) => {
-                    log::warn!("[Transcripts] {name}: skipped, cannot read it: {e}");
+                    log::error!(
+                        "[Transcripts] {name}: cannot be read after {START_READ_ATTEMPTS} attempts ({e}). Its seq high is unknown, so new entries are not appended to it this run; the transcript is left untouched."
+                    );
+                    self.refused.insert(session_id);
                     continue;
                 }
             };
@@ -175,6 +211,9 @@ impl Transcripts for FileTranscripts {
     }
 
     fn append(&mut self, session_id: &str, seq: u64, entry: &OutputEntry) -> Result<(), String> {
+        if self.refused.contains(session_id) {
+            return Err("its transcript could not be read at start, so its seq high is unknown; not appending".into());
+        }
         let record = SyncEntry { seq, entry: entry.clone() };
         let mut line = serde_json::to_string(&record).map_err(|e| e.to_string())?;
         line.push('\n');
@@ -215,6 +254,7 @@ impl Transcripts for FileTranscripts {
 
     fn remove(&mut self, session_id: &str) -> Result<(), String> {
         self.forget(session_id);
+        self.refused.remove(session_id);
         match fs::remove_file(self.path(session_id)) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
             _ => Ok(()),
@@ -355,6 +395,24 @@ mod tests {
 
     fn entry_line(seq: u64) -> String {
         serde_json::to_string(&SyncEntry { seq, entry: entry("x") }).unwrap()
+    }
+
+    #[test]
+    fn a_transcript_that_stays_unreadable_refuses_appends() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut t = FileTranscripts::open(dir.path()).unwrap();
+        t.append("good", 1, &entry("a")).unwrap();
+        fs::create_dir(dir.path().join("bad.jsonl")).unwrap();
+        let highs = t.load().unwrap();
+        assert_eq!(highs.get("good"), Some(&1));
+        assert!(!highs.contains_key("bad"));
+        // Its high is unknown, so appending would reuse seqs over whatever
+        // the file holds. It is refused instead.
+        let err = t.append("bad", 1, &entry("x")).unwrap_err();
+        assert!(err.contains("could not be read at start"), "{err}");
+        // Every other session keeps appending.
+        t.append("good", 2, &entry("b")).unwrap();
+        assert_eq!(seqs(&t.read("good", (1, 100)).unwrap()), [1, 2]);
     }
 
     #[test]
