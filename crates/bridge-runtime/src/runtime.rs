@@ -173,10 +173,12 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
     let web_config = crate::web::ConfigView { path: config.config_file.clone(), fields: crate::config::web_config_fields(&config) };
     let direct = crate::direct::start(&config.direct, &config.home, keys.pubkey_hex.clone(), inputs.clone(), web_config).await?;
     engine_config.direct = direct.as_ref().map(|d| d.info.clone());
-    let relays = Relays::start(
-        config.relays.clone(),
+    // The relays and the Blossom client share one routing decision, so a
+    // configured Tor proxy cannot apply to one and not the other.
+    let nostr = work::NostrTransports::from_config(&config)?;
+    let relays = Relays::start_with(
+        &nostr,
         keys,
-        config.tor_proxy.clone(),
         inputs.clone(),
         direct.as_ref().map(|d| Rc::clone(&d.hub)),
     );
@@ -195,7 +197,7 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
         });
     }
 
-    let nostr_http = work::NostrHttp::new(config.tor_proxy.as_deref())?;
+    let nostr_http = nostr.http;
     let terminals = Terminals::new(config.home.join("audit"), config.home.clone(), inputs.clone());
     // The audit's writer thread, fed by a channel: the runtime never touches
     // the log file itself.

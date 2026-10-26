@@ -700,6 +700,20 @@ impl Relays {
         Self { transport, bridge_pubkey, inputs, commands: None, pairing: None, jobs }
     }
 
+    /// Start with the routing the config produced
+    /// ([`NostrTransports`](crate::work::NostrTransports)): the same relays
+    /// and the same proxy the Blossom client uses. Taking both from one value
+    /// is what keeps a configured Tor proxy on every relay dial as well as
+    /// every Blossom request.
+    pub fn start_with(
+        nostr: &crate::work::NostrTransports,
+        keys: Keypair,
+        inputs: mpsc::UnboundedSender<Input>,
+        direct: Option<Rc<crate::direct::Hub>>,
+    ) -> Self {
+        Self::start(nostr.relays.clone(), keys, nostr.proxy.clone(), inputs, direct)
+    }
+
     pub fn publish(&self, to: Vec<Addressee>, message: BridgeToPhone) {
         let _ = self.jobs.send(Job::Publish { to, message: Box::new(message) });
     }
