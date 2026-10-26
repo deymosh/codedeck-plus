@@ -117,18 +117,40 @@ pub struct TranscriptRow {
     pub entry: serde_json::Value,
 }
 
+/// A transcript write that did not land. The rows are not durable, so a
+/// caller must not report them as stored — in particular a sync chunk must
+/// stay unacknowledged so the bridge resends it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoreError {
+    pub message: String,
+}
+
+impl StoreError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self { message: message.into() }
+    }
+}
+
+impl std::fmt::Display for StoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for StoreError {}
+
 /// Per-`(machine, session)` transcript persistence with INSERT-OR-IGNORE
 /// semantics on `(machine, session, seq)` — a SQLite PK on device, a map in
 /// [`MemoryTranscriptStore`].
 pub trait TranscriptStore {
     /// Insert rows, ignoring seqs already present. Returns the seqs actually
-    /// inserted.
+    /// inserted, or the failure that kept the batch from being committed.
     fn insert_ignore(
         &self,
         machine: &str,
         session: &str,
         rows: &[TranscriptRow],
-    ) -> LocalBoxFuture<'_, Vec<u64>>;
+    ) -> LocalBoxFuture<'_, Result<Vec<u64>, StoreError>>;
     /// All stored seqs for a session, ascending.
     fn seqs(&self, machine: &str, session: &str) -> LocalBoxFuture<'_, Vec<u64>>;
     /// Rows with `from <= seq <= to`, ascending.
@@ -162,7 +184,7 @@ impl TranscriptStore for MemoryTranscriptStore {
         machine: &str,
         session: &str,
         rows: &[TranscriptRow],
-    ) -> LocalBoxFuture<'_, Vec<u64>> {
+    ) -> LocalBoxFuture<'_, Result<Vec<u64>, StoreError>> {
         let key = (machine.to_string(), session.to_string());
         let mut data = self.data.borrow_mut();
         let table = data.entry(key).or_default();
@@ -174,7 +196,7 @@ impl TranscriptStore for MemoryTranscriptStore {
             table.insert(row.seq, row.entry.clone());
             inserted.push(row.seq);
         }
-        Box::pin(async move { inserted })
+        Box::pin(async move { Ok(inserted) })
     }
 
     fn seqs(&self, machine: &str, session: &str) -> LocalBoxFuture<'_, Vec<u64>> {
@@ -292,22 +314,23 @@ impl TranscriptStore for CachedTranscriptStore {
         machine: &str,
         session: &str,
         rows: &[TranscriptRow],
-    ) -> LocalBoxFuture<'_, Vec<u64>> {
+    ) -> LocalBoxFuture<'_, Result<Vec<u64>, StoreError>> {
         let started = self.generation.get();
         let key = (machine.to_string(), session.to_string());
         // Only rows of the cached session can matter to the cache.
         let mirror: Option<Vec<TranscriptRow>> = self.caches(machine, session).then(|| rows.to_vec());
         let insert = self.inner.insert_ignore(machine, session, rows);
         Box::pin(async move {
-            let inserted = insert.await;
+            // A failed batch stored nothing, so there is nothing to mirror.
+            let inserted = insert.await?;
             if !self.caches(&key.0, &key.1) {
-                return inserted;
+                return Ok(inserted);
             }
             let Some(mirror) = mirror.filter(|_| self.generation.get() == started) else {
                 // The cache covering this session was (re)built while this
                 // insert was in flight: it may or may not hold the rows.
                 self.set_cache(None);
-                return inserted;
+                return Ok(inserted);
             };
             if let Some(cache) = self.cache.borrow_mut().as_mut() {
                 for row in mirror {
@@ -317,7 +340,7 @@ impl TranscriptStore for CachedTranscriptStore {
                 }
             }
             self.bump();
-            inserted
+            Ok(inserted)
         })
     }
 
@@ -476,7 +499,7 @@ mod tests {
     }
 
     impl TranscriptStore for CountingStore {
-        fn insert_ignore(&self, m: &str, s: &str, rows: &[TranscriptRow]) -> LocalBoxFuture<'_, Vec<u64>> {
+        fn insert_ignore(&self, m: &str, s: &str, rows: &[TranscriptRow]) -> LocalBoxFuture<'_, Result<Vec<u64>, StoreError>> {
             self.inner.insert_ignore(m, s, rows)
         }
         fn seqs(&self, m: &str, s: &str) -> LocalBoxFuture<'_, Vec<u64>> {
@@ -503,10 +526,10 @@ mod tests {
     async fn the_cached_store_reads_only_new_rows_after_an_append() {
         let inner = CountingStore::default();
         let store = CachedTranscriptStore::new(Rc::new(inner.clone()));
-        store.insert_ignore("m", "s", &rows(&[1, 2, 3])).await;
+        store.insert_ignore("m", "s", &rows(&[1, 2, 3])).await.unwrap();
         assert_eq!(seqs_of(&store.read_range("m", "s", 1, 3).await), vec![1, 2, 3]);
 
-        store.insert_ignore("m", "s", &rows(&[4])).await;
+        store.insert_ignore("m", "s", &rows(&[4])).await.unwrap();
         assert_eq!(seqs_of(&store.read_range("m", "s", 1, 4).await), vec![1, 2, 3, 4]);
         // Unchanged: served from memory entirely.
         assert_eq!(seqs_of(&store.read_range("m", "s", 1, 4).await), vec![1, 2, 3, 4]);
@@ -519,11 +542,11 @@ mod tests {
     async fn the_cached_store_mirrors_gap_refills_and_removals() {
         let inner = CountingStore::default();
         let store = CachedTranscriptStore::new(Rc::new(inner.clone()));
-        store.insert_ignore("m", "s", &rows(&[1, 3])).await;
+        store.insert_ignore("m", "s", &rows(&[1, 3])).await.unwrap();
         assert_eq!(seqs_of(&store.read_range("m", "s", 1, 3).await), vec![1, 3]);
 
         // A sync chunk fills the gap below the cached high.
-        assert_eq!(store.insert_ignore("m", "s", &rows(&[2, 3])).await, vec![2]);
+        assert_eq!(store.insert_ignore("m", "s", &rows(&[2, 3])).await, Ok(vec![2]));
         assert_eq!(seqs_of(&store.read_range("m", "s", 1, 3).await), vec![1, 2, 3]);
         assert_eq!(inner.reads.borrow().len(), 1, "the refill was mirrored, not re-read");
 
@@ -570,9 +593,9 @@ mod tests {
                 .collect::<Vec<_>>()
         };
 
-        assert_eq!(store.insert_ignore("m", "s", &rows(&[1, 2, 3])).await, vec![1, 2, 3]);
+        assert_eq!(store.insert_ignore("m", "s", &rows(&[1, 2, 3])).await, Ok(vec![1, 2, 3]));
         // 2 and 3 already present — only 4 is new
-        assert_eq!(store.insert_ignore("m", "s", &rows(&[2, 3, 4])).await, vec![4]);
+        assert_eq!(store.insert_ignore("m", "s", &rows(&[2, 3, 4])).await, Ok(vec![4]));
         assert_eq!(store.seqs("m", "s").await, vec![1, 2, 3, 4]);
 
         let range = store.read_range("m", "s", 2, 3).await;

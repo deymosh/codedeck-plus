@@ -30,7 +30,7 @@ use protocol::commands::{
 use protocol::common::{EntryBody, SessionOption, SessionState, SignInStatus};
 use protocol::events::BridgeToPhone;
 
-use crate::ports::{TranscriptRow, TranscriptStore};
+use crate::ports::{StoreError, TranscriptRow, TranscriptStore};
 use crate::runtime::TerminalFlush;
 use crate::signer::PhoneKeys;
 use crate::stores::CoreStores;
@@ -307,7 +307,13 @@ impl<'a> Router<'a> {
                     return r;
                 }
                 let rows = m.numbered().map(|(seq, e)| (seq, to_value(e))).collect();
-                let inserted = self.apply_rows(machine, &m.session_id, rows).await;
+                // Nothing durable landed: the entries are not in the
+                // transcript, so no live row completion and no notification
+                // may claim them. The bridge re-sends a direct-link output
+                // from its own cursor and sync re-fetches relay gaps.
+                let Ok(inserted) = self.apply_rows(machine, &m.session_id, rows).await else {
+                    return r;
+                };
                 r.transcript_appended = Some((machine.to_string(), m.session_id.clone()));
                 // An entry completing a part replaces its live row; the end of
                 // the turn drops the rows no entry completed.
@@ -364,17 +370,19 @@ impl<'a> Router<'a> {
                     .iter()
                     .map(|e| (e.seq, to_value(&e.entry)))
                     .collect();
-                self.apply_rows(machine, &m.session_id, rows).await;
-                r.transcript_appended = Some((machine.to_string(), m.session_id.clone()));
-                // Ack AFTER the entries are durably stored — an ack must never
-                // claim data we could still lose.
-                r.send(
-                    machine,
-                    PhoneToBridge::SyncAck(SyncAckMsg {
-                        sync_id: m.sync_id.clone(),
-                        ranges: vec![m.range],
-                    }),
-                );
+                // Ack ONLY after the entries are durably stored — an ack must
+                // never claim data we could still lose. A failed write leaves
+                // the chunk unacked, and the bridge resends unacked chunks.
+                if self.apply_rows(machine, &m.session_id, rows).await.is_ok() {
+                    r.transcript_appended = Some((machine.to_string(), m.session_id.clone()));
+                    r.send(
+                        machine,
+                        PhoneToBridge::SyncAck(SyncAckMsg {
+                            sync_id: m.sync_id.clone(),
+                            ranges: vec![m.range],
+                        }),
+                    );
+                }
             }
             BridgeToPhone::SyncEnd(m) => {
                 let effects = self
@@ -610,9 +618,9 @@ impl<'a> Router<'a> {
         machine: &str,
         session: &str,
         rows: Vec<(u64, serde_json::Value)>,
-    ) -> Vec<u64> {
+    ) -> Result<Vec<u64>, StoreError> {
         if rows.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         let store_rows: Vec<TranscriptRow> = rows
             .iter()
@@ -624,7 +632,14 @@ impl<'a> Router<'a> {
         let inserted = self
             .transcript_store
             .insert_ignore(machine, session, &store_rows)
-            .await;
+            .await
+            .map_err(|e| {
+                log::error!(
+                    "transcript store: {} rows for {session} were not stored: {e}",
+                    store_rows.len()
+                );
+                e
+            })?;
         let inserted_set: HashSet<u64> = inserted.iter().copied().collect();
 
         // Already stored: same seq must mean same content — anything else is
@@ -660,7 +675,7 @@ impl<'a> Router<'a> {
         self.stores
             .transcript
             .integrate_rows(machine, session, &inserted, &conflicts);
-        inserted
+        Ok(inserted)
     }
 
     /// The heartbeat. Port of `createPhoneCore`'s `onSessions` handler.
@@ -1289,6 +1304,63 @@ mod tests {
                 }),
             }]
         );
+    }
+
+    /// A store whose writes fail, as a full disk or a failed commit would:
+    /// nothing it is given is stored.
+    struct FailingStore(MemoryTranscriptStore);
+
+    impl TranscriptStore for FailingStore {
+        fn insert_ignore(
+            &self,
+            _machine: &str,
+            _session: &str,
+            _rows: &[TranscriptRow],
+        ) -> crate::ports::LocalBoxFuture<'_, Result<Vec<u64>, StoreError>> {
+            Box::pin(async { Err(StoreError::new("disk full")) })
+        }
+        fn seqs(&self, machine: &str, session: &str) -> crate::ports::LocalBoxFuture<'_, Vec<u64>> {
+            self.0.seqs(machine, session)
+        }
+        fn read_range(
+            &self,
+            machine: &str,
+            session: &str,
+            from: u64,
+            to: u64,
+        ) -> crate::ports::LocalBoxFuture<'_, Vec<TranscriptRow>> {
+            self.0.read_range(machine, session, from, to)
+        }
+        fn remove(&self, machine: &str, session: &str) -> crate::ports::LocalBoxFuture<'_, ()> {
+            self.0.remove(machine, session)
+        }
+    }
+
+    #[tokio::test]
+    async fn a_chunk_that_failed_to_store_is_not_acked_and_stays_uncovered() {
+        let (mut s, ts, kp) = stores().await;
+        let failing = FailingStore(ts.clone());
+        let mut r = Router::new(&mut s, &failing, &kp, 1_000);
+        let out = r
+            .route(
+                MACHINE,
+                &BridgeToPhone::SyncChunk(SyncChunkMsg {
+                    session_id: "s1".into(),
+                    sync_id: "sy1".into(),
+                    range: (1, 2),
+                    entries: vec![
+                        protocol::events::SyncEntry { seq: 1, entry: text_entry("a") },
+                        protocol::events::SyncEntry { seq: 2, entry: text_entry("b") },
+                    ],
+                }),
+            )
+            .await;
+        // An ack is a claim of durable storage: with the write rolled back,
+        // the bridge must keep the chunk unacked and resend it.
+        assert!(out.sends.is_empty(), "no ack for rows that were not stored");
+        assert!(out.transcript_appended.is_none());
+        assert!(ts.seqs(MACHINE, "s1").await.is_empty());
+        assert!(!s.transcript.has_contiguous(MACHINE, "s1", Some(2)));
     }
 
     #[tokio::test]

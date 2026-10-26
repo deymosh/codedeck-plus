@@ -425,7 +425,8 @@ mod tests {
                 TranscriptRow { seq: 2, entry: serde_json::json!({}) },
             ],
         )
-        .await;
+        .await
+        .unwrap();
 
         let h = hydrate(&kv, &ts, &StoresConfig::default()).await;
         assert!(h.stores.transcript.has_contiguous("m", "s1", Some(2)));
