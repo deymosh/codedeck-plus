@@ -445,11 +445,11 @@ mod tests {
 
     #[test]
     fn the_tor_config_scales_the_connect_deadline_with_the_slower_transport() {
-        assert_eq!(DEFAULT_RECONNECT_CONFIG.connect_deadline_ms, 45_000);
-        assert_eq!(TOR_RECONNECT_CONFIG.connect_deadline_ms, 90_000);
-        assert!(TOR_RECONNECT_CONFIG.connect_deadline_ms > DEFAULT_RECONNECT_CONFIG.connect_deadline_ms);
+        const { assert!(DEFAULT_RECONNECT_CONFIG.connect_deadline_ms == 45_000) };
+        const { assert!(TOR_RECONNECT_CONFIG.connect_deadline_ms == 90_000) };
+        const { assert!(TOR_RECONNECT_CONFIG.connect_deadline_ms > DEFAULT_RECONNECT_CONFIG.connect_deadline_ms) };
         // The deadline covers a whole slow dial, so it exceeds the backoff cap.
-        assert!(TOR_RECONNECT_CONFIG.connect_deadline_ms > TOR_RECONNECT_CONFIG.max_ms);
+        const { assert!(TOR_RECONNECT_CONFIG.connect_deadline_ms > TOR_RECONNECT_CONFIG.max_ms) };
     }
 
     #[test]
