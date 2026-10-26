@@ -307,13 +307,13 @@ impl<'a> Router<'a> {
                     return r;
                 }
                 let rows = m.numbered().map(|(seq, e)| (seq, to_value(e))).collect();
-                // Nothing durable landed: the entries are not in the
-                // transcript, so no live row completion and no notification
-                // may claim them. The bridge re-sends a direct-link output
-                // from its own cursor and sync re-fetches relay gaps.
-                let Ok(inserted) = self.apply_rows(machine, &m.session_id, rows).await else {
-                    return r;
-                };
+                // A failed write leaves the entries out of the transcript and
+                // uncovered (sync re-fetches the gap), but they did arrive:
+                // completing their live rows and raising the attention signal
+                // are facts about this delivery, not claims about storage, so
+                // they still happen. Only the stored seqs gate the
+                // "already in the transcript, do not notify again" check.
+                let inserted = self.apply_rows(machine, &m.session_id, rows).await.ok();
                 r.transcript_appended = Some((machine.to_string(), m.session_id.clone()));
                 // An entry completing a part replaces its live row; the end of
                 // the turn drops the rows no entry completed.
@@ -330,7 +330,9 @@ impl<'a> Router<'a> {
                 // killed re-sends output the phone stored (and notified about)
                 // before, and a second copy over another path is the same
                 // entry. Neither may notify or mark the session again.
-                for (_, entry) in m.numbered().filter(|(seq, _)| inserted.contains(seq)) {
+                for (_, entry) in m.numbered().filter(|(seq, _)| {
+                    inserted.as_ref().is_none_or(|stored| stored.contains(seq))
+                }) {
                     // Unread + notify on LIVE entries only (sync catch-up takes
                     // the SyncChunk path, so replayed history never marks dots
                     // or fires a notification storm). A card / stream_end /
@@ -1367,6 +1369,37 @@ mod tests {
         let mut r = Router::new(&mut s, &ts, &kp, 2_000);
         r.route(MACHINE, &chunk()).await;
         assert_eq!(s.transcript.session(MACHINE, "s1").unwrap().sync.in_flight_since, Some(2_000));
+    }
+
+    #[tokio::test]
+    async fn a_failed_output_write_still_delivers_the_live_attention_signal() {
+        let (mut s, ts, kp) = stores().await;
+        let failing = FailingStore(ts.clone());
+        let card: OutputEntry = serde_json::from_value(json!({
+            "timestamp": "t", "entryType": "permission_request", "requestId": "r1",
+            "toolName": "Bash", "kind": "execute", "title": "ls", "options": []
+        }))
+        .unwrap();
+        let mut r = Router::new(&mut s, &failing, &kp, 1_000);
+        r.visible = false;
+        let out = r
+            .route(
+                MACHINE,
+                &BridgeToPhone::Output(OutputMsg {
+                    session_id: "s1".into(),
+                    seq: 1,
+                    entries: vec![card],
+                }),
+            )
+            .await;
+
+        // The entries are not stored and stay uncovered for sync...
+        assert!(ts.seqs(MACHINE, "s1").await.is_empty());
+        assert!(!s.transcript.has_contiguous(MACHINE, "s1", Some(1)));
+        // ...but they arrived: the user still gets the card's signal.
+        assert!(matches!(out.notifies.as_slice(), [NotifyEffect::Notify { .. }]));
+        assert!(s.ui.is_session_unread(MACHINE, "s1"));
+        assert_eq!(out.transcript_appended, Some((MACHINE.to_string(), "s1".to_string())));
     }
 
     #[tokio::test]
