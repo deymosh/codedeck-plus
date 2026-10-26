@@ -102,6 +102,10 @@ export abstract class AcpSession<
   private turnOpen = false;
   /** The cancel grace waiting to end a turn the agent did not settle. */
   private cancelTimer?: NodeJS.Timeout;
+  /** Settles `runPrompt`'s wait when an interrupt abandons the running
+   *  prompt: the agent never answers that request, and the chain behind it
+   *  must still advance to the next message. */
+  private abandonPrompt?: () => void;
 
   constructor(
     protected readonly params: StartSession,
@@ -452,9 +456,17 @@ export abstract class AcpSession<
       this.ctx.emit({ type: 'turn', state: 'running' });
       this.promptInFlight = true;
       this.turnOpen = true;
+      const request = this.client.request('session/prompt', { sessionId, prompt: [{ type: 'text', text }] });
+      // A refusal that arrives after the prompt was abandoned is no longer
+      // this turn's to report.
+      request.catch(() => {});
+      let abandon!: () => void;
+      const abandoned = new Promise<void>((resolve) => (abandon = resolve));
+      this.abandonPrompt = abandon;
       try {
-        await this.client.request('session/prompt', { sessionId, prompt: [{ type: 'text', text }] });
+        await Promise.race([request, abandoned]);
       } finally {
+        this.abandonPrompt = undefined;
         this.promptInFlight = false;
         this.clearCancelGrace();
         this.promptSettled();
@@ -503,6 +515,10 @@ export abstract class AcpSession<
     this.cancelTimer = undefined;
     if (this.ended || !this.promptInFlight) return;
     this.promptInFlight = false;
+    // Stop waiting on the request the agent never answered, so the prompt
+    // chain advances and the next message runs (a second interrupt would
+    // otherwise be a no-op too).
+    this.abandonPrompt?.();
     this.deliver({
       entryType: 'notice',
       kind: 'other',

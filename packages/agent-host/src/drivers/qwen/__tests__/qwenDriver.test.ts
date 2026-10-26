@@ -693,14 +693,18 @@ describe('QwenSession shutdown', () => {
     }
   });
 
-  it('ends a turn locally when the agent ignores the cancel past the grace', async () => {
+  it('ends a turn locally when the agent ignores the cancel, and the next message still runs', async () => {
     const ready = withDriver();
     const ctx = await started(ready);
     ready.agent.ignoresCancel = true;
+    const prompts: string[] = [];
     let release: ((stop: string) => void) | undefined;
-    ready.agent.onPrompt = () => new Promise<string>((resolve) => (release = resolve));
-    ready.session.prompt('go');
-    await vi.waitFor(() => expect(ctx.events.some((e) => e.type === 'turn' && e.state === 'running')).toBe(true));
+    ready.agent.onPrompt = (_sessionId, text) => {
+      prompts.push(text);
+      return text === 'first' ? new Promise<string>((resolve) => (release = resolve)) : 'end_turn';
+    };
+    ready.session.prompt('first');
+    await vi.waitFor(() => expect(prompts).toEqual(['first']));
 
     vi.useFakeTimers();
     try {
@@ -715,9 +719,13 @@ describe('QwenSession shutdown', () => {
       vi.useRealTimers();
     }
 
-    // The agent's prompt finally settling does not end the turn a second time.
+    // The prompt the agent never answered must not hold the chain: the next
+    // message reaches the agent and runs its own turn.
+    ready.session.prompt('second');
+    await vi.waitFor(() => expect(prompts).toEqual(['first', 'second']));
+    await vi.waitFor(() => expect(ctx.events.filter((e) => e.type === 'turn' && e.state === 'idle')).toHaveLength(2));
+    // Its late settlement does not open or end anything.
     release?.('end_turn');
-    await vi.waitFor(() => expect(ctx.events.filter((e) => e.type === 'turn' && e.state === 'idle')).toHaveLength(1));
   });
 
   it('answers the permission ask it was still waiting on with a cancellation', async () => {
