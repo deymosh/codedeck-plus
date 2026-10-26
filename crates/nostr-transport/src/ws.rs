@@ -93,6 +93,10 @@ const DIAL_TIMEOUT_PROXIED: Duration = Duration::from_secs(60);
 /// A single frame write that has not completed in this long means the peer
 /// stopped reading (or the path is gone): the socket is dropped.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(20);
+/// How long a relay has to answer the NIP-42 AUTH we sent it. A relay that
+/// challenges and then goes quiet must not hold a subscription (or a publish)
+/// on that connection forever; Tor makes a round trip slow, so this is generous.
+const AUTH_DEADLINE: Duration = Duration::from_secs(20);
 /// Frames queued for one relay's socket. Far above anything a healthy relay
 /// accumulates (a REQ per subscription on connect, then a trickle); a relay
 /// that lets it fill is dropped and redialled.
@@ -125,6 +129,7 @@ struct Timing {
     dial: Duration,
     dial_proxied: Duration,
     write: Duration,
+    auth: Duration,
     retry_base: Duration,
     retry_max: Duration,
     stable_after: Duration,
@@ -136,6 +141,7 @@ const TIMING: Timing = Timing {
     dial: DIAL_TIMEOUT,
     dial_proxied: DIAL_TIMEOUT_PROXIED,
     write: WRITE_TIMEOUT,
+    auth: AUTH_DEADLINE,
     retry_base: RETRY_BASE,
     retry_max: RETRY_MAX,
     stable_after: STABLE_AFTER,
@@ -1052,14 +1058,38 @@ impl WsTransport {
                 return;
             }
         };
-        let mut st = self.state.borrow_mut();
-        if st.conns.get(relay).is_none_or(|c| c.generation != generation) {
-            return;
+        {
+            let mut st = self.state.borrow_mut();
+            if st.conns.get(relay).is_none_or(|c| c.generation != generation) {
+                return;
+            }
+            st.router.auth_sent(relay, &event.id);
+            if let Some(c) = st.conns.get(relay) {
+                c.send(frames::auth_frame(&event));
+            }
         }
-        st.router.auth_sent(relay, &event.id);
-        if let Some(c) = st.conns.get(relay) {
-            c.send(frames::auth_frame(&event));
-        }
+        self.arm_auth_deadline(relay, generation);
+    }
+
+    /// Give the relay [`AUTH_DEADLINE`] to answer the AUTH just sent on
+    /// `generation`'s connection. A relay that never does is treated as
+    /// refusing it (see [`Router::auth_timed_out`]) instead of leaving the
+    /// subscription parked forever; a replaced connection is left alone.
+    fn arm_auth_deadline(&self, relay: &str, generation: u64) {
+        let within = self.state.borrow().timing.auth;
+        let this = self.clone();
+        let relay = relay.to_string();
+        tokio::task::spawn_local(async move {
+            tokio::time::sleep(within).await;
+            let actions = {
+                let mut st = this.state.borrow_mut();
+                if st.conns.get(&relay).is_none_or(|c| c.generation != generation) {
+                    return;
+                }
+                st.router.auth_timed_out(&relay)
+            };
+            this.apply(actions, None);
+        });
     }
 }
 
@@ -1412,6 +1442,7 @@ mod tests {
             dial: Duration::from_millis(300),
             dial_proxied: Duration::from_millis(300),
             write: Duration::from_millis(300),
+            auth: Duration::from_millis(200),
             // Long enough that no redial lands inside these tests; the
             // redial tests set their own.
             retry_base: Duration::from_secs(30),
@@ -2171,6 +2202,32 @@ mod tests {
                 assert_eq!(mock.next_frame().await, first, "the same event, re-sent");
                 mock.push(format!(r#"["OK","{id}",true,""]"#));
                 assert_eq!(handle.await.unwrap().verdict, PublishVerdict::Accepted);
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn a_relay_that_never_answers_our_auth_releases_the_sub_at_its_deadline() {
+        LocalSet::new()
+            .run_until(async {
+                let mut mock = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let t = transport(&mock, &phone);
+                t.state.borrow_mut().timing = fast_timing();
+                t.ensure_connected();
+                let (_sub, seen) = recording_sub(&t, &phone);
+                let _req = mock.next_frame().await;
+
+                mock.push(r#"["AUTH","chal"]"#.to_string());
+                let auth = mock.next_frame().await;
+                assert!(auth.starts_with(r#"["AUTH","#), "{auth}");
+                // The relay refuses the REQ for auth and then never answers the
+                // AUTH it asked for: the sub must not stay parked on it.
+                mock.push(r#"["CLOSED","cd-1","auth-required: sign in"]"#.to_string());
+
+                wait_until(|| seen.closes.get() == 1).await;
+                assert_eq!(seen.eoses.get(), 0);
+                t.shutdown();
             })
             .await;
     }

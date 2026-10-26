@@ -319,6 +319,24 @@ impl Router {
         }
     }
 
+    /// The connection's AUTH deadline elapsed with no answer from the relay.
+    /// Treat it as refused: the subscription waiting on it is dead on this
+    /// relay (so EOSE can proceed from the others, or the sub closes when no
+    /// carrier is left) and a publish awaiting it settles as rejected. A
+    /// relay that answered in time is untouched, and so is a connection that
+    /// has since been replaced.
+    pub fn auth_timed_out(&mut self, relay: &str) -> Vec<RouterAction> {
+        let mut out = Vec::new();
+        let unsettled = self
+            .auth
+            .get(relay)
+            .is_some_and(|a| a.pending.is_some() && a.accepted.is_none());
+        if unsettled {
+            self.refuse_auth(relay, "auth-required: the relay did not answer our AUTH".to_string(), &mut out);
+        }
+        out
+    }
+
     /// `event_id` passed verification and went to `sub_id`'s `on_event`; the
     /// copies other relays send are dropped from now on. Only a verified
     /// event is noted, so a relay forging an id cannot shadow the real event.
@@ -458,6 +476,27 @@ impl Router {
             for event_id in events {
                 self.publish_result(relay, &event_id, classify_publish(Err(&reason)), out);
             }
+        }
+    }
+
+    /// The relay will not serve this connection's identity after all. Every
+    /// sub parked on its AUTH is dead there and every publish awaiting it is
+    /// rejected; later refusals then take the ordinary "auth refused" path.
+    fn refuse_auth(&mut self, relay: &str, reason: String, out: &mut Vec<RouterAction>) {
+        let (subs, events) = {
+            let Some(a) = self.auth.get_mut(relay) else { return };
+            a.pending = None;
+            a.accepted = Some(false);
+            (
+                a.waiting_subs.drain().collect::<Vec<_>>(),
+                a.waiting_events.drain().collect::<Vec<_>>(),
+            )
+        };
+        for sub_id in subs {
+            self.sub_dead_on(relay, &sub_id, reason.clone(), out);
+        }
+        for event_id in events {
+            self.publish_result(relay, &event_id, classify_publish(Err(&reason)), out);
         }
     }
 
@@ -827,6 +866,42 @@ mod tests {
             r.route(R1, closed("s1", "auth-required: x")),
             vec![RouterAction::Eose { sub_id: "s1".into() }]
         );
+    }
+
+    #[test]
+    fn an_auth_nobody_answers_ends_the_waiting_sub_and_publish_at_its_deadline() {
+        let mut r = Router::new();
+        r.relay_connected(R1);
+        r.open_sub("s1", &[R1.to_string()]);
+        r.open_publish("evt", &[R1.to_string()]);
+        r.auth_sent(R1, "auth-1");
+        // The relay refuses both for AUTH, then never answers the AUTH itself:
+        // without a deadline they would wait forever.
+        assert!(r.route(R1, closed("s1", "auth-required: x")).is_empty());
+        assert!(r.route(R1, ok("evt", false, "auth-required: x")).is_empty());
+
+        let actions = r.auth_timed_out(R1);
+        assert!(
+            actions.iter().any(|a| matches!(
+                a,
+                RouterAction::SubClosed { reason: Some(reason), .. } if reason.contains("did not answer")
+            )),
+            "{actions:?}"
+        );
+        assert_eq!(settled(&actions), Some(PublishVerdict::Rejected));
+        // One deadline per AUTH: a second tick is silent, and a late OK for it
+        // cannot reopen the sub.
+        assert!(r.auth_timed_out(R1).is_empty());
+        assert!(r.route(R1, ok("auth-1", true, "")).is_empty());
+    }
+
+    #[test]
+    fn an_auth_answered_in_time_is_not_touched_by_its_deadline() {
+        let mut r = Router::new();
+        r.relay_connected(R1);
+        r.auth_sent(R1, "auth-1");
+        r.route(R1, ok("auth-1", true, ""));
+        assert!(r.auth_timed_out(R1).is_empty());
     }
 
     #[test]
