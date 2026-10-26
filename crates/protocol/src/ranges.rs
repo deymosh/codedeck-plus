@@ -91,9 +91,14 @@ pub fn subtract_ranges(a: &[SeqRange], b: &[SeqRange]) -> Vec<SeqRange> {
     normalize_ranges(&out)
 }
 
-/// Total number of seqs covered.
+/// Total number of seqs covered. Saturates at `u64::MAX`: a range may span
+/// the whole seq space, whose size does not fit in a `u64` (`(0, u64::MAX)`
+/// has `u64::MAX + 1` values), and a decoder must come back with a value, not
+/// a panic.
 pub fn range_size(ranges: &[SeqRange]) -> u64 {
-    normalize_ranges(ranges).iter().map(|&(a, b)| b - a + 1).sum()
+    normalize_ranges(ranges)
+        .iter()
+        .fold(0u64, |total, &(a, b)| total.saturating_add(b.saturating_sub(a).saturating_add(1)))
 }
 
 /// True when `have` fully covers `[lo, hi]`.
@@ -179,6 +184,13 @@ mod tests {
     #[test]
     fn range_size_counts_inclusive_seqs() {
         assert_eq!(range_size(&[(1, 1), (3, 5)]), 4);
+    }
+
+    #[test]
+    fn range_size_saturates_at_the_top_instead_of_overflowing() {
+        // u64::MAX + 1 values cannot be represented; the count saturates.
+        assert_eq!(range_size(&[(0, u64::MAX)]), u64::MAX);
+        assert_eq!(range_size(&[(5, u64::MAX)]), u64::MAX - 4);
     }
 
     #[test]
