@@ -3,14 +3,14 @@
 import type { PackagePin } from '../install/lockfilePins';
 
 export const PLATFORM_PACKAGES: Readonly<Record<string, PackagePin>> = {
-  "@anthropic-ai/claude-agent-sdk-darwin-arm64": { version: "0.3.283", integrity: "sha512-UQkROekjufppyB/qrsrU81sM0fcYNWJBEITrGp7NLbOocJZBUR+uVMIx/UHVpe6j81trXPIeRWyfJWgZI17Kxg==" },
-  "@anthropic-ai/claude-agent-sdk-darwin-x64": { version: "0.3.283", integrity: "sha512-WkwVppmX0cg1DnXTT9od82pmqM4OK9H3O6MIXoX89SWYty0OpMxsB37263C1tiqk4WkWCs2jwxRXhsoO62ArGQ==" },
-  "@anthropic-ai/claude-agent-sdk-linux-arm64": { version: "0.3.283", integrity: "sha512-47IEX/XWw4DUIzPPC85qiASO90rpz7E+2gWr4AKOz5ZAa7ZqEX0PYqPIcpHEM7WpEREfmXCMZgef2bwim24u8A==" },
-  "@anthropic-ai/claude-agent-sdk-linux-arm64-musl": { version: "0.3.283", integrity: "sha512-BRlnlh5fsRMoTtjDSGxZL6TathGRgSCMpJk2kdy9Wtz8l6qDjgkLuQilzTF12CwFIn+yf1Fqfrk+Njw+0EsL3A==" },
-  "@anthropic-ai/claude-agent-sdk-linux-x64": { version: "0.3.283", integrity: "sha512-cE5AebMvTlq7t7Oc0FmP5LzMOEtJ3F8XRGxkc3kTGr4aNcQgXplyYNH2yu1teW1yInuMXHzlCeFRdrmxpe2sRg==" },
-  "@anthropic-ai/claude-agent-sdk-linux-x64-musl": { version: "0.3.283", integrity: "sha512-T0T8mR7MSe7bVI96tmeK7DgUy2xhG8CZD1i0nCC2C05sSmkDDn/OYgNqpGPxJbo8Ic0Psxd7TOmngQYqPKWtpA==" },
-  "@anthropic-ai/claude-agent-sdk-win32-arm64": { version: "0.3.283", integrity: "sha512-hZjyeIgZpALMvYq2QfyPzl4AZzOVRUoU8NOB82Z3cVXLcEvQJXJN03Hp3XNsuBq5YMUoSUJAffMannhM7UqVmg==" },
-  "@anthropic-ai/claude-agent-sdk-win32-x64": { version: "0.3.283", integrity: "sha512-h5eZxFxk6f1LPSuUOoBH9fslhL9ncywdZN5Qw9XmWuijHYTfevXuoza5nm6N98O+hmSykJ8NjC3/muhONDvzBg==" },
+  "@anthropic-ai/claude-agent-sdk-darwin-arm64": { version: "0.3.310", integrity: "sha512-gpzMjDZdcdA2Webuqm9j76exG8yNK/755ZYWbS3MM4vVBlAsm+enEO+hhNt0Mx1VMil28RWetvTO4ZJ3YODVMA==" },
+  "@anthropic-ai/claude-agent-sdk-darwin-x64": { version: "0.3.310", integrity: "sha512-ZRQ4ZrzE2OOfR+Fx8h+CM4NKh0UiYqlh5TowP7HUhn5KUoYMjoSR/xIhix8ow42X2IDiBy0FjEVaA/Awhu2KAw==" },
+  "@anthropic-ai/claude-agent-sdk-linux-arm64": { version: "0.3.310", integrity: "sha512-l6SPgUmJknjx+6/Pb7OR353fm3xBNAWqodFoC/Cflg0yMcLfz9iwNIc3Drgos2DqfHnid+ODqDzSO93AgQ7RmA==" },
+  "@anthropic-ai/claude-agent-sdk-linux-arm64-musl": { version: "0.3.310", integrity: "sha512-viXuvvtli3pfHzTEI+oeJzk3nldkfHvj757Xh/uAeximUT9ANZIq4SMZw2cSqbhASjni0qcO6B1x4BGx2LuQpw==" },
+  "@anthropic-ai/claude-agent-sdk-linux-x64": { version: "0.3.310", integrity: "sha512-jx7awHPoofXuE6cRRQSzLUFyW6aUXbYD9AtnNIDUHmmPPrgJ9nSnqjPaqcNhOdaZH7onUUujEAq26N2tx29fYg==" },
+  "@anthropic-ai/claude-agent-sdk-linux-x64-musl": { version: "0.3.310", integrity: "sha512-/qFgN5LcofB8PayxBXoa+xDxkYPPQeo/eCyN0DsyyeI67ifH/l49pz9J+sH0+ctDe9und0vMCJPzng70bx2K+Q==" },
+  "@anthropic-ai/claude-agent-sdk-win32-arm64": { version: "0.3.310", integrity: "sha512-tRmDMhZpoWAIrZxFBTh6vyZB8W5gldU5/Rfo+cyq/OvBKTxxbim+/0tIa9QlJQncoVLXVN9eySYeeB9KMjio7w==" },
+  "@anthropic-ai/claude-agent-sdk-win32-x64": { version: "0.3.310", integrity: "sha512-zvrIApxPccTJc6gCOtw5hj27QjWhhTi3z5x5iMmf9f0LZAKR+9mrgENVeFL7PP7zRGdYVhhX2SahbzxN83L/eA==" },
   "@esbuild/aix-ppc64": { version: "0.25.12", integrity: "sha512-Hhmwd6CInZ3dwpuGTF8fJG6yoWmsToE+vYgD4nytZVxcu1ulHpUQRAB1UJ8+N1Am3Mz4+xOByoQoSZf4D+CpkA==" },
   "@esbuild/android-arm": { version: "0.25.12", integrity: "sha512-VJ+sKvNA/GE7Ccacc9Cha7bpS8nyzVv0jdVgwNDaR4gDMC/2TTRc33Ip8qrNYUcpkOHUT5OZ0bUcNNVZQ9RLlg==" },
   "@esbuild/android-arm64": { version: "0.25.12", integrity: "sha512-6AAmLG7zwD1Z159jCKPvAxZd4y/VTO0VkprYy+3N2FtJ8+BQWFXU+OxARIwA46c5tdD9SsKGZ/1ocqBS/gAKHg==" },
