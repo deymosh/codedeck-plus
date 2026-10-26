@@ -189,7 +189,10 @@ describe('docker/Dockerfile', () => {
     const dockerfile = fs.readFileSync(path.resolve(__dirname, '../../../../../docker/Dockerfile'), 'utf8');
     const baked = /^ARG OPENCODE_VERSION=(\S+)$/m.exec(dockerfile)?.[1];
     const lockfile = fs.readFileSync(LOCKFILE_PATH, 'utf8');
-    expect(baked).toBe(platformPackages(lockfile, runtimeTreeNames(lockfile))['@opencode/cli']?.version);
+    const pinned = platformPackages(lockfile, runtimeTreeNames(lockfile))['@opencode/cli']?.version;
+    // Neither may go missing unnoticed: two undefineds would agree.
+    expect(pinned).toMatch(/^\d+\.\d+\.\d+/);
+    expect(baked).toBe(pinned);
   });
 });
 
