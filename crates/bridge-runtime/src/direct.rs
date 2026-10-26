@@ -174,6 +174,11 @@ impl FrameLane {
             return false;
         }
         let mut queue = self.queue.borrow_mut();
+        // The stall clock runs only while frames wait: a link that sat idle
+        // has not stalled, and its next burst starts the clock afresh.
+        if queue.is_empty() {
+            self.last_taken.set(std::time::Instant::now());
+        }
         let over = self.bytes.get() + frame.len() > FRAME_LANE_BYTES || queue.len() >= FRAME_LANE_CAP;
         if over && self.last_taken.get().elapsed() >= FRAME_LANE_STALL {
             drop(queue);
@@ -978,6 +983,21 @@ mod tests {
         hub.deliver("p", &event, false);
         assert!(hub.conns.borrow().get(&id).is_none());
         assert!(frames.is_closed(), "the serve loop is told to close");
+    }
+
+    #[test]
+    fn a_burst_after_a_long_idle_is_not_a_stall() {
+        let (inputs, _rx) = mpsc::unbounded_channel();
+        let hub = Hub::new("b".into(), inputs);
+        hub.set_paired(&["p".into()]);
+        let (id, frames, _) = hub.register("p", vec!["p1".into()]);
+        let event = copy_for("p1", now_secs());
+        // Nothing was taken for a long time because nothing was queued.
+        frames.stall_for_test();
+        for _ in 0..=FRAME_LANE_CAP {
+            hub.deliver("p", &event, false);
+        }
+        assert!(hub.conns.borrow().contains_key(&id), "an idle link that gets a burst is reading, not stalled");
     }
 
     #[test]
