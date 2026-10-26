@@ -1758,10 +1758,12 @@ export class OpenCodeDriver implements Driver {
 
   /** The server's client, starting it again when the last attempt failed. */
   /** The server's own release: the one sessions run on, whether this
-   *  driver started it or connected to it. */
+   *  driver started it or connected to it. Read only from a server that is
+   *  starting or up — never a reason to start (or install) one. */
   async version(): Promise<string | undefined> {
+    if (!this.clientPromise) return undefined;
     try {
-      const client = await this.client();
+      const client = await this.clientPromise;
       return (await client.server.info()).version || undefined;
     } catch {
       return undefined;

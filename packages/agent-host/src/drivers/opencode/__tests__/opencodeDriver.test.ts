@@ -1180,6 +1180,18 @@ describe('the OpenCode version', () => {
     expect(await driver.version()).toBeUndefined();
   });
 
+  it('starts no server to read it', async () => {
+    vi.stubEnv('XDG_DATA_HOME', mkdtempSync(path.join(tmpdir(), 'oc-data-')));
+    const startServer = vi.fn(async () => {
+      throw new Error('port taken');
+    });
+    const driver = await OpenCodeDriver.create({ autoStart: true, binaryPath: process.execPath, log: () => {}, startServer });
+    expect(startServer).toHaveBeenCalledTimes(1);
+    expect(await driver.version()).toBeUndefined();
+    expect(startServer).toHaveBeenCalledTimes(1);
+    vi.unstubAllEnvs();
+  });
+
   it('is not announced by a new session', async () => {
     const client = clientWith(turn('hi'), { server: { info: vi.fn(async () => ({ version: '2.0.28' })) } });
     const ctx = start(client);

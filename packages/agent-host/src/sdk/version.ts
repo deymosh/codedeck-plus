@@ -26,7 +26,10 @@ export async function manifestVersion(manifest: string, field = 'version'): Prom
  *  prints none, or takes longer than `timeoutMs`. */
 export function binaryVersion(binary: string, timeoutMs = 15_000): Promise<string | undefined> {
   return new Promise((resolve) => {
-    execFile(binary, ['--version'], { timeout: timeoutMs, windowsHide: true }, (err, stdout) => {
+    // A Windows `.cmd`/`.bat` shim (an npm-installed CLI) runs only through
+    // the shell; the path is the operator's own setting, not input.
+    const shell = process.platform === 'win32' && /\.(cmd|bat)$/i.test(binary);
+    execFile(shell ? `"${binary}"` : binary, ['--version'], { timeout: timeoutMs, windowsHide: true, shell }, (err, stdout) => {
       resolve(err ? undefined : parseVersion(String(stdout)));
     });
   });
