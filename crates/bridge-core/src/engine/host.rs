@@ -620,6 +620,13 @@ impl Engine {
                         run.parts.clear();
                     }
                     if run.turn != state {
+                        // A turn that ran to its end shows the agent is healthy
+                        // again: the restart budget is for one crash loop, not
+                        // for the session's whole life, so a session that runs
+                        // a turn normally after a restart earns it back.
+                        if state == TurnState::Idle && run.turn == TurnState::Running {
+                            run.restarts = 0;
+                        }
                         run.turn = state;
                         run.turn_started = (state == TurnState::Running).then_some(now);
                         self.list_dirty = true;
