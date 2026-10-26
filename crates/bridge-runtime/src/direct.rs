@@ -70,15 +70,21 @@ const MAX_FRAME_BYTES: usize = 256 * 1024;
 /// costs a round trip, never the phone's other traffic.
 const TERMINAL_LANE_CAP: usize = 64;
 /// Frames queued for one connection, a guard on the queue's own overhead.
-/// The real bound is [`FRAME_LANE_BYTES`]: sync sends every unacked chunk in
-/// one engine tick, and a long transcript is many large chunks, so a frame
-/// count small enough to bound memory would close a healthy phone mid-sync.
+/// Together with [`FRAME_LANE_BYTES`] it bounds a queue only while the
+/// connection is stalled; a pass larger than either bound is not by itself a
+/// reason to close it (see [`FRAME_LANE_STALL`]).
 const FRAME_LANE_CAP: usize = 4096;
-/// Bytes of frames one connection may have waiting. Past this the phone is
-/// not draining its socket: the connection is closed and it reconnects and
-/// resyncs, rather than the queue growing without limit. Sized so a whole
-/// spread of a long transcript's chunks can wait while the socket drains.
+/// Bytes of frames one connection may have waiting. Checked together with
+/// [`FRAME_LANE_STALL`]: exceeding it while the serve loop is still taking
+/// frames is a big burst (a sync sends every unacked chunk in one tick), not
+/// a phone that stopped reading.
 const FRAME_LANE_BYTES: usize = 64 * 1024 * 1024;
+/// How long a connection may go without the serve loop taking a frame before
+/// a queue over either bound means it stopped reading. A queue that grows
+/// past the bound while frames are still going out is just a big sync pass;
+/// closing it there would make a pass larger than the bound impossible to
+/// deliver, as the phone would reconnect and be handed the same pass again.
+const FRAME_LANE_STALL: Duration = Duration::from_secs(30);
 
 fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
@@ -126,14 +132,88 @@ struct Conn {
     identity: String,
     /// The recipient tags its `HELLO` named: only those copies go to it.
     recipients: HashSet<String>,
-    frames: mpsc::Sender<String>,
-    /// Bytes of frames queued on `frames` and not yet taken by the serve
-    /// loop. Shared with that loop, which subtracts each frame it takes.
-    queued_bytes: Rc<Cell<usize>>,
+    frames: Rc<FrameLane>,
     /// Terminal output for this connection, on a lane of its own: it goes out
     /// only when `frames` has nothing waiting, so a terminal can never delay
     /// the phone's other traffic.
     term: Rc<TermLane>,
+}
+
+/// A connection's ordinary lane. Shared between the publisher (which pushes)
+/// and the connection's serve loop (which takes frames out and is woken by
+/// it). It keeps its own queue rather than a bounded channel so a burst
+/// larger than the bounds can still be delivered to a phone that is reading:
+/// the bounds decide whether the phone has *stopped* reading, not how big one
+/// publish pass may be.
+struct FrameLane {
+    queue: RefCell<VecDeque<String>>,
+    bytes: Cell<usize>,
+    /// When the serve loop last took a frame out.
+    last_taken: Cell<std::time::Instant>,
+    /// Whether the publisher gave up on this connection.
+    closed: Cell<bool>,
+    wake: tokio::sync::Notify,
+}
+
+impl FrameLane {
+    fn new() -> Self {
+        Self {
+            queue: RefCell::new(VecDeque::new()),
+            bytes: Cell::new(0),
+            last_taken: Cell::new(std::time::Instant::now()),
+            closed: Cell::new(false),
+            wake: tokio::sync::Notify::new(),
+        }
+    }
+
+    /// Queue a frame; false once the connection has been closed as stalled.
+    /// An over-cap queue while frames are still being taken is accepted: it
+    /// is a big burst, and the phone will drain it.
+    fn push(&self, frame: String) -> bool {
+        if self.closed.get() {
+            return false;
+        }
+        let mut queue = self.queue.borrow_mut();
+        let over = self.bytes.get() + frame.len() > FRAME_LANE_BYTES || queue.len() >= FRAME_LANE_CAP;
+        if over && self.last_taken.get().elapsed() >= FRAME_LANE_STALL {
+            drop(queue);
+            self.closed.set(true);
+            self.wake.notify_one();
+            return false;
+        }
+        self.bytes.set(self.bytes.get() + frame.len());
+        queue.push_back(frame);
+        drop(queue);
+        self.wake.notify_one();
+        true
+    }
+
+    fn pop(&self) -> Option<String> {
+        let frame = self.queue.borrow_mut().pop_front()?;
+        self.bytes.set(self.bytes.get().saturating_sub(frame.len()));
+        self.last_taken.set(std::time::Instant::now());
+        Some(frame)
+    }
+
+    fn is_closed(&self) -> bool {
+        self.closed.get()
+    }
+
+    /// Ready once a frame is waiting or the lane is closed. A `push` while
+    /// nobody waits leaves `Notify`'s permit behind, so no wake-up is lost
+    /// between the check and the wait.
+    async fn ready(&self) {
+        while self.queue.borrow().is_empty() && !self.closed.get() {
+            self.wake.notified().await;
+        }
+    }
+
+    /// Pretend the serve loop has taken nothing for longer than the stall
+    /// window.
+    #[cfg(test)]
+    fn stall_for_test(&self) {
+        self.last_taken.set(std::time::Instant::now() - FRAME_LANE_STALL - Duration::from_secs(1));
+    }
 }
 
 /// A connection's low-priority lane: terminal-output frames, bounded, oldest
@@ -230,17 +310,11 @@ impl Hub {
             for (id, conn) in conns.iter().filter(|(_, c)| c.reads(identity, event)) {
                 if terminal {
                     conn.term.push(frame.clone());
-                } else {
-                    let len = frame.len();
-                    if conn.queued_bytes.get() + len > FRAME_LANE_BYTES || conn.frames.try_send(frame.clone()).is_err() {
-                        // The phone is not reading its socket. Closing the
-                        // connection makes it reconnect and resync, which is
-                        // better than growing this queue without limit or
-                        // silently dropping a frame on a live link.
-                        full.push(*id);
-                    } else {
-                        conn.queued_bytes.set(conn.queued_bytes.get() + len);
-                    }
+                } else if !conn.frames.push(frame.clone()) {
+                    // The phone has stopped taking frames: close the
+                    // connection so it reconnects and resyncs, rather than
+                    // growing the queue without limit.
+                    full.push(*id);
                 }
             }
         }
@@ -266,21 +340,19 @@ impl Hub {
             .collect()
     }
 
-    fn register(&self, identity: &str, recipients: Vec<String>) -> (u64, mpsc::Receiver<String>, Rc<TermLane>, Rc<Cell<usize>>) {
+    fn register(&self, identity: &str, recipients: Vec<String>) -> (u64, Rc<FrameLane>, Rc<TermLane>) {
         let id = self.next_id.get();
         self.next_id.set(id + 1);
-        let (frames, rx) = mpsc::channel(FRAME_LANE_CAP);
+        let frames = Rc::new(FrameLane::new());
         let term = Rc::new(TermLane::default());
-        let queued_bytes = Rc::new(Cell::new(0));
         let conn = Conn {
             identity: identity.to_string(),
             recipients: recipients.into_iter().collect(),
-            frames,
-            queued_bytes: Rc::clone(&queued_bytes),
+            frames: Rc::clone(&frames),
             term: Rc::clone(&term),
         };
         self.conns.borrow_mut().insert(id, conn);
-        (id, rx, term, queued_bytes)
+        (id, frames, term)
     }
 
     fn unregister(&self, id: u64) {
@@ -582,7 +654,7 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(stream: S, hub: &Hub) {
         }
     };
 
-    let (id, mut outbound, term, queued_bytes) = hub.register(&identity, recipients);
+    let (id, frames, term) = hub.register(&identity, recipients);
     log::info!("[Direct] {}... connected", short(&identity));
     let mut ok = sink.send(send(&DirectFrame::Ready)).await.is_ok();
     for event in hub.since(id, since) {
@@ -590,32 +662,22 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(stream: S, hub: &Hub) {
     }
     while ok {
         // The normal lane first, always: a terminal frame goes out only when
-        // nothing else is waiting. `try_recv` catches a frame already queued;
-        // the biased select below keeps the same order while blocking.
-        match outbound.try_recv() {
-            Ok(text) => {
-                queued_bytes.set(queued_bytes.get().saturating_sub(text.len()));
-                ok = sink.send(Message::Text(text)).await.is_ok();
-                continue;
-            }
-            Err(mpsc::error::TryRecvError::Disconnected) => {
-                // Unpaired, or the bridge is stopping.
-                let _ = sink.send(send(&DirectFrame::Closed("closed".into()))).await;
-                break;
-            }
-            Err(mpsc::error::TryRecvError::Empty) => {}
+        // nothing else is waiting.
+        if let Some(text) = frames.pop() {
+            ok = sink.send(Message::Text(text)).await.is_ok();
+            continue;
+        }
+        if frames.is_closed() {
+            // Unpaired, the bridge is stopping, or the publisher gave up on
+            // a connection that stopped taking frames.
+            let _ = sink.send(send(&DirectFrame::Closed("closed".into()))).await;
+            break;
         }
         tokio::select! {
             biased;
-            frame = outbound.recv() => match frame {
-                Some(text) => {
-                    queued_bytes.set(queued_bytes.get().saturating_sub(text.len()));
+            () = frames.ready() => {
+                if let Some(text) = frames.pop() {
                     ok = sink.send(Message::Text(text)).await.is_ok();
-                }
-                None => {
-                    // Unpaired, or the bridge is stopping.
-                    let _ = sink.send(send(&DirectFrame::Closed("closed".into()))).await;
-                    ok = false;
                 }
             },
             incoming = tokio::time::timeout(IDLE_TIMEOUT, source.next()) => match incoming {
@@ -782,13 +844,13 @@ mod tests {
         }
         // Another identity naming p's tag reads nothing of p's.
         hub.deliver("q", &copy_for("q1", now), false);
-        let (p1, _, _, _) = hub.register("p", vec!["p1".into()]);
-        let (q, _, _, _) = hub.register("q", vec!["p1".into()]);
+        let (p1, _, _) = hub.register("p", vec!["p1".into()]);
+        let (q, _, _) = hub.register("q", vec!["p1".into()]);
         assert_eq!(hub.since(p1, 0), std::slice::from_ref(&mine), "the stale one was dropped; only p1's copy");
         assert!(hub.since(p1, mine.created_at + 1).is_empty());
         assert!(hub.since(q, 0).is_empty());
         hub.set_paired(&["p".into()]);
-        let (q1, _, _, _) = hub.register("q", vec!["q1".into()]);
+        let (q1, _, _) = hub.register("q", vec!["q1".into()]);
         assert!(hub.since(q1, 0).is_empty(), "an unpaired identity's events go");
     }
 
@@ -854,7 +916,7 @@ mod tests {
         let (inputs, _rx) = mpsc::unbounded_channel();
         let hub = Hub::new("b".into(), inputs);
         hub.set_paired(&["p".into()]);
-        let (id, _outbound, _, _) = hub.register("p", vec!["p1".into()]);
+        let (id, _, _) = hub.register("p", vec!["p1".into()]);
         let event = big_copy_for("p1", 60 * 1024, now_secs());
         // A sync sends every unacked chunk in one engine tick, so a long
         // transcript arrives as a burst the socket has not started draining.
@@ -865,24 +927,40 @@ mod tests {
     }
 
     #[test]
-    fn a_connection_that_stops_reading_is_closed_past_the_byte_bound() {
+    fn a_sync_pass_larger_than_the_byte_bound_still_reaches_a_reading_phone() {
         let (inputs, _rx) = mpsc::unbounded_channel();
         let hub = Hub::new("b".into(), inputs);
         hub.set_paired(&["p".into()]);
-        let (id, mut outbound, _, _) = hub.register("p", vec!["p1".into()]);
+        let (id, _, _) = hub.register("p", vec!["p1".into()]);
         let event = big_copy_for("p1", 1024 * 1024, now_secs());
         let frame_len = encode_direct_frame(&DirectFrame::Event(event.clone())).len();
-        let fits = FRAME_LANE_BYTES / frame_len;
-        for _ in 0..fits {
+        // One pass can be bigger than the bound. While the serve loop is
+        // still taking frames this is a burst to deliver, not a stalled
+        // phone; closing it would make the pass impossible to complete.
+        let count = FRAME_LANE_BYTES / frame_len + 2;
+        for _ in 0..count {
             hub.deliver("p", &event, false);
         }
-        assert!(hub.conns.borrow().contains_key(&id), "{fits} frames of {frame_len} bytes fit");
-        // One more crosses the bound: the connection is dropped and its
-        // serve loop sees the channel end.
+        assert!(hub.conns.borrow().contains_key(&id), "{count} frames of {frame_len} bytes are one pass, not a stall");
+    }
+
+    #[test]
+    fn a_connection_that_stops_taking_frames_is_closed_after_a_stall() {
+        let (inputs, _rx) = mpsc::unbounded_channel();
+        let hub = Hub::new("b".into(), inputs);
+        hub.set_paired(&["p".into()]);
+        let (id, frames, _) = hub.register("p", vec!["p1".into()]);
+        let event = copy_for("p1", now_secs());
+        // Fill past the frame guard while the lane is fresh.
+        for _ in 0..FRAME_LANE_CAP {
+            hub.deliver("p", &event, false);
+        }
+        assert!(hub.conns.borrow().contains_key(&id), "the guard alone does not close a connection that is reading");
+        // Nothing taken for the stall window: the next delivery gives up.
+        frames.stall_for_test();
         hub.deliver("p", &event, false);
         assert!(hub.conns.borrow().get(&id).is_none());
-        while outbound.try_recv().is_ok() {}
-        assert!(matches!(outbound.try_recv(), Err(mpsc::error::TryRecvError::Disconnected)));
+        assert!(frames.is_closed(), "the serve loop is told to close");
     }
 
     #[test]
