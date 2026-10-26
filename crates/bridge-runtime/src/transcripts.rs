@@ -6,10 +6,12 @@
 //! mid-write, so loading drops every line that does not parse (rewriting the
 //! file without it) and recovers the highest seq from what remains.
 
-use std::collections::BTreeMap;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use bridge_core::ports::Transcripts;
 use protocol::common::OutputEntry;
@@ -18,8 +20,30 @@ use protocol::ranges::SeqRange;
 
 use crate::state::write_private;
 
+/// Attempts to read a transcript when the bridge starts, and the wait
+/// between them: start-up is when a transient lock or a slow mount is the
+/// likeliest reason a file cannot be read yet.
+const START_READ_ATTEMPTS: usize = 3;
+const START_READ_RETRY: Duration = Duration::from_millis(100);
+
 pub struct FileTranscripts {
     dir: PathBuf,
+    /// The parsed entries of the most recently read session. Sync reads a
+    /// long transcript range by range and uploads chunk by chunk; without
+    /// this, each read re-read and re-parsed the whole file.
+    cache: RefCell<Option<Cached>>,
+    #[cfg(test)]
+    parses: std::cell::Cell<usize>,
+    /// Sessions whose transcript could not be read at start, so their
+    /// highest seq is unknown. Appending would start again at seq 1 over
+    /// lines that are still there, so these are not written at all.
+    refused: HashSet<String>,
+}
+
+struct Cached {
+    session_id: String,
+    /// In seq order, so a range is a binary search away.
+    entries: Vec<SyncEntry>,
 }
 
 /// Session ids come from the engine (uuids), but the file name must never be
@@ -58,7 +82,13 @@ fn parse_line(line: &str) -> Option<SyncEntry> {
 impl FileTranscripts {
     pub fn open(dir: &Path) -> Result<Self, String> {
         fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-        Ok(Self { dir: dir.to_path_buf() })
+        Ok(Self {
+            dir: dir.to_path_buf(),
+            cache: RefCell::new(None),
+            #[cfg(test)]
+            parses: std::cell::Cell::new(0),
+            refused: HashSet::new(),
+        })
     }
 
     fn path(&self, session_id: &str) -> PathBuf {
@@ -73,56 +103,158 @@ impl FileTranscripts {
         }
     }
 
-    fn rewrite(&self, session_id: &str, lines: &[String]) -> Result<(), String> {
+    /// `lines`, retried a couple of times: load runs at start-up, when a
+    /// transient lock or a slow mount is the likeliest reason a file cannot
+    /// be read yet. A session that stays unreadable is remembered in
+    /// `refused`; appending to it would reuse seqs over its existing lines.
+    fn read_at_start(&self, session_id: &str) -> Result<Vec<String>, String> {
+        let mut last = String::new();
+        for attempt in 0..START_READ_ATTEMPTS {
+            if attempt > 0 {
+                std::thread::sleep(START_READ_RETRY);
+            }
+            match self.lines(session_id) {
+                Ok(lines) => return Ok(lines),
+                Err(e) => last = e,
+            }
+        }
+        Err(last)
+    }
+
+    /// The session's entries, in seq order. This is the one place a transcript
+    /// is parsed; `read` goes through the cache first.
+    fn parse(&self, session_id: &str) -> Result<Vec<SyncEntry>, String> {
+        #[cfg(test)]
+        self.parses.set(self.parses.get() + 1);
+        let mut entries: Vec<SyncEntry> = self.lines(session_id)?.iter().filter_map(|l| parse_line(l)).collect();
+        entries.sort_by_key(|e| e.seq);
+        Ok(entries)
+    }
+
+    /// Write `lines` back exactly as they were read — a rewrite drops lines,
+    /// it never re-serializes the ones it keeps, so a field this build does
+    /// not model survives.
+    fn write_lines(&self, session_id: &str, lines: &[String]) -> Result<(), String> {
         let mut content = lines.join("\n");
         if !content.is_empty() {
             content.push('\n');
         }
         write_private(&self.path(session_id), content.as_bytes()).map_err(|e| e.to_string())
     }
+
+    fn cached(&self, session_id: &str) -> Result<(), String> {
+        let mut cache = self.cache.borrow_mut();
+        if cache.as_ref().is_none_or(|c| c.session_id != session_id) {
+            let entries = self.parse(session_id)?;
+            *cache = Some(Cached { session_id: session_id.to_string(), entries });
+        }
+        Ok(())
+    }
+
+    /// Replace the cache for `session_id`, if it is the one cached.
+    fn cache_entries(&self, session_id: &str, entries: Vec<SyncEntry>) {
+        if let Some(cache) = self.cache.borrow_mut().as_mut().filter(|c| c.session_id == session_id) {
+            cache.entries = entries;
+        }
+    }
+
+    fn forget(&self, session_id: &str) {
+        let mut cache = self.cache.borrow_mut();
+        if cache.as_ref().is_some_and(|c| c.session_id == session_id) {
+            *cache = None;
+        }
+    }
 }
 
 impl Transcripts for FileTranscripts {
     fn load(&mut self) -> Result<BTreeMap<String, u64>, String> {
         let mut highs = BTreeMap::new();
+        self.refused.clear();
         for entry in fs::read_dir(&self.dir).map_err(|e| e.to_string())? {
-            let name = entry.map_err(|e| e.to_string())?.file_name().to_string_lossy().into_owned();
+            let name = match entry {
+                Ok(e) => e.file_name().to_string_lossy().into_owned(),
+                Err(e) => {
+                    log::warn!("[Transcripts] Skipping an unreadable directory entry: {e}");
+                    continue;
+                }
+            };
             let Some(session_id) = session_of(&name) else { continue };
-            let lines = self.lines(&session_id)?;
+            // One unreadable transcript must not cost every other session its
+            // seq high: this file is skipped, the rest are loaded. Its own
+            // high is unknown, though, so appends to it are refused rather
+            // than restarting at seq 1 over the lines still in the file.
+            let lines = match self.read_at_start(&session_id) {
+                Ok(lines) => lines,
+                Err(e) => {
+                    log::error!(
+                        "[Transcripts] {name}: cannot be read after {START_READ_ATTEMPTS} attempts ({e}). Its seq high is unknown, so new entries are not appended to it this run; the transcript is left untouched."
+                    );
+                    self.refused.insert(session_id);
+                    continue;
+                }
+            };
+            let entries: Vec<SyncEntry> = lines.iter().filter_map(|l| parse_line(l)).collect();
             let valid: Vec<String> = lines.iter().filter(|l| parse_line(l).is_some()).cloned().collect();
-            let dropped = lines.iter().filter(|l| !l.trim().is_empty()).count() - valid.len();
-            if dropped > 0 {
-                log::warn!("[Transcripts] {name}: dropping {dropped} torn or invalid line(s)");
-                self.rewrite(&session_id, &valid)?;
+            let present = lines.iter().filter(|l| !l.trim().is_empty()).count();
+            let high = entries.iter().map(|e| e.seq).max().unwrap_or(0);
+            if valid.len() < present {
+                log::warn!("[Transcripts] {name}: dropping {} torn or invalid line(s)", present - valid.len());
+                if let Err(e) = self.write_lines(&session_id, &valid) {
+                    log::warn!("[Transcripts] {name}: cannot rewrite it without them: {e}");
+                }
+                // The file changed under the cache; the next read reparses it.
+                self.forget(&session_id);
             }
-            let high = valid.iter().filter_map(|l| parse_line(l)).map(|e| e.seq).max().unwrap_or(0);
             highs.insert(session_id, high);
         }
         Ok(highs)
     }
 
     fn append(&mut self, session_id: &str, seq: u64, entry: &OutputEntry) -> Result<(), String> {
-        let mut line = serde_json::to_string(&SyncEntry { seq, entry: entry.clone() }).map_err(|e| e.to_string())?;
+        if self.refused.contains(session_id) {
+            return Err("its transcript could not be read at start, so its seq high is unknown; not appending".into());
+        }
+        let record = SyncEntry { seq, entry: entry.clone() };
+        let mut line = serde_json::to_string(&record).map_err(|e| e.to_string())?;
         line.push('\n');
         let path = self.path(session_id);
         let mut f = OpenOptions::new().create(true).append(true).open(&path).map_err(|e| e.to_string())?;
         crate::state::restrict(&path, 0o600);
-        f.write_all(line.as_bytes()).map_err(|e| e.to_string())
+        f.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
+        if let Some(cache) = self.cache.get_mut().as_mut().filter(|c| c.session_id == session_id) {
+            // Seqs come from the engine and increase, so this is an append at
+            // the end; the search keeps a replayed seq in order anyway.
+            let at = cache.entries.partition_point(|e| e.seq < seq);
+            cache.entries.insert(at, record);
+        }
+        Ok(())
     }
 
     fn read(&self, session_id: &str, (from, to): SeqRange) -> Result<Vec<SyncEntry>, String> {
-        Ok(self.lines(session_id)?.iter().filter_map(|l| parse_line(l)).filter(|e| e.seq >= from && e.seq <= to).collect())
+        self.cached(session_id)?;
+        let cache = self.cache.borrow();
+        let cached = cache.as_ref().expect("just cached");
+        let start = cached.entries.partition_point(|e| e.seq < from);
+        let end = cached.entries.partition_point(|e| e.seq <= to);
+        Ok(cached.entries[start..end].to_vec())
     }
 
     fn prune(&mut self, session_id: &str, keep_last: usize) -> Result<(), String> {
-        let valid: Vec<String> = self.lines(session_id)?.into_iter().filter(|l| parse_line(l).is_some()).collect();
+        let lines = self.lines(session_id)?;
+        let valid: Vec<String> = lines.iter().filter(|l| parse_line(l).is_some()).cloned().collect();
         if valid.len() <= keep_last {
             return Ok(());
         }
-        self.rewrite(session_id, &valid[valid.len() - keep_last..])
+        let kept = &valid[valid.len() - keep_last..];
+        self.write_lines(session_id, kept)?;
+        let entries = kept.iter().filter_map(|l| parse_line(l)).collect();
+        self.cache_entries(session_id, entries);
+        Ok(())
     }
 
     fn remove(&mut self, session_id: &str) -> Result<(), String> {
+        self.forget(session_id);
+        self.refused.remove(session_id);
         match fs::remove_file(self.path(session_id)) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
             _ => Ok(()),
@@ -183,6 +315,104 @@ mod tests {
         t.remove("s").unwrap();
         t.remove("s").unwrap();
         assert!(t.load().unwrap().is_empty());
+    }
+
+    #[test]
+    fn repeated_reads_of_a_session_parse_the_file_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut t = FileTranscripts::open(dir.path()).unwrap();
+        for seq in 1..=5 {
+            t.append("s1", seq, &entry("x")).unwrap();
+        }
+        for _ in 0..3 {
+            assert_eq!(seqs(&t.read("s1", (2, 4)).unwrap()), [2, 3, 4]);
+        }
+        assert_eq!(t.parses.get(), 1, "the range reads reused the parsed entries");
+        // One other session fits in the cache; going back to the first parses
+        // it again rather than growing the cache without bound.
+        assert!(t.read("s2", (1, 9)).unwrap().is_empty());
+        assert_eq!(t.parses.get(), 2);
+        assert_eq!(seqs(&t.read("s1", (5, 5)).unwrap()), [5]);
+        assert_eq!(t.parses.get(), 3);
+    }
+
+    #[test]
+    fn the_cache_follows_appends_prunes_and_removals() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut t = FileTranscripts::open(dir.path()).unwrap();
+        for seq in 1..=3 {
+            t.append("s", seq, &entry("x")).unwrap();
+        }
+        assert_eq!(seqs(&t.read("s", (1, 100)).unwrap()), [1, 2, 3]);
+        t.append("s", 4, &entry("y")).unwrap();
+        assert_eq!(t.parses.get(), 1, "an append updates the cached entries");
+        assert_eq!(seqs(&t.read("s", (1, 100)).unwrap()), [1, 2, 3, 4]);
+        t.prune("s", 2).unwrap();
+        assert_eq!(seqs(&t.read("s", (1, 100)).unwrap()), [3, 4]);
+        t.remove("s").unwrap();
+        assert!(t.read("s", (1, 100)).unwrap().is_empty());
+        assert!(!dir.path().join("s.jsonl").exists(), "reading after a removal does not recreate it");
+    }
+
+    #[test]
+    fn an_unreadable_transcript_is_skipped_not_fatal() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut t = FileTranscripts::open(dir.path()).unwrap();
+        t.append("good", 1, &entry("a")).unwrap();
+        // Something that is named like a transcript but cannot be read as
+        // one: a directory, whose read fails on every platform.
+        fs::create_dir(dir.path().join("bad.jsonl")).unwrap();
+        let highs = t.load().unwrap();
+        assert_eq!(highs.get("good"), Some(&1));
+        assert!(!highs.contains_key("bad"), "the bad file is skipped, the good one keeps its seq high");
+    }
+
+    /// One JSON line for `seq`, with a field this build does not model.
+    fn line_with_future_field(seq: u64) -> String {
+        let mut value = serde_json::to_value(SyncEntry { seq, entry: entry("x") }).unwrap();
+        value.as_object_mut().unwrap().insert("futureField".into(), serde_json::json!(42));
+        serde_json::to_string(&value).unwrap()
+    }
+
+    #[test]
+    fn a_rewrite_keeps_the_kept_lines_verbatim() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        // A valid line carrying a field this build does not model, then a
+        // torn one; load rewrites the file without the torn line.
+        fs::write(&path, format!("{}\n{{\"seq\":2,\"ent", line_with_future_field(1))).unwrap();
+        let mut t = FileTranscripts::open(dir.path()).unwrap();
+        assert_eq!(t.load().unwrap()["s"], 1);
+        assert!(fs::read_to_string(&path).unwrap().contains("futureField"), "the surviving line was not re-serialized");
+
+        // The same through pruning: the kept line keeps its unknown field.
+        fs::write(&path, format!("{}\n{}\n{}\n", entry_line(4), entry_line(5), line_with_future_field(6))).unwrap();
+        t.prune("s", 2).unwrap();
+        let kept = fs::read_to_string(&path).unwrap();
+        assert!(kept.contains("futureField"));
+        assert_eq!(seqs(&t.read("s", (1, 100)).unwrap()), [5, 6]);
+    }
+
+    fn entry_line(seq: u64) -> String {
+        serde_json::to_string(&SyncEntry { seq, entry: entry("x") }).unwrap()
+    }
+
+    #[test]
+    fn a_transcript_that_stays_unreadable_refuses_appends() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut t = FileTranscripts::open(dir.path()).unwrap();
+        t.append("good", 1, &entry("a")).unwrap();
+        fs::create_dir(dir.path().join("bad.jsonl")).unwrap();
+        let highs = t.load().unwrap();
+        assert_eq!(highs.get("good"), Some(&1));
+        assert!(!highs.contains_key("bad"));
+        // Its high is unknown, so appending would reuse seqs over whatever
+        // the file holds. It is refused instead.
+        let err = t.append("bad", 1, &entry("x")).unwrap_err();
+        assert!(err.contains("could not be read at start"), "{err}");
+        // Every other session keeps appending.
+        t.append("good", 2, &entry("b")).unwrap();
+        assert_eq!(seqs(&t.read("good", (1, 100)).unwrap()), [1, 2]);
     }
 
     #[test]

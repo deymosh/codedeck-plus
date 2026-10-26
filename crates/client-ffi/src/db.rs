@@ -20,7 +20,7 @@ use std::rc::Rc;
 use client_runtime::client_core::stores::settings::hydrate_settings;
 use client_runtime::ports::{LocalBoxFuture, TranscriptRow};
 use client_runtime::stores::SETTINGS_KEY;
-use client_runtime::{Kv, TranscriptStore};
+use client_runtime::{Kv, StoreError, TranscriptStore};
 use rusqlite::Connection;
 
 const MIGRATIONS: &[&str] = &[
@@ -149,7 +149,7 @@ impl TranscriptStore for TranscriptStoreSqlite {
         machine: &str,
         session: &str,
         rows: &[TranscriptRow],
-    ) -> LocalBoxFuture<'_, Vec<u64>> {
+    ) -> LocalBoxFuture<'_, Result<Vec<u64>, StoreError>> {
         let inserted = insert_rows(&self.conn.borrow(), machine, session, rows);
         Box::pin(async move { inserted })
     }
@@ -182,22 +182,28 @@ impl TranscriptStore for TranscriptStoreSqlite {
 /// Inserts one sync batch in a single transaction and returns the seqs that
 /// were new. Per-row autocommit would make every row its own commit (and
 /// its own disk sync) on the core's event-loop thread — a gap refill of a
-/// few hundred rows stalled the loop for as many syncs. A batch that fails
-/// to commit is rolled back and reported as inserting nothing, so the
-/// caller never counts rows that did not land.
-fn insert_rows(conn: &Connection, machine: &str, session: &str, rows: &[TranscriptRow]) -> Vec<u64> {
-    let Ok(tx) = conn.unchecked_transaction() else {
-        return Vec::new();
-    };
+/// few hundred rows stalled the loop for as many syncs. Any failure rolls
+/// the whole batch back and surfaces as an error: an empty list would be
+/// indistinguishable from "every seq was already stored", which is exactly
+/// what a sync ack must never be built on.
+fn insert_rows(
+    conn: &Connection,
+    machine: &str,
+    session: &str,
+    rows: &[TranscriptRow],
+) -> Result<Vec<u64>, StoreError> {
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| StoreError::new(format!("transcript write: begin failed: {e}")))?;
     let mut inserted = Vec::new();
     {
-        let Ok(mut stmt) = tx.prepare_cached(
-            "INSERT OR IGNORE INTO transcript
-                (machine_pubkey, session_id, seq, kind, json, created_at)
-             VALUES (?, ?, ?, ?, ?, ?)",
-        ) else {
-            return Vec::new();
-        };
+        let mut stmt = tx
+            .prepare_cached(
+                "INSERT OR IGNORE INTO transcript
+                    (machine_pubkey, session_id, seq, kind, json, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .map_err(|e| StoreError::new(format!("transcript write: prepare failed: {e}")))?;
         let created_at = now_ms();
         for row in rows {
             let changed = stmt
@@ -209,16 +215,15 @@ fn insert_rows(conn: &Connection, machine: &str, session: &str, rows: &[Transcri
                     row.entry.to_string(),
                     created_at,
                 ])
-                .unwrap_or(0);
+                .map_err(|e| StoreError::new(format!("transcript write: seq {} failed: {e}", row.seq)))?;
             if changed > 0 {
                 inserted.push(row.seq);
             }
         }
     }
-    if tx.commit().is_err() {
-        return Vec::new();
-    }
-    inserted
+    tx.commit()
+        .map_err(|e| StoreError::new(format!("transcript write: commit failed: {e}")))?;
+    Ok(inserted)
 }
 
 fn now_ms() -> i64 {
@@ -229,19 +234,33 @@ fn now_ms() -> i64 {
 }
 
 impl TranscriptStoreSqlite {
+    /// The seqs that back `have_ranges`, which must be only the rows that can
+    /// actually be read back. A row whose JSON no longer parses is deleted
+    /// here (as it is in [`Self::query_range`]) and left out, so coverage
+    /// never claims a gap that a later read would silently drop.
     fn query_seqs(&self, machine: &str, session: &str) -> Vec<u64> {
         let conn = self.conn.borrow();
-        let mut stmt = match conn.prepare_cached(
-            "SELECT seq FROM transcript WHERE machine_pubkey = ? AND session_id = ? ORDER BY seq ASC",
-        ) {
-            Ok(s) => s,
-            Err(_) => return Vec::new(),
+        let seqs: Vec<u64> = {
+            let mut stmt = match conn.prepare_cached(
+                "SELECT seq FROM transcript
+                 WHERE machine_pubkey = ? AND session_id = ? AND json_valid(json)
+                 ORDER BY seq ASC",
+            ) {
+                Ok(s) => s,
+                Err(_) => return Vec::new(),
+            };
+            let rows = stmt.query_map([machine, session], |row| row.get::<_, i64>(0));
+            match rows {
+                Ok(rows) => rows.filter_map(Result::ok).map(|s| s as u64).collect(),
+                Err(_) => return Vec::new(),
+            }
         };
-        let rows = stmt.query_map([machine, session], |row| row.get::<_, i64>(0));
-        match rows {
-            Ok(rows) => rows.filter_map(Result::ok).map(|s| s as u64).collect(),
-            Err(_) => Vec::new(),
-        }
+        let _ = conn.execute(
+            "DELETE FROM transcript
+             WHERE machine_pubkey = ? AND session_id = ? AND NOT json_valid(json)",
+            [machine, session],
+        );
+        seqs
     }
 
     /// A row whose `json` fails to parse is unreadable, not fatal — it is
@@ -326,12 +345,12 @@ mod tests {
             entry: serde_json::json!({ "entryType": "system", "text": text }),
         };
         let inserted = store.insert_ignore("m1", "s1", &[row(1, "a"), row(2, "b")]).await;
-        assert_eq!(inserted, vec![1, 2]);
+        assert_eq!(inserted, Ok(vec![1, 2]));
 
         let reinserted = store
             .insert_ignore("m1", "s1", &[row(1, "different"), row(3, "c")])
             .await;
-        assert_eq!(reinserted, vec![3]);
+        assert_eq!(reinserted, Ok(vec![3]));
 
         assert_eq!(store.seqs("m1", "s1").await, vec![1, 2, 3]);
         let range = store.read_range("m1", "s1", 1, 2).await;
@@ -345,8 +364,8 @@ mod tests {
         let conn = Rc::new(RefCell::new(conn));
         let store = TranscriptStoreSqlite::new(conn);
         let row = TranscriptRow { seq: 1, entry: serde_json::json!({}) };
-        store.insert_ignore("m1", "s1", std::slice::from_ref(&row)).await;
-        store.insert_ignore("m1", "s2", &[row]).await;
+        store.insert_ignore("m1", "s1", std::slice::from_ref(&row)).await.unwrap();
+        store.insert_ignore("m1", "s2", &[row]).await.unwrap();
 
         store.remove("m1", "s1").await;
         assert_eq!(store.seqs("m1", "s1").await, Vec::<u64>::new());
@@ -371,6 +390,31 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM transcript", [], |r| r.get(0))
             .unwrap();
         assert_eq!(remaining, 0);
+    }
+
+    #[tokio::test]
+    async fn a_corrupt_seq_never_counts_as_coverage() {
+        let (_dir, conn) = open_temp();
+        let conn = Rc::new(RefCell::new(conn));
+        let store = TranscriptStoreSqlite::new(conn.clone());
+        let row = |seq: u64, text: &str| TranscriptRow {
+            seq,
+            entry: serde_json::json!({ "entryType": "system", "text": text }),
+        };
+        store.insert_ignore("m1", "s1", &[row(1, "a"), row(2, "b"), row(3, "c")]).await.unwrap();
+        // A row written by an older schema / torn write: seq 2 is unreadable.
+        conn.borrow()
+            .execute("UPDATE transcript SET json = '{broken' WHERE seq = 2", [])
+            .unwrap();
+
+        // Have-ranges are computed from `seqs`, so the corrupt seq must not
+        // be reported as stored: the gap stays uncovered and is re-synced.
+        assert_eq!(store.seqs("m1", "s1").await, vec![1, 3]);
+        let remaining: i64 = conn
+            .borrow()
+            .query_row("SELECT COUNT(*) FROM transcript WHERE seq = 2", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(remaining, 0, "the unreadable row was deleted");
     }
 
     #[test]

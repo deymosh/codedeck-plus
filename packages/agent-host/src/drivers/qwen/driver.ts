@@ -257,13 +257,6 @@ export class QwenSession extends AcpSession<undefined, AcpProcessEvents, QwenSes
     return this.currentModel()?.label;
   }
 
-  /** Qwen Code's version, which its `initialize` reports truthfully (unlike
-   *  the DeepSeek Harness's placeholder). */
-  protected override version(): Promise<string | undefined> {
-    const version = this.process?.agentInfo?.version;
-    return Promise.resolve(typeof version === 'string' && version !== '' ? version : undefined);
-  }
-
   // --- commands ---
 
   /**
@@ -539,6 +532,11 @@ export class QwenDriver implements Driver {
   /** Mark the driver unusable (a path the operator named is not a file). */
   setUnavailable(reason: string): void {
     this.unavailable = reason;
+  }
+
+  /** The release of the installed package, from its manifest. */
+  version(): Promise<string | undefined> {
+    return this.options.runtime.version();
   }
 
   info(): AgentInfo {

@@ -213,3 +213,34 @@ describe('Agents.remove', () => {
     expect(agents.list()[0]!.install).toEqual({ state: 'not_installed' });
   });
 });
+
+describe('Agents versions', () => {
+  it("reads a ready agent's release in the background and announces it", async () => {
+    let tell!: (version: string) => void;
+    const told = new Promise<string>((resolve) => (tell = resolve));
+    const versioned: DriverModule = { ...module('own', { mine: '/usr/bin/own' }), create: () => ({ ...stubDriver('own'), version: () => told }) };
+    const agents = await Agents.load([versioned, module('plain', { mine: '/usr/bin/plain' })], base());
+    const changes: AgentInfo[] = [];
+    agents.onChange = (a) => changes.push(a);
+    // The catalog does not wait for it.
+    expect(agents.list().map((a) => a.version)).toEqual([undefined, undefined]);
+
+    tell('1.2.3');
+    await told;
+    await new Promise((r) => setTimeout(r, 0));
+    expect(changes.map((a) => [a.id, a.version])).toEqual([['own', '1.2.3']]);
+    expect(agents.list().map((a) => a.version)).toEqual(['1.2.3', undefined]);
+  });
+
+  it('keeps a version nobody could read out of the catalog', async () => {
+    const failing: DriverModule = {
+      ...module('own', { mine: '/usr/bin/own' }),
+      create: () => ({ ...stubDriver('own'), version: async () => { throw new Error('no binary'); } }),
+    };
+    const log: string[] = [];
+    const agents = await Agents.load([failing], base(log));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(agents.list()[0]!.version).toBeUndefined();
+    expect(log.some((line) => line.includes("could not read OWN's version"))).toBe(true);
+  });
+});

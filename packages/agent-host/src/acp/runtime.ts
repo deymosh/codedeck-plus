@@ -126,6 +126,10 @@ export interface AcpRuntimeOptions {
 /** One environment's process, with the sessions using it. */
 interface Context<H> {
   readonly key: string;
+  /** The configuration version this process was started with. A version
+   *  change means a different process: the live one has not loaded the
+   *  change, and a session started after it must. */
+  readonly version: number;
   /** Settles with the live process, or rejects when it could not start. */
   opened: Promise<AgentProcess<H>>;
   /** Sessions that have acquired and not yet released it. */
@@ -289,6 +293,10 @@ class AgentProcess<H> implements AcpProcess<H> {
  */
 export abstract class AcpRuntime<H = undefined, E extends AcpProcessEvents = AcpProcessEvents> {
   private readonly contexts = new Map<string, Context<H>>();
+  /** Contexts replaced by a newer configuration version. Their own sessions
+   *  still hold them, so they are not the map's any more; they are kept here
+   *  until the last session lets go, so `close()` can still close them. */
+  private readonly superseded = new Set<Context<H>>();
   protected readonly log: (message: string) => void;
   private stopping = false;
 
@@ -329,8 +337,9 @@ export abstract class AcpRuntime<H = undefined, E extends AcpProcessEvents = Acp
   /** Close every process. Called on host shutdown. */
   async close(): Promise<void> {
     this.stopping = true;
-    const contexts = [...this.contexts.values()];
+    const contexts = [...this.contexts.values(), ...this.superseded];
     this.contexts.clear();
+    this.superseded.clear();
     await Promise.all(
       contexts.map(async (context) => {
         context.closing = true;
@@ -347,15 +356,39 @@ export abstract class AcpRuntime<H = undefined, E extends AcpProcessEvents = Acp
   /** The context for one key: the live one while it can still serve, else a
    *  fresh process. */
   private open(key: string, env: Record<string, string>, events: E): Context<H> {
+    const version = this.options.configVersion?.() ?? 0;
     const existing = this.contexts.get(key);
-    if (existing && !existing.closing && (existing.live === undefined || existing.live.alive)) {
+    if (
+      existing &&
+      existing.version === version &&
+      !existing.closing &&
+      (existing.live === undefined || existing.live.alive)
+    ) {
       if (existing.timer) {
         clearTimeout(existing.timer);
         existing.timer = undefined;
       }
       return existing;
     }
-    const context: Context<H> = { key, opened: undefined as never, sessions: 0, closing: false };
+    // A different version starts a process of its own: sessions already on the
+    // old one keep it (they are released normally, closing it when the last
+    // lets go), while every session from now on gets the new configuration.
+    if (existing) {
+      if (existing.timer) {
+        clearTimeout(existing.timer);
+        existing.timer = undefined;
+      }
+      existing.closing = true;
+      if (existing.sessions === 0) {
+        this.forget(key, existing);
+        void existing.live?.close();
+      } else {
+        // Sessions still on it will release it; until then the host's
+        // shutdown has to be able to find it.
+        this.superseded.add(existing);
+      }
+    }
+    const context: Context<H> = { key, version, opened: undefined as never, sessions: 0, closing: false };
     this.contexts.set(key, context);
     context.opened = this.spawn(context, env, events);
     return context;
@@ -372,7 +405,7 @@ export abstract class AcpRuntime<H = undefined, E extends AcpProcessEvents = Acp
     const process_ = new AgentProcess<H>(
       child,
       new AcpClient({ stdin: child.stdin!, stdout: child.stdout!, log: this.log, tag: this.options.tag }),
-      this.options.configVersion?.() ?? 0,
+      context.version,
       spec.handle,
       this.options.tag,
       this.options.label,
@@ -414,10 +447,14 @@ export abstract class AcpRuntime<H = undefined, E extends AcpProcessEvents = Acp
    *  the next session starts a new one. */
   private forget(key: string, context: Context<H>, process_?: AgentProcess<H>): void {
     const current = this.contexts.get(key);
-    if (current !== context) return;
-    if (process_ && current.live && current.live !== process_) return;
-    if (current.timer) clearTimeout(current.timer);
-    this.contexts.delete(key);
+    if (current === context) {
+      if (process_ && current.live && current.live !== process_) return;
+      if (current.timer) clearTimeout(current.timer);
+      this.contexts.delete(key);
+    }
+    // A superseded context is not in the map: once it is forgotten (closed or
+    // its start failed) nothing else may try to close it again.
+    this.superseded.delete(context);
   }
 
   /** One session let go: close the process once nobody is using it, after a
@@ -439,8 +476,10 @@ export abstract class AcpRuntime<H = undefined, E extends AcpProcessEvents = Acp
   private async closeIdle(context: Context<H>): Promise<void> {
     context.timer = undefined;
     // A session that arrived while the timer ran keeps the process.
-    if (context.sessions > 0 || this.contexts.get(context.key) !== context) return;
+    if (context.sessions > 0) return;
     context.closing = true;
+    // A context replaced for a newer configuration is no longer the map's,
+    // but its process is still this one's to close.
     this.forget(context.key, context);
     this.log(`[${this.options.tag}] closing the idle agent process`);
     await context.live?.close();

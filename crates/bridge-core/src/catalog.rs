@@ -85,6 +85,7 @@ impl Catalog {
                 credentials: credentials(a),
                 install: a.install.clone(),
                 style_hash: a.style.as_ref().map(AgentStyle::hash),
+                version: a.version.clone(),
             })
             .collect()
     }

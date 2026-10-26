@@ -30,7 +30,7 @@ use protocol::commands::{
 use protocol::common::{EntryBody, SessionOption, SessionState, SignInStatus};
 use protocol::events::BridgeToPhone;
 
-use crate::ports::{TranscriptRow, TranscriptStore};
+use crate::ports::{StoreError, TranscriptRow, TranscriptStore};
 use crate::runtime::TerminalFlush;
 use crate::signer::PhoneKeys;
 use crate::stores::CoreStores;
@@ -307,7 +307,13 @@ impl<'a> Router<'a> {
                     return r;
                 }
                 let rows = m.numbered().map(|(seq, e)| (seq, to_value(e))).collect();
-                let inserted = self.apply_rows(machine, &m.session_id, rows).await;
+                // A failed write leaves the entries out of the transcript and
+                // uncovered (sync re-fetches the gap), but they did arrive:
+                // completing their live rows and raising the attention signal
+                // are facts about this delivery, not claims about storage, so
+                // they still happen. Only the stored seqs gate the
+                // "already in the transcript, do not notify again" check.
+                let inserted = self.apply_rows(machine, &m.session_id, rows).await.ok();
                 r.transcript_appended = Some((machine.to_string(), m.session_id.clone()));
                 // An entry completing a part replaces its live row; the end of
                 // the turn drops the rows no entry completed.
@@ -324,7 +330,9 @@ impl<'a> Router<'a> {
                 // killed re-sends output the phone stored (and notified about)
                 // before, and a second copy over another path is the same
                 // entry. Neither may notify or mark the session again.
-                for (_, entry) in m.numbered().filter(|(seq, _)| inserted.contains(seq)) {
+                for (_, entry) in m.numbered().filter(|(seq, _)| {
+                    inserted.as_ref().is_none_or(|stored| stored.contains(seq))
+                }) {
                     // Unread + notify on LIVE entries only (sync catch-up takes
                     // the SyncChunk path, so replayed history never marks dots
                     // or fires a notification storm). A card / stream_end /
@@ -356,6 +364,7 @@ impl<'a> Router<'a> {
                     &m.session_id,
                     &m.sync_id,
                     m.seq_high,
+                    self.now,
                 );
             }
             BridgeToPhone::SyncChunk(m) => {
@@ -364,17 +373,25 @@ impl<'a> Router<'a> {
                     .iter()
                     .map(|e| (e.seq, to_value(&e.entry)))
                     .collect();
-                self.apply_rows(machine, &m.session_id, rows).await;
-                r.transcript_appended = Some((machine.to_string(), m.session_id.clone()));
-                // Ack AFTER the entries are durably stored — an ack must never
-                // claim data we could still lose.
-                r.send(
-                    machine,
-                    PhoneToBridge::SyncAck(SyncAckMsg {
-                        sync_id: m.sync_id.clone(),
-                        ranges: vec![m.range],
-                    }),
-                );
+                // The chunk itself is progress, whether or not every row is
+                // new or the write lands: the cycle is still being served,
+                // and restarting it would abort a sync that is working.
+                self.stores
+                    .transcript
+                    .note_sync_progress(machine, &m.session_id, self.now);
+                // Ack ONLY after the entries are durably stored — an ack must
+                // never claim data we could still lose. A failed write leaves
+                // the chunk unacked, and the bridge resends unacked chunks.
+                if self.apply_rows(machine, &m.session_id, rows).await.is_ok() {
+                    r.transcript_appended = Some((machine.to_string(), m.session_id.clone()));
+                    r.send(
+                        machine,
+                        PhoneToBridge::SyncAck(SyncAckMsg {
+                            sync_id: m.sync_id.clone(),
+                            ranges: vec![m.range],
+                        }),
+                    );
+                }
             }
             BridgeToPhone::SyncEnd(m) => {
                 let effects = self
@@ -610,9 +627,9 @@ impl<'a> Router<'a> {
         machine: &str,
         session: &str,
         rows: Vec<(u64, serde_json::Value)>,
-    ) -> Vec<u64> {
+    ) -> Result<Vec<u64>, StoreError> {
         if rows.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         let store_rows: Vec<TranscriptRow> = rows
             .iter()
@@ -624,7 +641,14 @@ impl<'a> Router<'a> {
         let inserted = self
             .transcript_store
             .insert_ignore(machine, session, &store_rows)
-            .await;
+            .await
+            .map_err(|e| {
+                log::error!(
+                    "transcript store: {} rows for {session} were not stored: {e}",
+                    store_rows.len()
+                );
+                e
+            })?;
         let inserted_set: HashSet<u64> = inserted.iter().copied().collect();
 
         // Already stored: same seq must mean same content — anything else is
@@ -660,7 +684,7 @@ impl<'a> Router<'a> {
         self.stores
             .transcript
             .integrate_rows(machine, session, &inserted, &conflicts);
-        inserted
+        Ok(inserted)
     }
 
     /// The heartbeat. Port of `createPhoneCore`'s `onSessions` handler.
@@ -1291,11 +1315,125 @@ mod tests {
         );
     }
 
+    /// A store whose writes fail, as a full disk or a failed commit would:
+    /// nothing it is given is stored.
+    struct FailingStore(MemoryTranscriptStore);
+
+    impl TranscriptStore for FailingStore {
+        fn insert_ignore(
+            &self,
+            _machine: &str,
+            _session: &str,
+            _rows: &[TranscriptRow],
+        ) -> crate::ports::LocalBoxFuture<'_, Result<Vec<u64>, StoreError>> {
+            Box::pin(async { Err(StoreError::new("disk full")) })
+        }
+        fn seqs(&self, machine: &str, session: &str) -> crate::ports::LocalBoxFuture<'_, Vec<u64>> {
+            self.0.seqs(machine, session)
+        }
+        fn read_range(
+            &self,
+            machine: &str,
+            session: &str,
+            from: u64,
+            to: u64,
+        ) -> crate::ports::LocalBoxFuture<'_, Vec<TranscriptRow>> {
+            self.0.read_range(machine, session, from, to)
+        }
+        fn remove(&self, machine: &str, session: &str) -> crate::ports::LocalBoxFuture<'_, ()> {
+            self.0.remove(machine, session)
+        }
+    }
+
+    #[tokio::test]
+    async fn a_duplicate_chunk_still_counts_as_progress_for_the_stall_deadline() {
+        let (mut s, ts, kp) = stores().await;
+        s.transcript.apply_sync_begin(MACHINE, "s1", "sy1", 2, 0);
+        let chunk = || {
+            BridgeToPhone::SyncChunk(SyncChunkMsg {
+                session_id: "s1".into(),
+                sync_id: "sy1".into(),
+                range: (1, 2),
+                entries: vec![
+                    protocol::events::SyncEntry { seq: 1, entry: text_entry("a") },
+                    protocol::events::SyncEntry { seq: 2, entry: text_entry("b") },
+                ],
+            })
+        };
+        {
+            let mut r = Router::new(&mut s, &ts, &kp, 1_000);
+            r.route(MACHINE, &chunk()).await;
+        }
+        // Every row is already present; the bridge is still serving the
+        // cycle, so a stall sweep must not restart it.
+        let mut r = Router::new(&mut s, &ts, &kp, 2_000);
+        r.route(MACHINE, &chunk()).await;
+        assert_eq!(s.transcript.session(MACHINE, "s1").unwrap().sync.in_flight_since, Some(2_000));
+    }
+
+    #[tokio::test]
+    async fn a_failed_output_write_still_delivers_the_live_attention_signal() {
+        let (mut s, ts, kp) = stores().await;
+        let failing = FailingStore(ts.clone());
+        let card: OutputEntry = serde_json::from_value(json!({
+            "timestamp": "t", "entryType": "permission_request", "requestId": "r1",
+            "toolName": "Bash", "kind": "execute", "title": "ls", "options": []
+        }))
+        .unwrap();
+        let mut r = Router::new(&mut s, &failing, &kp, 1_000);
+        r.visible = false;
+        let out = r
+            .route(
+                MACHINE,
+                &BridgeToPhone::Output(OutputMsg {
+                    session_id: "s1".into(),
+                    seq: 1,
+                    entries: vec![card],
+                }),
+            )
+            .await;
+
+        // The entries are not stored and stay uncovered for sync...
+        assert!(ts.seqs(MACHINE, "s1").await.is_empty());
+        assert!(!s.transcript.has_contiguous(MACHINE, "s1", Some(1)));
+        // ...but they arrived: the user still gets the card's signal.
+        assert!(matches!(out.notifies.as_slice(), [NotifyEffect::Notify { .. }]));
+        assert!(s.ui.is_session_unread(MACHINE, "s1"));
+        assert_eq!(out.transcript_appended, Some((MACHINE.to_string(), "s1".to_string())));
+    }
+
+    #[tokio::test]
+    async fn a_chunk_that_failed_to_store_is_not_acked_and_stays_uncovered() {
+        let (mut s, ts, kp) = stores().await;
+        let failing = FailingStore(ts.clone());
+        let mut r = Router::new(&mut s, &failing, &kp, 1_000);
+        let out = r
+            .route(
+                MACHINE,
+                &BridgeToPhone::SyncChunk(SyncChunkMsg {
+                    session_id: "s1".into(),
+                    sync_id: "sy1".into(),
+                    range: (1, 2),
+                    entries: vec![
+                        protocol::events::SyncEntry { seq: 1, entry: text_entry("a") },
+                        protocol::events::SyncEntry { seq: 2, entry: text_entry("b") },
+                    ],
+                }),
+            )
+            .await;
+        // An ack is a claim of durable storage: with the write rolled back,
+        // the bridge must keep the chunk unacked and resend it.
+        assert!(out.sends.is_empty(), "no ack for rows that were not stored");
+        assert!(out.transcript_appended.is_none());
+        assert!(ts.seqs(MACHINE, "s1").await.is_empty());
+        assert!(!s.transcript.has_contiguous(MACHINE, "s1", Some(2)));
+    }
+
     #[tokio::test]
     async fn sync_end_with_a_gap_re_requests() {
         let (mut s, ts, kp) = stores().await;
         // seq 5 is advertised but only 1..=2 are covered
-        s.transcript.apply_sync_begin(MACHINE, "s1", "sy1", 5);
+        s.transcript.apply_sync_begin(MACHINE, "s1", "sy1", 5, 0);
         {
             let mut r = Router::new(&mut s, &ts, &kp, 1_000);
             r.route(

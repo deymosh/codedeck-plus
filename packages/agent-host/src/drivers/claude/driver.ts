@@ -69,6 +69,12 @@ const DEFAULT_MODE = 'plan';
 /** Opus 5.5's own default, set explicitly so every session's effort is
  *  known rather than left to whatever the model or CLI picks. */
 const DEFAULT_EFFORT = 'medium';
+/** How long a fresh session's control-channel probe may take before the CLI
+ *  is taken to be unresponsive: a session that never confirms would
+ *  otherwise neither report `ready` nor end. Generous because the first
+ *  start also pays for extracting the binary (and an antivirus scan of it on
+ *  Windows); the same bound as the ACP `initialize` handshake. */
+export const PROBE_TIMEOUT_MS = 120_000;
 
 export const CLAUDE_MODES: OptionChoice[] = [
   { id: 'plan', label: 'Plan', description: 'Plan first; nothing runs until you approve the plan' },
@@ -172,6 +178,9 @@ export interface ClaudeDriverDeps {
   /** Manage the user-scope MCP servers through the same CLI. */
   manageMcp?: boolean;
   runCli?: CliRunner;
+  /** Read the release of the `claude` sessions run (the catalog's
+   *  `version`). */
+  readVersion?: () => Promise<string | undefined>;
 }
 
 export class ClaudeSession implements DriverSession {
@@ -180,8 +189,6 @@ export class ClaudeSession implements DriverSession {
   /** Told a tool name no agent's table lists, which the log then carries. */
   private readonly reportUnknownTool: (toolName: string) => void;
   private readonly resumeTarget: string | null;
-  /** Whether the version line was said: once, when a new session starts. */
-  private announced = false;
   /** Coalesces the SDK's streamed deltas into `partial` events (sdk/partial):
    *  a few signed, relayed updates a second, not one per token. */
   private readonly partials: PartialCoalescer;
@@ -295,14 +302,29 @@ export class ClaudeSession implements DriverSession {
     } else {
       // The SDK emits `init` only after the first user message, so a fresh
       // idle session is confirmed by a control-channel round trip instead.
-      handle.probeReady().then(
-        () => this.markReady(),
-        (err) => {
-          if (!this.ready) this.finish(`SDK session did not respond: ${err}`);
-        },
-      );
+      this.probe(handle);
     }
     this.consuming = this.consume(handle).catch((err) => this.finish(`SDK stream consumer failed: ${err}`));
+  }
+
+  /** Confirm a fresh session with the control channel, bounded: a CLI that
+   *  never answers leaves the session with neither `ready` nor `ended`, so
+   *  past the deadline it is ended with a reason the phone can show. */
+  private probe(handle: SdkSessionHandle): void {
+    const timer = setTimeout(() => {
+      if (!this.ready) this.finish(`SDK session did not respond within ${PROBE_TIMEOUT_MS / 1000}s`);
+    }, PROBE_TIMEOUT_MS);
+    timer.unref?.();
+    handle.probeReady().then(
+      () => {
+        clearTimeout(timer);
+        this.markReady();
+      },
+      (err) => {
+        clearTimeout(timer);
+        if (!this.ready) this.finish(`SDK session did not respond: ${err}`);
+      },
+    );
   }
 
   private markReady(): void {
@@ -405,13 +427,6 @@ export class ClaudeSession implements DriverSession {
         ...(modelChanged ? { model: initModel } : {}),
       });
       this.markReady();
-      // Every turn starts with an init, but the version is said once, when
-      // the session starts — as the CLI's own welcome does. A resumed session
-      // said it when it started, so it does not say it again.
-      if (!this.announced && !this.resumeTarget && typeof init.claude_code_version === 'string') {
-        this.entries([{ entryType: 'status', text: `Claude Code ${init.claude_code_version}`, timestamp: new Date().toISOString() }]);
-      }
-      this.announced = true;
     }
 
     if (msg.type === 'system' && (msg as { subtype?: string }).subtype === 'session_state_changed') {
@@ -544,22 +559,25 @@ export class ClaudeSession implements DriverSession {
 
     if (toolName === 'EnterPlanMode') {
       this.setMode('plan');
-      return { behavior: 'allow', updatedInput: {} };
+      return { behavior: 'allow', updatedInput: input };
     }
 
     const reason = options.decisionReason ? plainText(options.decisionReason) : undefined;
     const hook = this.takeHookAsk(reason);
 
-    if (!hook && this.mode === AUTO_APPROVE_MODE) return { behavior: 'allow', updatedInput: {} };
+    // `updatedInput` on an allow is the input the tool runs with: every allow
+    // here echoes the call's own input, so what runs is what the model asked
+    // for (and what the phone showed), never an empty replacement.
+    if (!hook && this.mode === AUTO_APPROVE_MODE) return { behavior: 'allow', updatedInput: input };
 
     // A plan sub-agent's `mkdir -p ~/.claude/plans` would otherwise block on
     // the phone and can deadlock the whole session.
     if (!hook && isBenignPlanDirWrite(toolName, input)) {
       this.ctx.log(`[claude] auto-allowed benign plans-dir write in ${this.ctx.sessionId}: ${toolName}`);
-      return { behavior: 'allow', updatedInput: {} };
+      return { behavior: 'allow', updatedInput: input };
     }
 
-    if (toolName === 'ExitPlanMode') return this.approvePlan(requestId);
+    if (toolName === 'ExitPlanMode') return this.approvePlan(requestId, input);
 
     const locations = toolLocations(input);
     const call = claudeTool(toolName, input, this.reportUnknownTool);
@@ -580,7 +598,7 @@ export class ClaudeSession implements DriverSession {
       ...(options.agentID ? { subagent: this.lastSubagentType ? { label: this.lastSubagentType } : {} } : {}),
     });
     if (outcome.outcome === 'cancelled') return { behavior: 'deny', message: outcome.reason };
-    if (outcome.optionId === PERMISSION_ALLOW.id) return { behavior: 'allow', updatedInput: {} };
+    if (outcome.optionId === PERMISSION_ALLOW.id) return { behavior: 'allow', updatedInput: input };
     if (outcome.optionId === PERMISSION_ALLOW_ALWAYS.id) {
       // "Always allow" persists as a project allow rule, so it holds across sessions.
       const rule: SdkPermissionUpdate = {
@@ -589,7 +607,7 @@ export class ClaudeSession implements DriverSession {
         behavior: 'allow',
         destination: 'projectSettings',
       };
-      return { behavior: 'allow', updatedInput: {}, updatedPermissions: [rule] };
+      return { behavior: 'allow', updatedInput: input, updatedPermissions: [rule] };
     }
     return { behavior: 'deny', message: USER_DENIED };
   };
@@ -640,7 +658,7 @@ export class ClaudeSession implements DriverSession {
    *  it names; `revise` keeps the agent planning, with the user's feedback
    *  as the refusal's message when they sent some (else it arrives as their
    *  next prompt). */
-  private async approvePlan(requestId: string): Promise<SdkPermissionResult> {
+  private async approvePlan(requestId: string, input: Record<string, unknown>): Promise<SdkPermissionResult> {
     const outcome = await this.ctx.requestPlanApproval(requestId, PLAN_APPROVAL_OPTIONS, PLAN_REVISE);
     if (outcome.outcome === 'cancelled') return { behavior: 'deny', message: outcome.reason };
     if (outcome.optionId === PLAN_REVISE || !isMode(outcome.optionId)) {
@@ -656,7 +674,7 @@ export class ClaudeSession implements DriverSession {
         (err) => this.ctx.log(`[claude] could not switch ${this.ctx.sessionId} to ${mode}: ${err}`),
       );
     });
-    return { behavior: 'allow', updatedInput: {} };
+    return { behavior: 'allow', updatedInput: input };
   }
 
   private setMode(mode: string): void {
@@ -810,6 +828,10 @@ export class ClaudeDriver implements Driver {
       // Reloading plugins also reloads the MCP servers a session loads.
       this.mcp = new ClaudeMcp(options.runCli ?? execCli(() => this.cliPath()), () => this.reloadPlugins());
     }
+  }
+
+  version(): Promise<string | undefined> {
+    return this.options.readVersion?.() ?? Promise.resolve(undefined);
   }
 
   /** The binary plugin commands run: the one sessions use, waiting for an

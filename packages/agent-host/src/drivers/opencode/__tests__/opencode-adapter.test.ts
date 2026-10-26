@@ -30,16 +30,6 @@ const fileDiff = (file: string, patch: string, status: FileDiffInfo['status'] = 
 
 describe('opencodeEventToEntries', () => {
   describe('session lifecycle', () => {
-    it('converts started into a status line naming the version', () => {
-      expect(translate({ type: 'started', version: '2.0.28' })).toEqual([
-        expect.objectContaining({ entryType: 'status', text: 'OpenCode 2.0.28' }),
-      ]);
-    });
-
-    it('converts started with no version without throwing', () => {
-      expect(translate({ type: 'started' })[0]).toMatchObject({ entryType: 'status', text: 'OpenCode session started' });
-    });
-
     it('converts idle into turn_complete', () => {
       expect(translate({ type: 'idle' })).toEqual([
         expect.objectContaining({ entryType: 'turn_complete' }),

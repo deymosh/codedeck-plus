@@ -430,6 +430,62 @@ fn a_crashed_agent_is_restarted_with_its_conversation_twice_then_ended() {
 }
 
 #[test]
+fn a_restarted_session_that_completes_a_turn_earns_its_restart_budget_back() {
+    let mut rig = Rig::new();
+    rig.host_up();
+    let s = rig.ready_session("alpha");
+    info_native(&mut rig, &s, "n1");
+    // One crash, one restart: the budget now has one attempt left.
+    rig.take();
+    crash(&mut rig, &s, false);
+    let (id, _) = rig.start_request();
+    rig.host_reply(&id, HostMessage::Ack);
+    // The restarted agent runs a turn to its end.
+    rig.host_event(&s, SessionEvent::Turn { state: TurnState::Running });
+    rig.host_event(&s, SessionEvent::Turn { state: TurnState::Idle });
+    // Two more crashes, each after another completed turn: without a budget
+    // reset the second of them would have ended the session.
+    for _ in 0..2 {
+        rig.take();
+        crash(&mut rig, &s, false);
+        assert_eq!(notices(&rig.messages())[0].0, NoticeKind::SessionRestart);
+        let (id, _) = rig.start_request();
+        rig.host_reply(&id, HostMessage::Ack);
+        rig.host_event(&s, SessionEvent::Turn { state: TurnState::Running });
+        rig.host_event(&s, SessionEvent::Turn { state: TurnState::Idle });
+    }
+}
+
+#[test]
+fn an_idle_report_after_a_restart_does_not_earn_the_budget_back() {
+    let mut rig = Rig::new();
+    rig.host_up();
+    let s = rig.ready_session("alpha");
+    info_native(&mut rig, &s, "n1");
+    // Mid-turn when it crashes.
+    rig.host_event(&s, SessionEvent::Turn { state: TurnState::Running });
+    rig.take();
+    crash(&mut rig, &s, false);
+    let (id, _) = rig.start_request();
+    // The resumed agent reports idle at once; no turn ran to its end.
+    rig.host_event(&s, SessionEvent::Turn { state: TurnState::Idle });
+    rig.host_reply(&id, HostMessage::Ack);
+    // The second crash uses the last attempt, and the third ends it: the
+    // budget was not handed back by that idle report.
+    rig.take();
+    crash(&mut rig, &s, false);
+    assert_eq!(notices(&rig.messages())[0].0, NoticeKind::SessionRestart);
+    let (id, _) = rig.start_request();
+    rig.host_event(&s, SessionEvent::Turn { state: TurnState::Idle });
+    rig.host_reply(&id, HostMessage::Ack);
+    rig.take();
+    crash(&mut rig, &s, false);
+    let msgs = rig.messages();
+    assert_eq!(notices(&msgs)[0].0, NoticeKind::SessionDied);
+    assert!(!rig.has_host_request(|m| matches!(m, BridgeMessage::StartSession(_))));
+}
+
+#[test]
 fn a_lost_conversation_is_dropped_but_kept_and_the_restart_is_fresh() {
     let mut rig = Rig::new();
     rig.host_up();

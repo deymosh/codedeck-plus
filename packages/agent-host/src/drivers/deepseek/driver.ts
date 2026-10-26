@@ -273,10 +273,6 @@ export class DeepSeekSession extends AcpSession<DeepSeekChannel, DeepSeekProcess
     return this.currentModel()?.label;
   }
 
-  protected override version(): Promise<string | undefined> {
-    return this.deps.runtime.version();
-  }
-
   // --- messages, commands and steering ---
 
   /**
@@ -663,6 +659,11 @@ export class DeepSeekDriver implements Driver {
   /** Mark the driver unusable (a path the operator named is not a file). */
   setUnavailable(reason: string): void {
     this.unavailable = reason;
+  }
+
+  /** The release of the installed package, from its manifest. */
+  version(): Promise<string | undefined> {
+    return this.options.runtime.version();
   }
 
   info(): AgentInfo {

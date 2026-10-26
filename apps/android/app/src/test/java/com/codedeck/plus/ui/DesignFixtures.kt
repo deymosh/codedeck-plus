@@ -154,7 +154,7 @@ internal object DesignFixtures {
         supportsModels = true, supportsUsage = false, supportsProviders = false, supportsProviderModels = true, supportsInterrupt = true, supportsCommands = true, supportsPlugins = true, supportsMcp = true, supportsTasks = true, supportsPermissionRules = true, supportsAccounts = true,
         supportsPersonas = true,
         credentials = emptyList(),
-        installState = "ready", removable = true, installError = null, actionBusy = null, actionFailure = null, style = opencodeStyle,
+        installState = "ready", removable = true, installError = null, actionBusy = null, actionFailure = null, style = opencodeStyle, version = "2.0.28",
     )
     /** OpenCode's own agent, a machine-wide one and a project's (with its colour). */
     val buildPersona = UniffiPersona("build", "Build", "The default agent. Executes tools based on configured permissions.", null)

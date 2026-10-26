@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { CANCEL_GRACE_MS, SESSION_REQUEST_TIMEOUT_MS } from '../../../acp/session';
 import { FakeAgent } from '../../../acp/__tests__/fakeAgent';
 import { recordingContext, type RecordingContext } from '../../../sdk/__tests__/context';
 import type { DriverSession } from '../../../sdk/driver';
@@ -217,6 +218,50 @@ describe('QwenSession startup', () => {
     expect(infoEvents(ctx)[0]).toEqual({ type: 'info', nativeSessionId: 's1', model: 'GLM 5.3', mode: 'default' });
   });
 
+  it('ends the session when session/new never answers, instead of waiting for ever', async () => {
+    const ready = withDriver();
+    // The settings write is real I/O; let it finish before time is faked,
+    // so the only timer is the request's own deadline.
+    await ready.driver.setProviders([PROFILE]);
+    ready.agent.ignoreNewSession = true;
+    vi.useFakeTimers();
+    try {
+      const ctx = recordingContext();
+      ready.driver.startSession(start(), ctx);
+      await vi.advanceTimersByTimeAsync(SESSION_REQUEST_TIMEOUT_MS);
+      expect(ctx.events.find((event) => event.type === 'ended')).toMatchObject({
+        type: 'ended',
+        error: expect.stringMatching(/session\/new did not answer within 15000ms/),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('closes the session an agent creates after the start request timed out', async () => {
+    const ready = withDriver();
+    // A live session keeps the shared process (and connection) up while the
+    // next start times out.
+    await started(ready);
+    ready.agent.holdNextNewSession = true;
+    vi.useFakeTimers();
+    try {
+      const ctx = recordingContext();
+      ready.driver.startSession(start({ sessionId: 'b2' }), ctx);
+      await vi.advanceTimersByTimeAsync(SESSION_REQUEST_TIMEOUT_MS);
+      expect(ctx.events.find((event) => event.type === 'ended')).toMatchObject({
+        error: expect.stringMatching(/session\/new did not answer/),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // The agent finally answers, naming the session it created; it is not
+    // this driver's to keep, so it is closed rather than orphaned.
+    ready.agent.answerNewSession();
+    await vi.waitFor(() => expect(ready.agent.closed).toEqual(['s2']));
+  });
+
   it('applies the mode and the model a session was started with', async () => {
     const ready = withDriver();
     await started(ready, { mode: 'plan', model: 'glm-5.3' });
@@ -297,11 +342,11 @@ describe('QwenSession startup', () => {
     expect(answer).toEqual({ outcome: { outcome: 'selected', optionId: 'allow-once' } });
   });
 
-  it('opens with the version the CLI reports', async () => {
+  it('opens without announcing a version: the catalog carries it', async () => {
     const ready = withDriver();
     ready.agent.agentInfo = { name: 'qwen-code', title: 'Qwen Code', version: '0.25.2' };
     const ctx = await started(ready);
-    expect(ctx.entries()).toEqual([expect.objectContaining({ entryType: 'status', text: 'Qwen Code 0.25.2' })]);
+    expect(ctx.entries()).toEqual([]);
   });
 });
 
@@ -644,6 +689,76 @@ describe('QwenSession resume', () => {
     const ctx = await started(ready, { resume: 'old-session' });
     expect(ready.agent.newSessions).toHaveLength(1);
     expect(ctx.entries()[0]).toMatchObject({ entryType: 'notice', kind: 'session_restart' });
+  });
+
+  it('says so when the agent offers no resume at all, rather than swapping silently', async () => {
+    const ready = withDriver();
+    ready.agent.supportsResume = false;
+    const ctx = await started(ready, { resume: 'old-session' });
+    expect(ready.agent.resumed).toEqual([]);
+    expect(ready.agent.newSessions).toHaveLength(1);
+    expect(ctx.entries()[0]).toMatchObject({ entryType: 'notice', kind: 'session_restart' });
+  });
+});
+
+describe('QwenSession shutdown', () => {
+  it('returns from end() when the agent never answers session/close', async () => {
+    const ready = withDriver();
+    await started(ready);
+    ready.agent.ignoreClose = true;
+    vi.useFakeTimers();
+    try {
+      const ending = ready.session.end();
+      await vi.advanceTimersByTimeAsync(SESSION_REQUEST_TIMEOUT_MS);
+      await ending;
+      expect(ready.agent.closed).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ends a turn locally when the agent ignores the cancel, and the next message still runs', async () => {
+    const ready = withDriver();
+    const ctx = await started(ready);
+    ready.agent.ignoresCancel = true;
+    const prompts: string[] = [];
+    let release: ((stop: string) => void) | undefined;
+    ready.agent.onPrompt = (_sessionId, text) => {
+      prompts.push(text);
+      return text === 'first' ? new Promise<string>((resolve) => (release = resolve)) : 'end_turn';
+    };
+    ready.session.prompt('first');
+    await vi.waitFor(() => expect(prompts).toEqual(['first']));
+
+    vi.useFakeTimers();
+    try {
+      await ready.session.interrupt();
+      expect(ready.agent.notifications).toContainEqual({ method: 'session/cancel', params: { sessionId: 's1' } });
+      await vi.advanceTimersByTimeAsync(CANCEL_GRACE_MS);
+      expect(ctx.entries()).toContainEqual(
+        expect.objectContaining({ entryType: 'notice', kind: 'other', text: expect.stringMatching(/ended here/) }),
+      );
+      expect(ctx.events.filter((e) => e.type === 'turn' && e.state === 'idle')).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // The prompt the agent never answered must not hold the chain: the next
+    // message reaches the agent and runs its own turn.
+    ready.session.prompt('second');
+    await vi.waitFor(() => expect(prompts).toEqual(['first', 'second']));
+    await vi.waitFor(() => expect(ctx.events.filter((e) => e.type === 'turn' && e.state === 'idle')).toHaveLength(2));
+    // Its late settlement does not open or end anything.
+    release?.('end_turn');
+  });
+
+  it('answers the permission ask it was still waiting on with a cancellation', async () => {
+    const ready = withDriver();
+    const ctx = await started(ready, {}, recordingContext({ permission: () => new Promise<never>(() => {}) }));
+    const asked = ready.agent.askPermission('s1', 'call-1');
+    await vi.waitFor(() => expect(ctx.permissions).toHaveLength(1));
+    await ready.session.end();
+    await expect(asked).resolves.toMatchObject({ outcome: 'cancelled' });
   });
 });
 

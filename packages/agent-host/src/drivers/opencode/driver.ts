@@ -564,6 +564,12 @@ export class OpenCodeSession implements DriverSession {
     this.finish('The OpenCode server restarted to load changed provider profiles.');
   }
 
+  /** The server this session runs on exited: the session ends with the
+   *  reason, so the bridge can resume the conversation on the next one. */
+  serverLost(reason: string): void {
+    this.finish(reason);
+  }
+
   private finish(error?: string): void {
     if (this.ended) return;
     this.ended = true;
@@ -601,11 +607,6 @@ export class OpenCodeSession implements DriverSession {
       if (catalog.models.length > 0) this.contextLimits ??= Promise.resolve(catalog.contextLimits ?? {});
       const model = params.model ?? catalog.defaultModel;
       if (!params.model) this.model = splitModelId(model);
-      // Read alongside the session, for the line a new session opens with; a
-      // server that does not say leaves the line without it.
-      const version = Promise.resolve()
-        .then(() => client.server.info())
-        .then((info) => info.version, () => undefined);
       const { session, resumeLost } = await this.resolveSession(client, params);
       // Before any prompt can run: which persona the session runs as, and
       // the rules of the agent that is actually running — the persona's
@@ -629,13 +630,6 @@ export class OpenCodeSession implements DriverSession {
       if (!this.ended) {
         this.ctx.emit({ type: 'info', nativeSessionId: session.id, ...(model ? { model } : {}), mode: this.mode, persona: this.persona });
         this.reportTitle(session.title);
-        // The version is said once, when a conversation starts — the model is
-        // on the phone's composer. A resumed one said it when it began; one
-        // whose conversation was lost starts anew.
-        if (!params.resume || resumeLost) {
-          const v = await version;
-          this.deliver({ type: 'started', ...(v ? { version: v } : {}) });
-        }
         this.ctx.emit({ type: 'ready' });
         // From here the session's directory has been booted, and its own
         // agents are the ones still loading.
@@ -1769,6 +1763,19 @@ export class OpenCodeDriver implements Driver {
   }
 
   /** The server's client, starting it again when the last attempt failed. */
+  /** The server's own release: the one sessions run on, whether this
+   *  driver started it or connected to it. Read only from a server that is
+   *  starting or up — never a reason to start (or install) one. */
+  async version(): Promise<string | undefined> {
+    if (!this.clientPromise) return undefined;
+    try {
+      const client = await this.clientPromise;
+      return (await client.server.info()).version || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   private client(): Promise<OpenCodeClient> {
     if (!this.clientPromise && !this.stopped && (this.bin || this.installs)) this.launch();
     return this.clientPromise ?? Promise.reject(new Error(this.unavailable ?? NOT_CONFIGURED));
@@ -1791,9 +1798,17 @@ export class OpenCodeDriver implements Driver {
           'OpenCode auto-start is enabled but the `opencode` executable was not found (set CODEDECK_OPENCODE_PATH).';
       } else {
         try {
-          driver.clientPromise = Promise.resolve(await driver.startServer(driver.bin));
+          const client = await driver.startServer(driver.bin);
+          // A server that exited the moment it started is not one to cache:
+          // the exit watcher has already cleared it, and the next session
+          // starts a new one.
+          if (driver.server) driver.clientPromise = Promise.resolve(client);
         } catch (err) {
-          driver.unavailable = err instanceof Error ? err.message : String(err);
+          // A failed first start is not a reason to report the agent as
+          // unavailable: the host refuses every start-session when it is, so
+          // the retry this driver relies on would never run. `bin` stays
+          // known, and the next session starts a new server.
+          options.log(`[opencode] first server start failed: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
     } else {
@@ -1837,6 +1852,7 @@ export class OpenCodeDriver implements Driver {
       throw new Error('the agent host is shutting down');
     }
     this.server = server;
+    this.watchServer(server);
     this.served = providersFingerprint(placed);
     this.serving = servedBy(placed);
     const added = placed.length > 0 ? `, with ${placed.length} provider profile(s)` : '';
@@ -1852,6 +1868,26 @@ export class OpenCodeDriver implements Driver {
     return client;
   }
 
+  /** Watch the server the driver started: a crash must not leave a dead
+   *  client cached for the rest of the bridge's life. The next session
+   *  starts a new server; the sessions on this one end with a reason the
+   *  bridge can resume them from. */
+  private watchServer(server: OpenCodeServerHandle): void {
+    void server.exited.then(() => {
+      // A server replaced for changed provider profiles, or a shutdown, is
+      // closed on purpose: its successor (or the host) handles the rest.
+      if (this.stopped || this.server !== server) return;
+      this.server = null;
+      this.clientPromise = null;
+      // Deliberately not `unavailable`: the host refuses start-session on
+      // that, before the driver can start the new server this exists for.
+      this.options.log('[opencode] the server exited; the next session starts a new one');
+      const stale = [...this.sessions];
+      this.sessions.clear();
+      for (const session of stale) session.serverLost('The OpenCode server exited. The conversation can be resumed.');
+    });
+  }
+
   /** Find (or install) `opencode`, start its server and connect — sessions
    *  and model lists asked for meanwhile wait on the same promise. `first`
    *  runs before the start (closing the server being replaced). */
@@ -1864,7 +1900,7 @@ export class OpenCodeDriver implements Driver {
     this.clientPromise = attempt;
     attempt.then(
       () => {
-        this.unavailable = undefined;
+        if (this.clientPromise === attempt) this.unavailable = undefined;
       },
       (err: unknown) => {
         this.options.log(`[opencode] unavailable: ${err instanceof Error ? err.message : String(err)}`);
@@ -1973,7 +2009,10 @@ export class OpenCodeDriver implements Driver {
 
   startSession(params: StartSession, ctx: SessionContext): DriverSession {
     if (params.provider) throw new Error('OpenCode offers provider profiles as models; a session is not bound to one');
-    if (!this.clientPromise && this.installs && !this.stopped) this.launch();
+    // A start that failed, or a server that exited, leaves `bin` known and
+    // the cache empty: the next session tries a new server rather than
+    // failing until the bridge restarts.
+    if (!this.clientPromise && !this.stopped && (this.bin || this.installs)) this.launch();
     if (!this.clientPromise) throw new Error(this.unavailable ?? NOT_CONFIGURED);
     if (params.mode !== undefined && !OPENCODE_MODES.some((m) => m.id === params.mode)) {
       throw new Error(`OpenCode has no mode '${params.mode}'`);
