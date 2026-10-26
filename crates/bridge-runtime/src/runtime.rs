@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use base64::engine::general_purpose::STANDARD;
@@ -102,7 +103,10 @@ struct Runtime {
     timers: HashMap<TimerId, JoinHandle<()>>,
     nostr_http: work::NostrHttp,
     outcome: Outcome,
-    uploads: Rc<RefCell<Uploads>>,
+    /// Chunk assembly, base64 decoding and the file writes. Shared with the
+    /// blocking pool: decoding a 25 MB attachment and writing it to disk is
+    /// not work for the bridge's one thread.
+    uploads: Arc<Mutex<Uploads>>,
     pairing_urls: Option<mpsc::UnboundedSender<String>>,
     direct: Option<crate::direct::Direct>,
     /// Whether the relay subscription also carries the live kind, so a paired
@@ -212,7 +216,7 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
         timers: HashMap::new(),
         nostr_http,
         outcome: Outcome::Stopped,
-        uploads: Rc::new(RefCell::new(Uploads::new(&first_root))),
+        uploads: Arc::new(Mutex::new(Uploads::new(&first_root))),
         pairing_urls: options.pairing_urls,
         direct,
         terminals_on_relays,
@@ -441,16 +445,39 @@ impl Runtime {
                 });
             }
             Effect::HandleFileUpload(UploadFileMsg::Chunk(chunk)) => {
-                if let Some((session_id, text)) = self.uploads.borrow_mut().chunk(chunk) {
-                    let _ = self.inputs.send(Input::FileReady { session_id, text });
-                }
+                // Reassembling the chunks decodes up to 25 MB of base64 and
+                // writes the file; both belong on the blocking pool, and the
+                // answer comes back as the same finished-work input a
+                // Blossom upload uses.
+                let (inputs, uploads) = (self.inputs.clone(), Arc::clone(&self.uploads));
+                tokio::task::spawn_blocking(move || {
+                    let delivery = uploads.lock().unwrap_or_else(|p| p.into_inner()).chunk(chunk);
+                    if let Some((session_id, text)) = delivery {
+                        let _ = inputs.send(Input::FileReady { session_id, text });
+                    }
+                });
             }
             Effect::HandleFileUpload(UploadFileMsg::Blossom(msg)) => {
-                let (inputs, uploads, http) = (self.inputs.clone(), Rc::clone(&self.uploads), self.nostr_http.clone());
+                let (inputs, uploads, http) = (self.inputs.clone(), Arc::clone(&self.uploads), self.nostr_http.clone());
                 tokio::task::spawn_local(async move {
                     match uploads::fetch_blossom(&http, &msg).await {
                         Ok(data) => {
-                            let delivery = uploads.borrow_mut().finish(&msg.session_id, &msg.filename, &msg.mime_type, &msg.text, &data, &msg.hash);
+                            // The download and decryption are done; saving the
+                            // file is disk work and goes to the blocking pool
+                            // like a chunked upload's.
+                            let delivery = tokio::task::spawn_blocking(move || {
+                                uploads.lock().unwrap_or_else(|p| p.into_inner()).finish(
+                                    &msg.session_id,
+                                    &msg.filename,
+                                    &msg.mime_type,
+                                    &msg.text,
+                                    &data,
+                                    &msg.hash,
+                                )
+                            })
+                            .await
+                            .ok()
+                            .flatten();
                             if let Some((session_id, text)) = delivery {
                                 let _ = inputs.send(Input::FileReady { session_id, text });
                             }
