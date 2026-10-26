@@ -1366,6 +1366,41 @@ mod tests {
         assert!(!err.contains("cleartext"), "{err}");
     }
 
+    /// The absolute constraint this guards: with a proxy set, a relay is
+    /// never dialled directly, and the proxy is asked to CONNECT to the
+    /// relay's *name*. Resolving the name locally would break `.onion`
+    /// relays (only Tor can resolve them) and would leak the relay's address
+    /// to the local resolver besides.
+    #[tokio::test]
+    async fn a_proxied_relay_dial_asks_the_socks_proxy_for_the_relay_name_and_never_connects_directly() {
+        // Stands in for the relay: it resolves from `localhost`, so a dial
+        // that ignored the proxy would land here and be counted.
+        let (relay, direct_connections) = crate::test_support::counting_listener().await;
+
+        let (proxy, request) = crate::test_support::socks5_proxy().await;
+        let err = match dial(&format!("ws://localhost:{}", relay.port()), Some(proxy.to_string())).await {
+            Ok(_) => panic!("the proxy closes after CONNECT, so no ws handshake can complete"),
+            Err(err) => err,
+        };
+        assert!(!err.starts_with("socks5:"), "the proxy answered, so the dial must not fail in SOCKS5: {err}");
+
+        let request = tokio::time::timeout(Duration::from_secs(5), request)
+            .await
+            .expect("the relay dial never reached the SOCKS5 proxy")
+            .expect("the SOCKS5 proxy reported its CONNECT");
+        assert_eq!(
+            request.atyp, 3,
+            "the relay host must be sent as a domain name (the proxy does the DNS lookup, which is what reaches .onion addresses), not as a locally resolved IP"
+        );
+        assert_eq!(request.host, "localhost", "the proxy was asked for the wrong host");
+        assert_eq!(request.port, relay.port(), "the proxy was asked for the wrong port");
+        assert_eq!(
+            direct_connections.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "the relay was dialled directly even though a proxy is set"
+        );
+    }
+
     #[tokio::test]
     async fn set_proxy_updates_what_the_next_dial_uses_and_closes_every_live_connection() {
         LocalSet::new()

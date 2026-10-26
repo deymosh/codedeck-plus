@@ -39,3 +39,9 @@ nostr = { version = "0.44", default-features = false, features = ["std", "nip44"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros", "io-util", "test-util"] }
+# The direct-link pinning tests run a real TLS server: a self-signed
+# certificate generated in the test, served through the same rustls/ring stack
+# the bridge uses.
+rcgen = { version = "0.13", default-features = false, features = ["crypto", "ring"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }

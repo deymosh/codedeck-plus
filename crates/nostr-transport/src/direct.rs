@@ -817,4 +817,115 @@ mod tests {
         assert!(!is_onion("wss://192.168.1.20:7447"));
         assert!(!is_onion("wss://laptop.tail1234.ts.net:7447"));
     }
+
+    /// A minimal direct-link server: a fresh self-signed certificate over TLS,
+    /// then a WebSocket that sends a CHALLENGE, waits for the HELLO and
+    /// answers READY. Returns the `wss://` endpoint and the certificate's
+    /// SHA-256 — what the bridge's heartbeat advertises as the pin.
+    async fn direct_server() -> (String, String) {
+        use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
+
+        let made = rcgen::generate_simple_self_signed(vec!["codedeck-bridge".to_string()]).expect("make a certificate");
+        let cert = made.cert.der().to_vec();
+        let pin: String = Sha256::digest(&cert).iter().map(|b| format!("{b:02x}")).collect();
+        let key = made.key_pair.serialize_der();
+        let config = rustls::ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+            .with_safe_default_protocol_versions()
+            .expect("ring supports the default protocol versions")
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![CertificateDer::from(cert)],
+                PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key)),
+            )
+            .expect("a valid certificate and key");
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind the direct server");
+        let addr = listener.local_addr().expect("the direct server's address");
+        tokio::spawn(async move {
+            while let Ok((tcp, _)) = listener.accept().await {
+                let acceptor = acceptor.clone();
+                tokio::spawn(async move {
+                    let Ok(tls) = acceptor.accept(tcp).await else { return };
+                    let Ok(mut ws) = tokio_tungstenite::accept_async(tls).await else { return };
+                    let challenge = encode_direct_frame(&DirectFrame::Challenge("challenge".to_string()));
+                    if ws.send(Message::Text(challenge)).await.is_err() {
+                        return;
+                    }
+                    while let Some(Ok(message)) = ws.next().await {
+                        if let Message::Text(text) = message {
+                            if matches!(decode_direct_frame(&text), Ok(DirectFrame::Hello { .. })) {
+                                let _ = ws.send(Message::Text(encode_direct_frame(&DirectFrame::Ready))).await;
+                                break;
+                            }
+                        }
+                    }
+                    // Stay open until the client closes: a READY it has not
+                    // read yet must not be lost to an abrupt close.
+                    while let Some(Ok(_)) = ws.next().await {}
+                });
+            }
+        });
+        (format!("wss://{addr}"), pin)
+    }
+
+    /// A direct link's certificate is trusted only when it is exactly the one
+    /// the bridge advertised, so a LAN man-in-the-middle (or a rebinding DNS
+    /// answer) cannot impersonate the bridge even though no CA vouches for it.
+    #[tokio::test]
+    async fn a_direct_link_refuses_a_certificate_that_does_not_match_the_pin_and_connects_with_the_matching_one() {
+        let (endpoint, pin) = direct_server().await;
+
+        let wrong = link_with(&[&endpoint], Some(&"00".repeat(32)), None);
+        let err = match wrong.connect(&endpoint).await {
+            Ok(_) => panic!("a certificate that is not the pinned one must not bring the link up"),
+            Err(err) => err,
+        };
+        assert!(
+            err.contains("does not match the bridge's pin"),
+            "the handshake must fail on the pin, not for another reason: {err}"
+        );
+
+        let right = link_with(&[&endpoint], Some(&pin), None);
+        right.connect(&endpoint).await.expect("the advertised pin brings the link up");
+    }
+
+    /// An `.onion` endpoint is only reachable through Tor, so it is dialled
+    /// through the proxy — and by name, since the phone's own resolver cannot
+    /// resolve onion addresses at all.
+    #[tokio::test]
+    async fn an_onion_direct_endpoint_is_dialled_through_the_proxy_by_name() {
+        let (proxy, request) = crate::test_support::socks5_proxy().await;
+        let err = match dial("ws://abc.onion:7447", Some(proxy.to_string()), None).await {
+            Ok(_) => panic!("the proxy closes after CONNECT, so no link can come up"),
+            Err(err) => err,
+        };
+        assert!(!err.starts_with("socks5:"), "the proxy answered, so the dial must not fail in SOCKS5: {err}");
+
+        let request = tokio::time::timeout(Duration::from_secs(5), request)
+            .await
+            .expect("the onion endpoint was not dialled through the SOCKS5 proxy")
+            .expect("the SOCKS5 proxy reported its CONNECT");
+        assert_eq!(request.atyp, 3, "an onion address must be resolved by Tor, not by the phone's resolver");
+        assert_eq!(request.host, "abc.onion");
+        assert_eq!(request.port, 7447);
+    }
+
+    /// A direct link to the user's own bridge is not relay traffic: it is
+    /// dialled directly even while Orbot is set, and Orbot never sees it.
+    #[tokio::test]
+    async fn a_direct_endpoint_on_the_lan_is_dialled_directly_even_when_a_proxy_is_set() {
+        let (endpoint, pin) = direct_server().await;
+        // A listening address, not a dead one: an endpoint wrongly sent
+        // through the proxy would reach this listener and fail there instead
+        // of coming up.
+        let (proxy, proxy_connections) = crate::test_support::counting_listener().await;
+        let link = link_with(&[&endpoint], Some(&pin), Some(&proxy.to_string()));
+
+        link.connect(&endpoint).await.expect("a LAN endpoint is dialled directly, not through Orbot");
+        assert_eq!(
+            proxy_connections.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "a non-onion direct endpoint was sent through the proxy"
+        );
+    }
 }
