@@ -40,6 +40,7 @@ pub fn alpha() -> AgentInfo {
         unavailable_reason: None,
         install: Default::default(),
         style: Some(AgentStyle { result_mark: Some("⎿".into()), accent: Some("#D77757".into()), ..Default::default() }),
+        version: Some("1.2.3".into()),
     }
 }
 
@@ -58,6 +59,7 @@ pub fn beta() -> AgentInfo {
         unavailable_reason: None,
         install: Default::default(),
         style: None,
+        version: None,
     }
 }
 

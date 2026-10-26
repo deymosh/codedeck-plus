@@ -26,6 +26,7 @@ fn omega(install: AgentInstall) -> AgentInfo {
         unavailable_reason: None,
         install,
         style: None,
+        version: None,
     }
 }
 
@@ -171,4 +172,34 @@ fn an_agent_style_is_advertised_by_hash_and_sent_when_asked() {
     rig.send(json!({"v":12,"type":"agent-style-request","agent":"nobody"}));
     let answer = rig.messages().into_iter().find_map(|m| match m { BridgeToPhone::AgentStyle(s) => Some(s), _ => None }).unwrap();
     assert_eq!((answer.agent.as_str(), answer.style_hash, answer.style), ("nobody", None, None));
+}
+
+/// The heartbeat carries each agent's release as the host reported it, so
+/// no session has to announce it.
+#[test]
+fn an_agent_version_is_advertised_in_the_heartbeat() {
+    let mut rig = Rig::new();
+    rig.host_up();
+    rig.send(json!({"v":12,"type":"refresh-sessions"}));
+    let lists: Vec<_> = rig.messages().into_iter().filter_map(|m| match m { BridgeToPhone::Sessions(l) => Some(l), _ => None }).collect();
+    let agents = &lists.last().expect("a heartbeat").agents;
+    let version_of = |id: &str| agents.iter().find(|a| a.id == id).unwrap().version.clone();
+    assert_eq!(version_of("alpha").as_deref(), Some("1.2.3"));
+    assert_eq!(version_of("beta"), None);
+}
+
+/// A release read after the agent is ready only updates the catalog: the
+/// agent's state did not change, so nothing is asked of the host again.
+#[test]
+fn a_version_arriving_later_only_updates_the_catalog() {
+    let mut rig = Rig::new();
+    rig.host_up_with(vec![alpha(), delta()]);
+    rig.advance(1_000);
+    rig.take();
+
+    agent_changed(&mut rig, AgentInfo { version: Some("4.5.6".into()), ..delta() });
+    assert!(rig.host_frames().is_empty(), "a version alone asks nothing of the host");
+    rig.advance(1_000);
+    let agents = last_heartbeat(&rig.messages()).agents;
+    assert_eq!(agents.iter().find(|a| a.id == "delta").unwrap().version.as_deref(), Some("4.5.6"));
 }
