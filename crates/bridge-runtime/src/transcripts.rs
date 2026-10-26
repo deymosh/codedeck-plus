@@ -101,11 +101,12 @@ impl FileTranscripts {
         Ok(entries)
     }
 
-    /// Write exactly `entries`, one JSON line each.
-    fn write_entries(&self, session_id: &str, entries: &[SyncEntry]) -> Result<(), String> {
-        let mut content = String::new();
-        for entry in entries {
-            content.push_str(&serde_json::to_string(entry).map_err(|e| e.to_string())?);
+    /// Write `lines` back exactly as they were read — a rewrite drops lines,
+    /// it never re-serializes the ones it keeps, so a field this build does
+    /// not model survives.
+    fn write_lines(&self, session_id: &str, lines: &[String]) -> Result<(), String> {
+        let mut content = lines.join("\n");
+        if !content.is_empty() {
             content.push('\n');
         }
         write_private(&self.path(session_id), content.as_bytes()).map_err(|e| e.to_string())
@@ -157,11 +158,12 @@ impl Transcripts for FileTranscripts {
                 }
             };
             let entries: Vec<SyncEntry> = lines.iter().filter_map(|l| parse_line(l)).collect();
+            let valid: Vec<String> = lines.iter().filter(|l| parse_line(l).is_some()).cloned().collect();
             let present = lines.iter().filter(|l| !l.trim().is_empty()).count();
             let high = entries.iter().map(|e| e.seq).max().unwrap_or(0);
-            if entries.len() < present {
-                log::warn!("[Transcripts] {name}: dropping {} torn or invalid line(s)", present - entries.len());
-                if let Err(e) = self.write_entries(&session_id, &entries) {
+            if valid.len() < present {
+                log::warn!("[Transcripts] {name}: dropping {} torn or invalid line(s)", present - valid.len());
+                if let Err(e) = self.write_lines(&session_id, &valid) {
                     log::warn!("[Transcripts] {name}: cannot rewrite it without them: {e}");
                 }
                 // The file changed under the cache; the next read reparses it.
@@ -199,14 +201,15 @@ impl Transcripts for FileTranscripts {
     }
 
     fn prune(&mut self, session_id: &str, keep_last: usize) -> Result<(), String> {
-        let valid = self.parse(session_id)?;
+        let lines = self.lines(session_id)?;
+        let valid: Vec<String> = lines.iter().filter(|l| parse_line(l).is_some()).cloned().collect();
         if valid.len() <= keep_last {
-            self.cache_entries(session_id, valid);
             return Ok(());
         }
-        let kept = valid[valid.len() - keep_last..].to_vec();
-        self.write_entries(session_id, &kept)?;
-        self.cache_entries(session_id, kept);
+        let kept = &valid[valid.len() - keep_last..];
+        self.write_lines(session_id, kept)?;
+        let entries = kept.iter().filter_map(|l| parse_line(l)).collect();
+        self.cache_entries(session_id, entries);
         Ok(())
     }
 
@@ -322,6 +325,36 @@ mod tests {
         let highs = t.load().unwrap();
         assert_eq!(highs.get("good"), Some(&1));
         assert!(!highs.contains_key("bad"), "the bad file is skipped, the good one keeps its seq high");
+    }
+
+    /// One JSON line for `seq`, with a field this build does not model.
+    fn line_with_future_field(seq: u64) -> String {
+        let mut value = serde_json::to_value(SyncEntry { seq, entry: entry("x") }).unwrap();
+        value.as_object_mut().unwrap().insert("futureField".into(), serde_json::json!(42));
+        serde_json::to_string(&value).unwrap()
+    }
+
+    #[test]
+    fn a_rewrite_keeps_the_kept_lines_verbatim() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        // A valid line carrying a field this build does not model, then a
+        // torn one; load rewrites the file without the torn line.
+        fs::write(&path, format!("{}\n{{\"seq\":2,\"ent", line_with_future_field(1))).unwrap();
+        let mut t = FileTranscripts::open(dir.path()).unwrap();
+        assert_eq!(t.load().unwrap()["s"], 1);
+        assert!(fs::read_to_string(&path).unwrap().contains("futureField"), "the surviving line was not re-serialized");
+
+        // The same through pruning: the kept line keeps its unknown field.
+        fs::write(&path, format!("{}\n{}\n{}\n", entry_line(4), entry_line(5), line_with_future_field(6))).unwrap();
+        t.prune("s", 2).unwrap();
+        let kept = fs::read_to_string(&path).unwrap();
+        assert!(kept.contains("futureField"));
+        assert_eq!(seqs(&t.read("s", (1, 100)).unwrap()), [5, 6]);
+    }
+
+    fn entry_line(seq: u64) -> String {
+        serde_json::to_string(&SyncEntry { seq, entry: entry("x") }).unwrap()
     }
 
     #[test]
