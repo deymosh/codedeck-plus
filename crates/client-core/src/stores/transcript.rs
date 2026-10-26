@@ -23,10 +23,12 @@ pub const SYNC_MAX_ATTEMPTS: u32 = 3;
 pub const SYNC_RETRY_BASE_MS: u64 = 5_000;
 pub const SYNC_RETRY_MAX_MS: u64 = 300_000;
 /// An in-flight cycle (requested or syncing) that has heard nothing for this
-/// long is treated as lost. The bridge's own sync idle timeout is 60s, so a
-/// cycle that outlives it with no chunk, `sync-begin` or `sync-end` means a
-/// message was dropped; re-requesting is the only way the gap gets filled.
-pub const SYNC_STALL_MS: u64 = 90_000;
+/// long is treated as lost. The deadline spans two of the bridge's 60s sync
+/// idle windows, and only silence counts: any `sync-begin` or chunk received
+/// refreshes it. Restarting a cycle the bridge is still serving is expensive
+/// (a new request supersedes the old sync, which ends without a `sync-end`
+/// and re-streams from zero), so this errs on the slow side.
+pub const SYNC_STALL_MS: u64 = 120_000;
 
 /// Retry backoff after a failed sync cycle: 5s → 5min cap, exponential.
 pub fn sync_retry_delay_ms(attempts: u32) -> u64 {

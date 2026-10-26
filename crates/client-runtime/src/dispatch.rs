@@ -371,13 +371,16 @@ impl<'a> Router<'a> {
                     .iter()
                     .map(|e| (e.seq, to_value(&e.entry)))
                     .collect();
+                // The chunk itself is progress, whether or not every row is
+                // new or the write lands: the cycle is still being served,
+                // and restarting it would abort a sync that is working.
+                self.stores
+                    .transcript
+                    .note_sync_progress(machine, &m.session_id, self.now);
                 // Ack ONLY after the entries are durably stored — an ack must
                 // never claim data we could still lose. A failed write leaves
                 // the chunk unacked, and the bridge resends unacked chunks.
                 if self.apply_rows(machine, &m.session_id, rows).await.is_ok() {
-                    self.stores
-                        .transcript
-                        .note_sync_progress(machine, &m.session_id, self.now);
                     r.transcript_appended = Some((machine.to_string(), m.session_id.clone()));
                     r.send(
                         machine,
@@ -1338,6 +1341,32 @@ mod tests {
         fn remove(&self, machine: &str, session: &str) -> crate::ports::LocalBoxFuture<'_, ()> {
             self.0.remove(machine, session)
         }
+    }
+
+    #[tokio::test]
+    async fn a_duplicate_chunk_still_counts_as_progress_for_the_stall_deadline() {
+        let (mut s, ts, kp) = stores().await;
+        s.transcript.apply_sync_begin(MACHINE, "s1", "sy1", 2, 0);
+        let chunk = || {
+            BridgeToPhone::SyncChunk(SyncChunkMsg {
+                session_id: "s1".into(),
+                sync_id: "sy1".into(),
+                range: (1, 2),
+                entries: vec![
+                    protocol::events::SyncEntry { seq: 1, entry: text_entry("a") },
+                    protocol::events::SyncEntry { seq: 2, entry: text_entry("b") },
+                ],
+            })
+        };
+        {
+            let mut r = Router::new(&mut s, &ts, &kp, 1_000);
+            r.route(MACHINE, &chunk()).await;
+        }
+        // Every row is already present; the bridge is still serving the
+        // cycle, so a stall sweep must not restart it.
+        let mut r = Router::new(&mut s, &ts, &kp, 2_000);
+        r.route(MACHINE, &chunk()).await;
+        assert_eq!(s.transcript.session(MACHINE, "s1").unwrap().sync.in_flight_since, Some(2_000));
     }
 
     #[tokio::test]
