@@ -144,14 +144,16 @@ impl Drop for Pty {
 pub struct Terminals {
     /// Where the recordings go (`<home>/audit`).
     audit_dir: PathBuf,
+    /// The bridge's home, as it resolved it (absolute): a shell is told it.
+    home: PathBuf,
     /// The event loop's channel, for what a terminal reports back.
     inputs: mpsc::UnboundedSender<Input>,
     ptys: HashMap<String, Pty>,
 }
 
 impl Terminals {
-    pub fn new(audit_dir: PathBuf, inputs: mpsc::UnboundedSender<Input>) -> Self {
-        Self { audit_dir, inputs, ptys: HashMap::new() }
+    pub fn new(audit_dir: PathBuf, home: PathBuf, inputs: mpsc::UnboundedSender<Input>) -> Self {
+        Self { audit_dir, home, inputs, ptys: HashMap::new() }
     }
 
     /// Where `term`'s recording goes (`<home>/audit/term-<term>.cast`).
@@ -189,7 +191,7 @@ impl Terminals {
         let mut cmd = CommandBuilder::new(&program);
         cmd.args(&args);
         cmd.cwd(cwd);
-        apply_env(&mut cmd, &shell);
+        apply_env(&mut cmd, &shell, &self.home);
 
         let size = PtySize { rows, cols, pixel_width: 0, pixel_height: 0 };
         let pair = native_pty_system().openpty(size).map_err(|e| format!("no pty: {e}"))?;
@@ -588,12 +590,16 @@ fn kill_first(killer: &mut Box<dyn ChildKiller + Send + Sync>, note: String) -> 
 /// Hand the shell a built environment: `env_clear` first, because a
 /// [`CommandBuilder`] seeds itself with the bridge's own environment (the
 /// one that may hold the agents' provider keys), and then only what a shell
-/// needs to work.
-fn apply_env(cmd: &mut CommandBuilder, shell: &str) {
+/// needs to work — plus `CODEDECK_HOME`, the home this bridge resolved
+/// (whether from `--home`, the variable or the default), so that a
+/// `codedeck-bridge agents …` typed into it acts on this bridge's state and
+/// agent cache rather than on another home's.
+fn apply_env(cmd: &mut CommandBuilder, shell: &str, home: &std::path::Path) {
     cmd.env_clear();
     for (name, value) in built_env(shell) {
         cmd.env(name, value);
     }
+    cmd.env("CODEDECK_HOME", home);
 }
 
 /// The variables the shell is given, and no others.
@@ -656,7 +662,7 @@ mod tests {
     fn rig() -> (Terminals, mpsc::UnboundedReceiver<Input>, tempfile::TempDir) {
         let dir = tempfile::tempdir().expect("a temp dir");
         let (inputs, rx) = mpsc::unbounded_channel();
-        (Terminals::new(dir.path().join("audit"), inputs), rx, dir)
+        (Terminals::new(dir.path().join("audit"), dir.path().join("home"), inputs), rx, dir)
     }
 
     /// [`Terminals::spawn`] with the recording opened first, the way the
@@ -801,11 +807,15 @@ mod tests {
                 assert!(!text.contains("CODEDECK_TEST_SECRET"), "the bridge's environment leaked:\n{text}");
                 assert!(text.contains("TERM=xterm-256color"), "no TERM:\n{text}");
                 assert!(text.contains("PATH="), "no PATH:\n{text}");
+                // The home the bridge resolved, not whatever its own
+                // environment says (a `--home` sets none).
+                let home = format!("CODEDECK_HOME={}", dir.path().join("home").display());
+                assert!(text.lines().any(|line| line.trim_end() == home), "no {home}:\n{text}");
                 let names: Vec<&str> =
                     text.lines().filter_map(|line| line.split_once('=').map(|(name, _)| name)).collect();
                 for name in names {
                     assert!(
-                        ["PATH", "HOME", "USER", "LANG", "SHELL", "TERM"].contains(&name),
+                        ["PATH", "HOME", "USER", "LANG", "SHELL", "TERM", "CODEDECK_HOME"].contains(&name),
                         "the shell was given a variable it should not have: {name}"
                     );
                 }
@@ -976,7 +986,7 @@ mod tests {
     fn acting_on_a_terminal_that_is_not_there_does_nothing() {
         let dir = tempfile::tempdir().expect("a temp dir");
         let (inputs, _rx) = mpsc::unbounded_channel();
-        let mut terms = Terminals::new(dir.path().to_path_buf(), inputs);
+        let mut terms = Terminals::new(dir.path().to_path_buf(), dir.path().to_path_buf(), inputs);
         terms.write("gone", b"x");
         terms.resize("gone", 100, 40);
         terms.close("gone");
