@@ -234,19 +234,33 @@ fn now_ms() -> i64 {
 }
 
 impl TranscriptStoreSqlite {
+    /// The seqs that back `have_ranges`, which must be only the rows that can
+    /// actually be read back. A row whose JSON no longer parses is deleted
+    /// here (as it is in [`Self::query_range`]) and left out, so coverage
+    /// never claims a gap that a later read would silently drop.
     fn query_seqs(&self, machine: &str, session: &str) -> Vec<u64> {
         let conn = self.conn.borrow();
-        let mut stmt = match conn.prepare_cached(
-            "SELECT seq FROM transcript WHERE machine_pubkey = ? AND session_id = ? ORDER BY seq ASC",
-        ) {
-            Ok(s) => s,
-            Err(_) => return Vec::new(),
+        let seqs: Vec<u64> = {
+            let mut stmt = match conn.prepare_cached(
+                "SELECT seq FROM transcript
+                 WHERE machine_pubkey = ? AND session_id = ? AND json_valid(json)
+                 ORDER BY seq ASC",
+            ) {
+                Ok(s) => s,
+                Err(_) => return Vec::new(),
+            };
+            let rows = stmt.query_map([machine, session], |row| row.get::<_, i64>(0));
+            match rows {
+                Ok(rows) => rows.filter_map(Result::ok).map(|s| s as u64).collect(),
+                Err(_) => return Vec::new(),
+            }
         };
-        let rows = stmt.query_map([machine, session], |row| row.get::<_, i64>(0));
-        match rows {
-            Ok(rows) => rows.filter_map(Result::ok).map(|s| s as u64).collect(),
-            Err(_) => Vec::new(),
-        }
+        let _ = conn.execute(
+            "DELETE FROM transcript
+             WHERE machine_pubkey = ? AND session_id = ? AND NOT json_valid(json)",
+            [machine, session],
+        );
+        seqs
     }
 
     /// A row whose `json` fails to parse is unreadable, not fatal — it is
@@ -376,6 +390,31 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM transcript", [], |r| r.get(0))
             .unwrap();
         assert_eq!(remaining, 0);
+    }
+
+    #[tokio::test]
+    async fn a_corrupt_seq_never_counts_as_coverage() {
+        let (_dir, conn) = open_temp();
+        let conn = Rc::new(RefCell::new(conn));
+        let store = TranscriptStoreSqlite::new(conn.clone());
+        let row = |seq: u64, text: &str| TranscriptRow {
+            seq,
+            entry: serde_json::json!({ "entryType": "system", "text": text }),
+        };
+        store.insert_ignore("m1", "s1", &[row(1, "a"), row(2, "b"), row(3, "c")]).await.unwrap();
+        // A row written by an older schema / torn write: seq 2 is unreadable.
+        conn.borrow()
+            .execute("UPDATE transcript SET json = '{broken' WHERE seq = 2", [])
+            .unwrap();
+
+        // Have-ranges are computed from `seqs`, so the corrupt seq must not
+        // be reported as stored: the gap stays uncovered and is re-synced.
+        assert_eq!(store.seqs("m1", "s1").await, vec![1, 3]);
+        let remaining: i64 = conn
+            .borrow()
+            .query_row("SELECT COUNT(*) FROM transcript WHERE seq = 2", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(remaining, 0, "the unreadable row was deleted");
     }
 
     #[test]
