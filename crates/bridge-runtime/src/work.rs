@@ -1,17 +1,14 @@
-//! Slow work the engine hands out as effects: git, HTTP checks, pubkey
-//! registration. Each returns (or reports) on its own; none may take the
-//! bridge down.
+//! Slow work the engine hands out as effects: git and HTTP checks. Each
+//! returns (or reports) on its own; none may take the bridge down.
 //!
-//! HTTP to the user's Nostr servers (a Blossom server, a relay's or Blossom
-//! server's admin endpoint) goes through [`NostrHttp`]. Provider endpoints
-//! are the agent host's business, not the bridge's.
+//! HTTP to the user's Nostr servers (a Blossom server) goes through
+//! [`NostrHttp`]. Provider endpoints are the agent host's business, not the
+//! bridge's.
 
 use std::path::Path;
 use std::time::Duration;
 
 use tokio::process::Command;
-
-use crate::config::RegisterEndpoint;
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -85,53 +82,9 @@ pub async fn git_head(cwd: &Path) -> Option<String> {
     (out.status.success() && !head.is_empty()).then_some(head)
 }
 
-/// Register a paired phone's pubkey with an admin endpoint
-/// (`POST {pubkey}` with a Bearer token; 200 already registered, 201
-/// registered). The token never goes over plaintext except to loopback or an
-/// onion service.
-pub async fn register_pubkey(http: &NostrHttp, endpoint: &RegisterEndpoint, pubkey_hex: &str) -> Result<&'static str, String> {
-    // https, or http to loopback or an onion service: this is Nostr
-    // traffic, which never crosses a network in cleartext (provider base
-    // URLs may also use the LAN; this endpoint may not).
-    if !protocol::common::is_https_or_loopback_url(&endpoint.url) && !is_onion_http(&endpoint.url) {
-        return Err("insecure endpoint (the admin token requires https)".into());
-    }
-    if pubkey_hex.len() != 64 || !pubkey_hex.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err("invalid pubkey".into());
-    }
-    let res = http
-        .for_url(&endpoint.url)?
-        .post(&endpoint.url)
-        .bearer_auth(&endpoint.token)
-        .json(&serde_json::json!({"pubkey": pubkey_hex.to_lowercase()}))
-        .send()
-        .await
-        .map_err(|e| format!("network: {e}"))?;
-    match res.status().as_u16() {
-        200 => Ok("already registered"),
-        201 => Ok("registered"),
-        status => Err(format!("HTTP {status}")),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn registration_refuses_plaintext_and_bad_keys_before_any_request() {
-        let http = NostrHttp::new(None).unwrap();
-        let insecure = RegisterEndpoint { url: "http://relay.example/api".into(), token: "t".into() };
-        assert!(register_pubkey(&http, &insecure, &"a".repeat(64)).await.unwrap_err().contains("insecure"));
-        let smuggled = RegisterEndpoint { url: r"http://relay.example\@localhost/api".into(), token: "t".into() };
-        assert!(register_pubkey(&http, &smuggled, &"a".repeat(64)).await.unwrap_err().contains("insecure"));
-        let lookalike = RegisterEndpoint { url: "http://abc.onion.example.com/api".into(), token: "t".into() };
-        assert!(register_pubkey(&http, &lookalike, &"a".repeat(64)).await.unwrap_err().contains("insecure"));
-        let ok = RegisterEndpoint { url: "https://relay.example/api".into(), token: "t".into() };
-        assert_eq!(register_pubkey(&http, &ok, "zz").await.unwrap_err(), "invalid pubkey");
-        let onion = RegisterEndpoint { url: "http://abcdef.onion/api".into(), token: "t".into() };
-        assert!(register_pubkey(&http, &onion, &"a".repeat(64)).await.unwrap_err().contains("Tor proxy"));
-    }
 
     #[test]
     fn nostr_http_goes_through_tor_when_set_except_to_loopback() {

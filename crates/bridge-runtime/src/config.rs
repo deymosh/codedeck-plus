@@ -42,10 +42,6 @@ struct FileConfig {
     machine_name: Option<String>,
     relays: Option<Vec<String>>,
     workspace_roots: Option<Vec<String>>,
-    relay_register_endpoint: Option<String>,
-    relay_register_token: Option<String>,
-    blossom_register_endpoint: Option<String>,
-    blossom_register_token: Option<String>,
     claude_path: Option<String>,
     transcript_keep_last: Option<u64>,
     tor_proxy_url: Option<String>,
@@ -279,20 +275,6 @@ fn audit_settings(file: Option<FileAudit>) -> AuditSettings {
     }
 }
 
-/// An admin endpoint that registers a paired phone's pubkey.
-#[derive(Clone)]
-pub struct RegisterEndpoint {
-    pub url: String,
-    /// Bearer admin token — never logged.
-    pub token: String,
-}
-
-impl std::fmt::Debug for RegisterEndpoint {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "RegisterEndpoint({})", self.url)
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct Config {
     pub home: PathBuf,
@@ -302,15 +284,7 @@ pub struct Config {
     pub host_kind: BridgeHostKind,
     pub relays: Vec<String>,
     pub workspace_roots: Vec<PathBuf>,
-    pub relay_register: Option<RegisterEndpoint>,
-    pub blossom_register: Option<RegisterEndpoint>,
-    /// The admin endpoints as configured, with or without their token: the
-    /// page shows an endpoint and offers its token even before the token is
-    /// set (a register endpoint works only with both).
-    pub relay_register_endpoint: Option<String>,
-    pub blossom_register_endpoint: Option<String>,
-    /// SOCKS5 proxy for all Nostr traffic (relays, Blossom, pubkey
-    /// registration), as `host:port`.
+    /// SOCKS5 proxy for all Nostr traffic (relays, Blossom), as `host:port`.
     pub tor_proxy: Option<String>,
     pub transcript_keep_last: Option<usize>,
     /// How the agent host is started.
@@ -447,7 +421,7 @@ pub fn load(flags: &Flags) -> Result<Config, String> {
     let config_file = home.join("config.json");
     let config_file_exists = config_file.exists();
     let file: FileConfig = if config_file_exists {
-        // It can hold admin tokens: keep it owner-only.
+        // Keep it owner-only, like the rest of the bridge home.
         crate::state::restrict(&config_file, 0o600);
         let raw = fs::read_to_string(&config_file).map_err(|e| format!("cannot read {}: {e}", config_file.display()))?;
         serde_json::from_str(&raw).map_err(|e| format!("invalid config in {}: {e}", config_file.display()))?
@@ -485,14 +459,6 @@ pub fn load(flags: &Flags) -> Result<Config, String> {
             vec![root]
         }
     };
-    let register = |url: Option<String>, token: Option<String>| match (url, token) {
-        (Some(url), Some(token)) => Some(RegisterEndpoint { url, token }),
-        _ => None,
-    };
-    let relay_register_endpoint = env("CODEDECK_RELAY_REGISTER_ENDPOINT").or(file.relay_register_endpoint);
-    let blossom_register_endpoint = env("CODEDECK_BLOSSOM_REGISTER_ENDPOINT").or(file.blossom_register_endpoint);
-    let relay_register = register(relay_register_endpoint.clone(), env("CODEDECK_RELAY_REGISTER_TOKEN").or(file.relay_register_token));
-    let blossom_register = register(blossom_register_endpoint.clone(), env("CODEDECK_BLOSSOM_REGISTER_TOKEN").or(file.blossom_register_token));
     let tor_proxy = flags
         .tor_proxy
         .clone()
@@ -547,10 +513,6 @@ pub fn load(flags: &Flags) -> Result<Config, String> {
         host_kind,
         relays,
         workspace_roots,
-        relay_register,
-        blossom_register,
-        relay_register_endpoint,
-        blossom_register_endpoint,
         tor_proxy,
         transcript_keep_last,
         node_path: env("CODEDECK_NODE_PATH")
@@ -583,10 +545,6 @@ fn overridden_keys(flags: &Flags) -> BTreeSet<String> {
     // the file in effect, so it is no override.
     mark(!flags.relays.is_empty() || split_list(env("CODEDECK_RELAYS")).is_some(), "relays");
     mark(!flags.workspaces.is_empty() || split_list(env("CODEDECK_WORKSPACE_ROOTS")).is_some(), "workspaceRoots");
-    mark(env("CODEDECK_RELAY_REGISTER_ENDPOINT").is_some(), "relayRegisterEndpoint");
-    mark(env("CODEDECK_RELAY_REGISTER_TOKEN").is_some(), "relayRegisterToken");
-    mark(env("CODEDECK_BLOSSOM_REGISTER_ENDPOINT").is_some(), "blossomRegisterEndpoint");
-    mark(env("CODEDECK_BLOSSOM_REGISTER_TOKEN").is_some(), "blossomRegisterToken");
     mark(env("CODEDECK_TRANSCRIPT_KEEP_LAST").and_then(|v| v.parse::<u64>().ok()).is_some(), "transcriptKeepLast");
     mark(flags.tor_proxy.is_some() || env("CODEDECK_TOR_PROXY_URL").is_some(), "torProxyUrl");
     mark(env("CODEDECK_NODE_PATH").is_some(), "nodePath");
@@ -603,10 +561,6 @@ fn overridden_keys(flags: &Flags) -> BTreeSet<String> {
 /// keys name paths, listeners or process settings whose change could break a
 /// running bridge, so the page has no business writing them.
 pub const WEB_EDITABLE: [&str; 4] = ["machineName", "relays", "direct.endpoints", "transcriptKeepLast"];
-
-/// The secrets the page may set or clear. Write-only: the page never reads
-/// one back, so a token can be replaced but never leaked.
-pub const WEB_EDITABLE_SECRETS: [&str; 2] = ["relayRegisterToken", "blossomRegisterToken"];
 
 /// The listeners the bridge runs with, which a direct endpoint needs: `load`
 /// refuses to start with a `wss://` endpoint and no direct listener, or a
@@ -671,20 +625,10 @@ pub fn validate_web_value(key: &str, value: &Value, listeners: WebListeners) -> 
     }
 }
 
-/// Check one value the page wants to write for a secret key: a non-empty
-/// token, or `null` to clear it.
-pub fn validate_web_secret(key: &str, value: &Value) -> Result<(), String> {
-    match value {
-        Value::Null => Ok(()),
-        Value::String(s) if !s.is_empty() => Ok(()),
-        _ => Err(format!("{key}: a non-empty token, or null to clear")),
-    }
-}
-
 /// Change the given config-file keys and write the file back atomically,
 /// keeping every other key — including ones this bridge does not know —
-/// exactly as it was. `None` removes a key (clearing a token, or the
-/// retention limit). The file may hold admin tokens, so it stays 0600.
+/// exactly as it was. `None` removes a key (the retention limit, say). The
+/// file stays 0600, like the rest of the bridge home.
 pub fn write_web_settings(path: &Path, changes: &[(String, Option<Value>)]) -> Result<(), String> {
     let mut root: Value = match fs::read_to_string(path) {
         Ok(raw) => serde_json::from_str(&raw).map_err(|e| format!("invalid config in {}: {e}", path.display()))?,
@@ -721,16 +665,13 @@ fn set_or_remove(obj: &mut serde_json::Map<String, Value>, key: &str, value: Opt
 }
 
 /// The page's view of the config: every field as it is in effect, with
-/// whether the page may change it, whether it is a secret (shown only as
-/// set/not set), and whether a flag or environment variable overrides the
-/// file — an edit of an overridden field would not take effect.
+/// whether the page may change it and whether a flag or environment
+/// variable overrides the file — an edit of an overridden field would not
+/// take effect.
 pub fn web_config_fields(config: &Config) -> Vec<Value> {
     let overridden = |key: &str| config.overridden.contains(key);
     let field = |key: &str, value: Value, editable: bool| {
-        serde_json::json!({ "key": key, "value": value, "editable": editable, "secret": false, "overridden": overridden(key) })
-    };
-    let secret = |key: &str, set: bool, editable: bool| {
-        serde_json::json!({ "key": key, "set": set, "editable": editable, "secret": true, "overridden": overridden(key) })
+        serde_json::json!({ "key": key, "value": value, "editable": editable, "overridden": overridden(key) })
     };
     let path = |p: &Path| p.to_string_lossy().into_owned();
     vec![
@@ -745,10 +686,6 @@ pub fn web_config_fields(config: &Config) -> Vec<Value> {
         field("testMode", Value::from(config.test_mode), false),
         field("direct.listen", config.direct.listen.map(|a| Value::from(a.to_string())).unwrap_or(Value::Null), false),
         field("direct.onionListen", config.direct.onion_listen.map(|a| Value::from(a.to_string())).unwrap_or(Value::Null), false),
-        field("relayRegisterEndpoint", config.relay_register_endpoint.clone().map(Value::from).unwrap_or(Value::Null), false),
-        field("blossomRegisterEndpoint", config.blossom_register_endpoint.clone().map(Value::from).unwrap_or(Value::Null), false),
-        secret("relayRegisterToken", config.relay_register.is_some(), true),
-        secret("blossomRegisterToken", config.blossom_register.is_some(), true),
     ]
 }
 
@@ -781,10 +718,6 @@ mod tests {
             machine_name,
             relays,
             workspace_roots,
-            relay_register_endpoint,
-            relay_register_token,
-            blossom_register_endpoint,
-            blossom_register_token,
             claude_path,
             transcript_keep_last,
             tor_proxy_url,
@@ -803,10 +736,6 @@ mod tests {
             ("machineName", machine_name.is_some()),
             ("relays", relays.is_some()),
             ("workspaceRoots", workspace_roots.is_some()),
-            ("relayRegisterEndpoint", relay_register_endpoint.is_some()),
-            ("relayRegisterToken", relay_register_token.is_some()),
-            ("blossomRegisterEndpoint", blossom_register_endpoint.is_some()),
-            ("blossomRegisterToken", blossom_register_token.is_some()),
             ("claudePath", claude_path.is_some()),
             ("transcriptKeepLast", transcript_keep_last.is_some()),
             ("torProxyUrl", tor_proxy_url.is_some()),
@@ -975,6 +904,20 @@ mod tests {
         assert!(err.contains("invalid config"));
     }
 
+    #[test]
+    fn a_config_file_with_the_removed_register_keys_still_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("config.json"),
+            r#"{"machineName":"old","relayRegisterEndpoint":"https://relay.example/admin","relayRegisterToken":"t","blossomRegisterEndpoint":"https://blossom.example/admin","blossomRegisterToken":"t"}"#,
+        )
+        .unwrap();
+        let config = load(&Flags { home: Some(dir.path().into()), ..Default::default() }).unwrap();
+        if env("CODEDECK_MACHINE_NAME").is_none() {
+            assert_eq!(config.machine, "old", "the keys are ignored, not rejected");
+        }
+    }
+
     const ALL: WebListeners = WebListeners { direct: true, onion: true };
 
     #[test]
@@ -1006,9 +949,6 @@ mod tests {
         assert!(validate_web_value("transcriptKeepLast", &Value::from(-1), ALL).is_err());
         // Anything else is not the page's to change.
         assert!(validate_web_value("nodePath", &Value::from("/usr/bin/node"), ALL).is_err());
-        assert!(validate_web_secret("relayRegisterToken", &Value::from("tok")).is_ok());
-        assert!(validate_web_secret("relayRegisterToken", &Value::Null).is_ok());
-        assert!(validate_web_secret("relayRegisterToken", &Value::from("")).is_err());
     }
 
     #[test]
@@ -1019,7 +959,7 @@ mod tests {
         let changes = vec![
             ("machineName".to_string(), Some(Value::from("laptop"))),
             ("direct.endpoints".to_string(), Some(serde_json::json!(["wss://192.168.1.9:7447"]))),
-            ("relayRegisterToken".to_string(), Some(Value::from("tok"))),
+            ("claudePath".to_string(), Some(Value::from("/usr/bin/claude"))),
         ];
         write_web_settings(&path, &changes).unwrap();
         let written: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
@@ -1027,12 +967,12 @@ mod tests {
         assert_eq!(written["direct"]["endpoints"][0], "wss://192.168.1.9:7447");
         assert_eq!(written["direct"]["listen"], "0.0.0.0:7447", "a key beside the changed one is kept");
         assert_eq!(written["keepMe"]["x"], 1, "an unknown key is kept");
-        assert_eq!(written["relayRegisterToken"], "tok");
+        assert_eq!(written["claudePath"], "/usr/bin/claude");
 
         // None clears: the key comes out, everything else stays.
-        write_web_settings(&path, &[("relayRegisterToken".to_string(), None)]).unwrap();
+        write_web_settings(&path, &[("claudePath".to_string(), None)]).unwrap();
         let written: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert!(written.get("relayRegisterToken").is_none());
+        assert!(written.get("claudePath").is_none());
         assert_eq!(written["machineName"], "laptop");
 
         // A missing file starts from an empty object.
@@ -1042,7 +982,7 @@ mod tests {
     }
 
     #[test]
-    fn the_config_view_shows_secrets_as_set_or_not_and_marks_overrides() {
+    fn the_config_view_marks_overrides_and_read_only_fields() {
         let config = Config {
             home: PathBuf::from("/home/me/.codedeck"),
             config_file: PathBuf::from("/home/me/.codedeck/config.json"),
@@ -1051,11 +991,6 @@ mod tests {
             host_kind: BridgeHostKind::Cli,
             relays: vec!["wss://relay.example".into()],
             workspace_roots: vec![PathBuf::from("/srv/w")],
-            relay_register: Some(RegisterEndpoint { url: "https://relay.example/admin".into(), token: "s3cret".into() }),
-            blossom_register: None,
-            relay_register_endpoint: Some("https://relay.example/admin".into()),
-            // An endpoint whose token is not set yet: shown, its token offered.
-            blossom_register_endpoint: Some("https://blossom.example/admin".into()),
             tor_proxy: Some("127.0.0.1:9050".into()),
             transcript_keep_last: Some(5),
             node_path: "node".into(),
@@ -1075,14 +1010,6 @@ mod tests {
         assert_eq!(of("nodePath")["editable"], false, "a path stays read-only");
         assert_eq!(of("nodePath")["overridden"], false);
         assert_eq!(of("direct.listen")["value"], "0.0.0.0:7447");
-        // A secret is shown as set/not set, and never carries its value.
-        let token = of("relayRegisterToken");
-        assert_eq!(token["secret"], true);
-        assert_eq!(token["editable"], true);
-        assert_eq!(token["set"], true);
-        assert!(token.get("value").is_none());
-        assert_eq!(of("blossomRegisterToken")["set"], false);
-        assert_eq!(of("blossomRegisterEndpoint")["value"], "https://blossom.example/admin", "an endpoint shows before its token is set");
-        assert!(!serde_json::to_string(&fields).unwrap().contains("s3cret"), "no secret value is in the view");
+        assert!(fields.iter().all(|f| f.get("value").is_some()), "every field carries a value");
     }
 }

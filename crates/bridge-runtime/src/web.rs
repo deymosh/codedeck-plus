@@ -24,7 +24,7 @@
 //! `GET /api/devices` shows the paired identities and their clients;
 //! `GET /api/config` shows the config as it is in effect and
 //! `POST /api/config` changes the safe set of keys (never a path or a
-//! listener, and a secret only as set/not set).
+//! listener).
 //!
 //! Hardening, since a LAN or VPN is not a trusted place:
 //! - the `Host` must be an IP address, `localhost`, or a host the direct
@@ -517,16 +517,11 @@ impl Web {
     fn apply_config(&self, body: &[u8], by: &str) -> Response {
         let Ok(doc) = serde_json::from_slice::<Value>(body) else { return Response::error(400) };
         let Some(obj) = doc.as_object() else { return Response::error(400) };
-        if obj.keys().any(|key| key != "set" && key != "secrets") {
+        if obj.keys().any(|key| key != "set") {
             return Response::error(400);
         }
         let empty = serde_json::Map::new();
         let set = match obj.get("set") {
-            None => &empty,
-            Some(Value::Object(map)) => map,
-            Some(_) => return Response::error(400),
-        };
-        let secrets = match obj.get("secrets") {
             None => &empty,
             Some(Value::Object(map)) => map,
             Some(_) => return Response::error(400),
@@ -540,16 +535,6 @@ impl Web {
                 return bad_request(key, &message);
             }
             changes.push((key.clone(), Some(value.clone())));
-        }
-        for (key, value) in secrets {
-            if !crate::config::WEB_EDITABLE_SECRETS.contains(&key.as_str()) {
-                return bad_request(key, "not a secret the page may change");
-            }
-            if let Err(message) = crate::config::validate_web_secret(key, value) {
-                return bad_request(key, &message);
-            }
-            // `null` clears the token: the key comes out of the file.
-            changes.push((key.clone(), (!value.is_null()).then(|| value.clone())));
         }
         if changes.is_empty() {
             return bad_request("", "nothing to change");
@@ -1407,11 +1392,10 @@ mod tests {
     }
 
     #[test]
-    fn the_config_api_shows_secrets_only_as_set_or_not_set() {
+    fn the_config_api_serves_every_field_with_its_value() {
         let dir = tempfile::tempdir().unwrap();
         let fields = vec![
-            serde_json::json!({ "key": "machineName", "value": "desktop", "editable": true, "secret": false, "overridden": false }),
-            serde_json::json!({ "key": "relayRegisterToken", "set": true, "editable": true, "secret": true, "overridden": false }),
+            serde_json::json!({ "key": "machineName", "value": "desktop", "editable": true, "overridden": false }),
         ];
         let (web, mut inputs) = web_with_config(dir.path(), fields);
         let token = sign_in(&web, &mut inputs);
@@ -1422,9 +1406,6 @@ mod tests {
         assert_eq!(response.status, 200);
         let json: Value = serde_json::from_slice(&response.body).unwrap();
         let fields = json["fields"].as_array().unwrap();
-        let secret = fields.iter().find(|f| f["key"] == "relayRegisterToken").unwrap();
-        assert_eq!(secret["set"], true);
-        assert!(secret.get("value").is_none(), "a secret's value is never sent");
         assert!(fields.iter().any(|f| f["key"] == "machineName" && f["value"] == "desktop"));
     }
 
@@ -1466,7 +1447,7 @@ mod tests {
         let path = dir.path().join("config.json");
         std::fs::write(&path, r#"{"machineName":"desktop","direct":{"listen":"0.0.0.0:7447"},"keepMe":{"x":1}}"#).unwrap();
         // The bridge runs the direct listener, so a wss:// endpoint is one it can serve.
-        let listening = serde_json::json!({ "key": "direct.listen", "value": "0.0.0.0:7447", "editable": false, "secret": false, "overridden": false });
+        let listening = serde_json::json!({ "key": "direct.listen", "value": "0.0.0.0:7447", "editable": false, "overridden": false });
         let (web, mut inputs) = web_with_config(dir.path(), vec![listening]);
         let token = sign_in(&web, &mut inputs);
 
@@ -1474,7 +1455,6 @@ mod tests {
         post.cookie = Some(token);
         post.body = serde_json::json!({
             "set": { "machineName": "laptop", "relays": ["wss://relay.example"], "direct.endpoints": ["wss://192.168.1.9:7447"] },
-            "secrets": { "relayRegisterToken": "tok-123" },
         })
         .to_string()
         .into_bytes();
@@ -1486,26 +1466,13 @@ mod tests {
         let json: Value = serde_json::from_slice(&response.body).unwrap();
         assert_eq!(json["ok"], true);
         assert_eq!(json["restartNeeded"], true);
-        assert!(!String::from_utf8_lossy(&response.body).contains("tok-123"), "the token is never in a response");
 
         let written: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(written["machineName"], "laptop");
         assert_eq!(written["relays"][0], "wss://relay.example");
         assert_eq!(written["direct"]["endpoints"][0], "wss://192.168.1.9:7447");
         assert_eq!(written["direct"]["listen"], "0.0.0.0:7447", "another key in the same object is kept");
-        assert_eq!(written["relayRegisterToken"], "tok-123");
         assert_eq!(written["keepMe"]["x"], 1, "an unknown key is kept");
-
-        // A null secret clears it: the key comes out of the file.
-        let mut clear = request("POST", "/api/config", HOST);
-        clear.cookie = Some(sign_in(&web, &mut inputs));
-        clear.body = serde_json::json!({ "secrets": { "relayRegisterToken": null } }).to_string().into_bytes();
-        let mut cleared = route(&clear, PEER, &web);
-        assert_eq!(cleared.status, 200);
-        let write = cleared.config_write.take().expect("a write to do");
-        crate::config::write_web_settings(&write.path, &write.changes).unwrap();
-        let written: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert!(written.get("relayRegisterToken").is_none(), "cleared");
     }
 
     #[test]

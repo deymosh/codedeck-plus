@@ -68,8 +68,8 @@ fn a_granted_key_encrypts_and_the_identity_stays_the_party() {
     let effects = grant(&mut rig, &key, NOW_SECS + 30 * DAY);
 
     assert_eq!(heartbeats(&effects), to(&rig.phone, &key), "the heartbeat confirms the key");
-    // Only the identity is ever an author or registered anywhere.
-    assert!(!effects.iter().any(|e| matches!(e, Effect::Resubscribe | Effect::RegisterPhone { .. })));
+    // Only the identity is ever an author.
+    assert!(!effects.iter().any(|e| matches!(e, Effect::Resubscribe)));
     assert_eq!(rig.engine.commands_filter().authors, vec![rig.phone.pubkey_hex.clone()]);
     assert!(rig.store.snapshot()["pairedPhones"].contains(&key.pubkey_hex), "survives a restart");
 
@@ -319,10 +319,6 @@ fn a_pair_request_can_grant_the_first_key() {
         })
         .collect();
     assert_eq!(acks, to(&phone, &key), "the ack is already encrypted to the key");
-    // The identity, never the key, is what gets registered.
-    assert!(!effects
-        .iter()
-        .any(|e| matches!(e, Effect::RegisterPhone { pubkey_hex, .. } if *pubkey_hex == key.pubkey_hex)));
 }
 
 fn presence(rig: &mut Rig, key: &Keypair, away: bool) -> Vec<Effect> {

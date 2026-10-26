@@ -436,7 +436,6 @@ impl Runtime {
                 }
                 NotifyLevel::Warn => log::warn!("{text}"),
             },
-            Effect::RegisterPhone { pubkey_hex, label } => self.register_phone(pubkey_hex, label),
             Effect::ReadGitHead { session_id, cwd } => {
                 let inputs = self.inputs.clone();
                 tokio::task::spawn_local(async move {
@@ -575,21 +574,6 @@ impl Runtime {
         }
     }
 
-    fn register_phone(&self, pubkey_hex: String, label: String) {
-        let endpoints = [("relay", self.config.relay_register.clone()), ("image server", self.config.blossom_register.clone())];
-        for (service, endpoint) in endpoints {
-            let Some(endpoint) = endpoint else { continue };
-            let (http, pubkey, label) = (self.nostr_http.clone(), pubkey_hex.clone(), label.clone());
-            tokio::task::spawn_local(async move {
-                match work::register_pubkey(&http, &endpoint, &pubkey).await {
-                    Ok(status) => log::info!("[Runtime] Phone {}... {status} on the {service}", &pubkey[..8]),
-                    Err(err) => log::warn!(
-                        "Phone \"{label}\" paired, but registering it on the {service} failed ({err}) — it may not be able to use that {service}."
-                    ),
-                }
-            });
-        }
-    }
 }
 
 fn present_pairing(info: &PairingWindowInfo) {
