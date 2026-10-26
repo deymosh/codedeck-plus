@@ -96,7 +96,7 @@ FROM ${NODE_IMAGE} AS opencode
 # agent host speaks that client's HTTP API to this binary — and with the
 # agent host's `@opencode/cli` dev dependency, which pins the build installed
 # on demand. Both are OpenCode 2.x: the 1.x packages are a different API.
-ARG OPENCODE_VERSION=2.0.28
+ARG OPENCODE_VERSION=2.1.4
 ARG BUNDLE_AGENTS
 RUN mkdir /out \
     && if [ "$BUNDLE_AGENTS" = 1 ]; then \
