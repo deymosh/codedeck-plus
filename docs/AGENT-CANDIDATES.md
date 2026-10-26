@@ -140,8 +140,8 @@ VPS. As built:
    refused until its agent is ready; one the bridge already has (resuming
    after a host restart) waits for the install, and fails with its reason.
 3. The host keeps what is installed in the agent cache itself, so the bridge
-   persists nothing: an agent the machine has (on PATH, configured, bundled
-   by `BUNDLE_AGENTS=1`) or the cache holds at the pinned version is ready.
+   persists nothing: an agent the machine has (on PATH or configured) or the
+   cache holds at the pinned version is ready.
    Removing deletes what CodeDeck installed and leaves a `.removed-<id>`
    marker, so the default agent is not installed again behind the user's
    back.
@@ -149,8 +149,7 @@ VPS. As built:
    (`installByDefault` on its `DriverModule`). The phone lists the others
    with Install on the machine's page and in New session; a session starts
    only on a `ready` agent. `codedeck-bridge agents list | install | remove`
-   runs the same from a shell, through the host's one-shot commands, which
-   is also how the bundled image installs at build time.
+   runs the same from a shell, through the host's one-shot commands.
 
 ## Package layout
 

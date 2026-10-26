@@ -219,8 +219,10 @@ which publishes one GitHub Release with every artifact of that version:
 The archives and the image leave out the agents' own binaries: OpenCode, the
 default agent, is installed when the bridge first starts, and any other agent
 when someone installs it from the phone, pinned to the lockfile (see
-[`docs/BRIDGE.md`](docs/BRIDGE.md));
-`CODEDECK_BUNDLE_AGENTS=1` builds an image that carries them.
+[`docs/BRIDGE.md`](docs/BRIDGE.md)). A host without npm registry access points
+`CODEDECK_NPM_REGISTRY` at a mirror, installs the agents once with
+`codedeck-bridge agents install` while online, or copies its `agents` volume
+from another deployment.
 
 A tag with a hyphen (`v1.2.3-rc1`) is published as a prerelease and does not move
 `:latest`. The version is bumped in the tree in the commit that gets tagged (one

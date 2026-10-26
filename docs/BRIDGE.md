@@ -107,17 +107,16 @@ for it.
 The container image works the same way, with the binaries in
 `/data/agents` — which the compose file keeps in a volume of Docker's own
 (`agents`), not in `./data` — so a container recreated from a newer image
-reuses them until the pin moves. A volume rather than the host directory for
-two reasons: Docker fills a volume from the image when it is first created
-(a host directory it never fills), and on Docker Desktop a host directory is
-a file share slow enough to dominate a runtime of hundreds of packages (the
-DeepSeek Harness boots in about a second from the volume and in about 25 from
-`./data`). `/data/agents/bin` holds each one under a stable name and is on
-the container's `PATH`, so `docker compose exec codedeck-bridge claude …` (or
-`opencode …`) works once it is installed. For a host without internet access,
-build with `CODEDECK_BUNDLE_AGENTS=1` in `.env`: the image then carries
-Claude Code, OpenCode and the DeepSeek Harness (not Qwen Code), and they reach the volume when it is first created; a volume
-that already exists keeps the agents already in it.
+reuses them until the pin moves. A volume rather than the host directory
+because on Docker Desktop a host directory is a file share slow enough to
+dominate a runtime of hundreds of packages (the DeepSeek Harness boots in
+about a second from the volume and in about 25 from `./data`).
+`/data/agents/bin` holds each one under a stable name and is on the
+container's `PATH`, so `docker compose exec codedeck-bridge claude …` (or
+`opencode …`) works once it is installed. A host without npm registry access
+points `CODEDECK_NPM_REGISTRY` at a mirror, runs `codedeck-bridge agents
+install …` once while online (the volume keeps them across image rebuilds), or
+copies the `agents` volume from another deployment.
 
 The links in `<home>/agents/bin` are for people. The agent host never uses
 them to find an agent, because after an upgrade they may still point at the
