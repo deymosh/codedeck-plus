@@ -2824,6 +2824,67 @@ async fn a_burst_of_sync_chunks_costs_one_signed_ack() {
         .await;
 }
 
+/// A `sync-begin` whose `sync-end` never arrives leaves the cycle in flight;
+/// without a retry the session's gap would stay unfilled until the next
+/// reconnect. The watchdog's tick restarts the cycle.
+#[tokio::test]
+async fn a_sync_cycle_that_goes_silent_is_re_requested_by_the_watchdog() {
+    LocalSet::new()
+        .run_until(async {
+            let mut mock = mock_relay().await;
+            let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+            let machine = generate_keypair();
+            let mut state = client_core::stores::machines::MachinesState::default();
+            state.register_machine(&machine.pubkey_hex, "bridge", None, None, &[]);
+            heard_without_session_keys(&mut state, &machine.pubkey_hex);
+            let kv = MemoryKv::seeded([(
+                crate::stores::MACHINES_KEY,
+                client_core::stores::machines::serialize_machines(&state.machines),
+            )]);
+            let clock = Rc::new(FixedClock(RefCell::new(1_000_000)));
+            let core = Core::spawn(
+                CoreConfig {
+                    identity: Rc::new(crate::signer::LocalSigner(phone.clone())),
+                    proxy: None,
+                    tor: false,
+                    device_label: None,
+                    reconnect: fast_reconnect(),
+                },
+                CorePorts { kv: Rc::new(kv), ..CorePorts::default() },
+                Rc::new(Spy::default()),
+                clock.clone(),
+                Rc::new(ZeroEntropy),
+            )
+            .await;
+            core.set_relays(vec![mock.url.clone()]);
+            core.start();
+            eose_all(&mut mock).await;
+            let refresh = next_command_via(&mut mock, &phone, &phone.pubkey_hex, &machine).await;
+            assert!(matches!(refresh, Some(PhoneToBridge::RefreshSessions(_))), "{refresh:?}");
+
+            let begin = protocol::codec::decode_bridge_to_phone(
+                &serde_json::json!({
+                    "v": 12,
+                    "type": "sync-begin", "sessionId": "s1", "syncId": "y1", "seqHigh": 3, "ranges": [[1, 3]]
+                })
+                .to_string(),
+            )
+            .unwrap();
+            push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, "cd-1", &begin);
+            settle().await;
+
+            *clock.0.borrow_mut() +=
+                client_core::stores::transcript::SYNC_STALL_MS + 1;
+            core.tick();
+            let request = next_command_via(&mut mock, &phone, &phone.pubkey_hex, &machine).await;
+            assert!(
+                matches!(request, Some(PhoneToBridge::SyncRequest(ref m)) if m.session_id == "s1"),
+                "{request:?}"
+            );
+        })
+        .await;
+}
+
 /// Documents the JSON shape a binding receives — externally tagged,
 /// camelCase, matching `Intent`'s own convention.
 #[test]

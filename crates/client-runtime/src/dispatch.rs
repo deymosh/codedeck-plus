@@ -362,6 +362,7 @@ impl<'a> Router<'a> {
                     &m.session_id,
                     &m.sync_id,
                     m.seq_high,
+                    self.now,
                 );
             }
             BridgeToPhone::SyncChunk(m) => {
@@ -374,6 +375,9 @@ impl<'a> Router<'a> {
                 // never claim data we could still lose. A failed write leaves
                 // the chunk unacked, and the bridge resends unacked chunks.
                 if self.apply_rows(machine, &m.session_id, rows).await.is_ok() {
+                    self.stores
+                        .transcript
+                        .note_sync_progress(machine, &m.session_id, self.now);
                     r.transcript_appended = Some((machine.to_string(), m.session_id.clone()));
                     r.send(
                         machine,
@@ -1367,7 +1371,7 @@ mod tests {
     async fn sync_end_with_a_gap_re_requests() {
         let (mut s, ts, kp) = stores().await;
         // seq 5 is advertised but only 1..=2 are covered
-        s.transcript.apply_sync_begin(MACHINE, "s1", "sy1", 5);
+        s.transcript.apply_sync_begin(MACHINE, "s1", "sy1", 5, 0);
         {
             let mut r = Router::new(&mut s, &ts, &kp, 1_000);
             r.route(

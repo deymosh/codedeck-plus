@@ -43,7 +43,7 @@ use tokio::task::AbortHandle;
 use client_core::notifications::session_notify_tag;
 use client_core::stores::ui::UiEffect;
 
-use crate::dispatch::{PairDeadline, RouteResult, Router, Send as RouteSend, StoreId};
+use crate::dispatch::{sync_effect_to_cmd, PairDeadline, RouteResult, Router, Send as RouteSend, StoreId};
 use crate::intent::{apply as apply_intent, Intent, IntentCtx, IntentResult, SessionFileSend, UndoTimer};
 use crate::nostr_client::{NostrClient, NostrClientHost, NostrEvent};
 use crate::ports::{
@@ -1264,6 +1264,7 @@ impl Loop {
                     self.check_connect_deadline();
                     self.check_stale_heartbeats();
                     self.check_connected_relays_changed();
+                    self.check_sync_stalls();
                     self.renew_presence();
                     if self.conn.status != ConnectionStatus::Stopped {
                         self.arm_stale_watchdog();
@@ -1381,6 +1382,17 @@ impl Loop {
         log::warn!("connection: no EOSE within {CONNECT_DEADLINE_MS}ms — abandoning the attempt");
         let random = Some(self.entropy.unit());
         self.dispatch(ConnectionEvent::SocketClose { random });
+    }
+
+    /// Re-request sessions whose sync cycle has gone silent. A lost
+    /// `sync-request` or `sync-end` would otherwise leave the gap unfilled
+    /// until the next reconnect; the stall sweep bounds that by the cycle's
+    /// own attempt count.
+    fn check_sync_stalls(&mut self) {
+        let now = self.clock.now_ms();
+        for (machine, effect) in self.stores.transcript.stall_sweep(now) {
+            self.on_send(machine, sync_effect_to_cmd(effect), None);
+        }
     }
 
     /// CDX-020: every paired machine's heartbeat went stale while

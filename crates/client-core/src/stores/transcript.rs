@@ -22,6 +22,11 @@ use protocol::ranges::{missing_ranges, normalize_ranges, union_ranges, SeqRange}
 pub const SYNC_MAX_ATTEMPTS: u32 = 3;
 pub const SYNC_RETRY_BASE_MS: u64 = 5_000;
 pub const SYNC_RETRY_MAX_MS: u64 = 300_000;
+/// An in-flight cycle (requested or syncing) that has heard nothing for this
+/// long is treated as lost. The bridge's own sync idle timeout is 60s, so a
+/// cycle that outlives it with no chunk, `sync-begin` or `sync-end` means a
+/// message was dropped; re-requesting is the only way the gap gets filled.
+pub const SYNC_STALL_MS: u64 = 90_000;
 
 /// Retry backoff after a failed sync cycle: 5s → 5min cap, exponential.
 pub fn sync_retry_delay_ms(attempts: u32) -> u64 {
@@ -51,6 +56,10 @@ pub struct SessionSyncStatus {
     pub active_sync_id: Option<String>,
     /// seqHigh we are trying to cover.
     pub target: u64,
+    /// Last time this cycle showed progress (request sent, `sync-begin`, a
+    /// stored chunk). `Some` only while a cycle is in flight; the runtime's
+    /// tick compares it against [`SYNC_STALL_MS`].
+    pub in_flight_since: Option<u64>,
 }
 
 impl Default for SessionSyncStatus {
@@ -61,6 +70,7 @@ impl Default for SessionSyncStatus {
             next_retry_at: None,
             active_sync_id: None,
             target: 0,
+            in_flight_since: None,
         }
     }
 }
@@ -223,12 +233,14 @@ impl TranscriptState {
         machine: &str,
         session_id: &str,
         target: u64,
+        now: u64,
     ) -> Vec<SyncEffect> {
         let s = self.get_or_create(machine, session_id);
         s.sync.state = SyncState::Requested;
         s.sync.attempts += 1;
         s.sync.next_retry_at = None;
         s.sync.active_sync_id = None;
+        s.sync.in_flight_since = Some(now);
         s.sync.target = target.max(s.sync.target);
         vec![SyncEffect::SendSyncRequest {
             session_id: session_id.to_string(),
@@ -243,11 +255,24 @@ impl TranscriptState {
         session_id: &str,
         sync_id: &str,
         seq_high: u64,
+        now: u64,
     ) {
         let s = self.get_or_create(machine, session_id);
         s.sync.state = SyncState::Syncing;
         s.sync.active_sync_id = Some(sync_id.to_string());
+        s.sync.in_flight_since = Some(now);
         s.sync.target = s.sync.target.max(seq_high);
+    }
+
+    /// A chunk of this cycle was stored: the cycle is alive, so its stall
+    /// deadline restarts from now.
+    pub fn note_sync_progress(&mut self, machine: &str, session_id: &str, now: u64) {
+        let Some(s) = self.sessions.get_mut(&Self::key(machine, session_id)) else {
+            return;
+        };
+        if matches!(s.sync.state, SyncState::Requested | SyncState::Syncing) {
+            s.sync.in_flight_since = Some(now);
+        }
     }
 
     /// `sync-chunk`: emit the ack. The runtime calls this ONLY after
@@ -280,16 +305,18 @@ impl TranscriptState {
             s.sync.attempts = 0;
             s.sync.next_retry_at = None;
             s.sync.active_sync_id = None;
+            s.sync.in_flight_since = None;
             return vec![];
         }
         if attempts < self.max_attempts {
-            return self.start_cycle(machine, session_id, target);
+            return self.start_cycle(machine, session_id, target, now);
         }
         let delay = sync_retry_delay_ms(attempts);
         let s = self.get_or_create(machine, session_id);
         s.sync.state = SyncState::Failed;
         s.sync.next_retry_at = Some(now + delay);
         s.sync.active_sync_id = None;
+        s.sync.in_flight_since = None;
         vec![]
     }
 
@@ -314,6 +341,7 @@ impl TranscriptState {
                 s.sync.attempts = 0;
                 s.sync.next_retry_at = None;
                 s.sync.active_sync_id = None;
+                s.sync.in_flight_since = None;
             }
             return vec![];
         }
@@ -328,7 +356,7 @@ impl TranscriptState {
             {
                 vec![] // backoff still running
             }
-            _ => self.start_cycle(machine, session_id, target_seq_high),
+            _ => self.start_cycle(machine, session_id, target_seq_high, now),
         }
     }
 
@@ -346,6 +374,7 @@ impl TranscriptState {
             s.sync.attempts = 0;
             s.sync.next_retry_at = None;
             s.sync.active_sync_id = None;
+            s.sync.in_flight_since = None;
         }
     }
 
@@ -361,9 +390,47 @@ impl TranscriptState {
             .collect();
         let mut effects = Vec::new();
         for (machine, session_id, target) in due {
-            effects.extend(self.start_cycle(&machine, &session_id, target));
+            effects.extend(self.start_cycle(&machine, &session_id, target, now));
         }
         effects
+    }
+
+    /// Cycles that have shown no progress for [`SYNC_STALL_MS`] — the request
+    /// or the bridge's `sync-end` was lost, so nothing would ever move them
+    /// again outside a reconnect. Restart while attempts remain; otherwise
+    /// fall into the same bounded backoff as a failed `sync-end`, which
+    /// `ensure_synced` retries when it elapses. Returns the machine with each
+    /// effect because a sweep spans every session.
+    pub fn stall_sweep(&mut self, now: u64) -> Vec<(String, SyncEffect)> {
+        let stalled: Vec<(String, String, u64)> = self
+            .sessions
+            .values()
+            .filter(|s| matches!(s.sync.state, SyncState::Requested | SyncState::Syncing))
+            .filter(|s| s.sync.in_flight_since.is_some_and(|at| now.saturating_sub(at) >= SYNC_STALL_MS))
+            .filter(|s| s.sync.target > 0)
+            .map(|s| (s.machine.clone(), s.session_id.clone(), s.sync.target))
+            .collect();
+        let mut out = Vec::new();
+        for (machine, session_id, target) in stalled {
+            let attempts = self
+                .session(&machine, &session_id)
+                .map(|s| s.sync.attempts)
+                .unwrap_or(0);
+            if attempts < self.max_attempts {
+                out.extend(
+                    self.start_cycle(&machine, &session_id, target, now)
+                        .into_iter()
+                        .map(|e| (machine.clone(), e)),
+                );
+            } else {
+                let s = self.get_or_create(&machine, &session_id);
+                s.sync.state = SyncState::Failed;
+                s.sync.next_retry_at = Some(now + sync_retry_delay_ms(attempts));
+                s.sync.active_sync_id = None;
+                s.sync.in_flight_since = None;
+            }
+        }
+        out
     }
 }
 
@@ -463,7 +530,7 @@ mod tests {
     fn sync_chunk_ack_then_sync_end_completes_when_covered() {
         let mut t = st();
         t.ensure_synced("m", "s", 3, 0);
-        t.apply_sync_begin("m", "s", "sy1", 3);
+        t.apply_sync_begin("m", "s", "sy1", 3, 0);
         assert_eq!(sync(&t).state, SyncState::Syncing);
         t.integrate_rows("m", "s", &[1, 2, 3], &[]);
         let ack = t.ack_sync_chunk("sy1", (1, 3));
@@ -479,7 +546,7 @@ mod tests {
     fn an_incomplete_sync_end_re_requests_while_attempts_remain() {
         let mut t = st();
         t.ensure_synced("m", "s", 4, 0);
-        t.apply_sync_begin("m", "s", "sy1", 4);
+        t.apply_sync_begin("m", "s", "sy1", 4, 0);
         t.integrate_rows("m", "s", &[3, 4], &[]); // [1,2] lost
         let eff = t.apply_sync_end("m", "s", 0);
         assert_eq!(requests(&eff), vec![&vec![(3u64, 4u64)]]);
@@ -552,13 +619,52 @@ mod tests {
         let mut t = st();
         t.ensure_synced("m", "s", 3, 0);
         t.integrate_rows("m", "s", &[4], &[]); // concurrent live tail
-        t.apply_sync_begin("m", "s", "sy", 3);
+        t.apply_sync_begin("m", "s", "sy", 3, 0);
         t.integrate_rows("m", "s", &[1, 2, 3], &[]);
         let eff = t.apply_sync_end("m", "s", 0);
         assert!(requests(&eff).is_empty());
         assert!(t.has_contiguous("m", "s", Some(4)));
         assert!(t.seq_conflicts.is_empty());
         assert_eq!(sync(&t).state, SyncState::Complete);
+    }
+
+    #[test]
+    fn a_silent_requested_cycle_is_restarted_by_the_stall_sweep() {
+        let mut t = st();
+        assert_eq!(requests(&t.ensure_synced("m", "s", 5, 1_000)).len(), 1);
+        assert!(t.stall_sweep(1_000 + SYNC_STALL_MS - 1).is_empty());
+        let eff = t.stall_sweep(1_000 + SYNC_STALL_MS);
+        assert_eq!(eff.len(), 1);
+        assert_eq!(eff[0].0, "m");
+        assert!(matches!(
+            &eff[0].1,
+            SyncEffect::SendSyncRequest { session_id, .. } if session_id == "s"
+        ));
+        assert_eq!(sync(&t).state, SyncState::Requested);
+        assert_eq!(sync(&t).attempts, 2);
+    }
+
+    #[test]
+    fn a_syncing_cycle_is_stalled_from_its_last_stored_chunk_not_its_begin() {
+        let mut t = st();
+        t.ensure_synced("m", "s", 5, 0);
+        t.apply_sync_begin("m", "s", "sy1", 5, 10);
+        let progress = 10 + SYNC_STALL_MS - 1;
+        t.note_sync_progress("m", "s", progress);
+        assert!(t.stall_sweep(progress).is_empty());
+        assert_eq!(t.stall_sweep(progress + SYNC_STALL_MS).len(), 1);
+    }
+
+    #[test]
+    fn a_stalled_cycle_past_its_attempts_waits_out_the_failure_backoff() {
+        let mut t = TranscriptState::new(1);
+        t.ensure_synced("m", "s", 5, 0);
+        assert_eq!(sync(&t).attempts, 1);
+        // No reconnect or heartbeat would ever move this cycle again.
+        assert!(t.stall_sweep(SYNC_STALL_MS).is_empty());
+        assert_eq!(sync(&t).state, SyncState::Failed);
+        assert_eq!(sync(&t).next_retry_at, Some(SYNC_STALL_MS + sync_retry_delay_ms(1)));
+        assert_eq!(sync(&t).in_flight_since, None);
     }
 
     #[test]
