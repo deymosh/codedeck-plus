@@ -665,9 +665,9 @@ fn set_or_remove(obj: &mut serde_json::Map<String, Value>, key: &str, value: Opt
 }
 
 /// The page's view of the config: every field as it is in effect, with
-/// whether the page may change it, whether it is a secret (shown only as
-/// set/not set), and whether a flag or environment variable overrides the
-/// file — an edit of an overridden field would not take effect.
+/// whether the page may change it and whether a flag or environment
+/// variable overrides the file — an edit of an overridden field would not
+/// take effect.
 pub fn web_config_fields(config: &Config) -> Vec<Value> {
     let overridden = |key: &str| config.overridden.contains(key);
     let field = |key: &str, value: Value, editable: bool| {
