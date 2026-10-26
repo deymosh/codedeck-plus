@@ -199,6 +199,14 @@ impl FrameLane {
         self.closed.get()
     }
 
+    /// Stop accepting frames and wake the serve loop, which sends its
+    /// `closed` frame and ends. The lane is shared with that loop, so
+    /// dropping the connection is not enough to end it.
+    fn close(&self) {
+        self.closed.set(true);
+        self.wake.notify_one();
+    }
+
     /// Ready once a frame is waiting or the lane is closed. A `push` while
     /// nobody waits leaves `Notify`'s permit behind, so no wake-up is lost
     /// between the check and the wait.
@@ -254,6 +262,15 @@ impl TermLane {
 impl Conn {
     fn reads(&self, identity: &str, event: &SignedEvent) -> bool {
         self.identity == identity && recipient_of(event).is_some_and(|tag| self.recipients.contains(tag))
+    }
+}
+
+impl Drop for Conn {
+    fn drop(&mut self) {
+        // Every path that forgets a connection — unpairing, shutdown, a
+        // stalled lane — must also end its serve loop. The loop holds its
+        // own reference to the lane, so closing it is what ends the loop.
+        self.frames.close();
     }
 }
 
