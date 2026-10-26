@@ -43,8 +43,10 @@ internal fun installLine(agent: UniffiAgent): Pair<String, Boolean> {
         agent.installState == "failed" -> "Install failed: ${agent.installError.orEmpty()}" to true
         agent.installState == "not_installed" -> "Not installed" to false
         agent.stateUnknown -> "Update the app to see where it stands" to false
-        agent.removable -> "Installed by CodeDeck" to false
-        else -> "On the machine" to false
+        // A ready agent: its release, once the bridge has said it, then where
+        // it came from.
+        else -> listOfNotNull(agent.version, if (agent.removable) "Installed by CodeDeck" else "On the machine")
+            .joinToString(" · ") to false
     }
 }
 
