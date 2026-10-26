@@ -64,12 +64,6 @@ use crate::view::{
 const RESUME_HEARD_WITHIN_MS: u64 = 90_000;
 /// How often the CDX-020 dead-subscription watchdog re-checks while connected.
 const STALE_WATCHDOG_EVERY: Duration = Duration::from_secs(30);
-/// How long a connect attempt may stay in `Connecting`. The FSM's `SocketOpen`
-/// is EOSE, not the TCP/WebSocket handshake: a relay that accepts the socket
-/// but never finishes AUTH and the initial REQs would otherwise leave the
-/// phone waiting forever, because heartbeat staleness is only checked while
-/// `Connected`. Tor is slow, so this is generous.
-const CONNECT_DEADLINE_MS: u64 = 45_000;
 /// The longest a stop waits for its `away` to go out.
 const AWAY_WAIT: Duration = Duration::from_secs(2);
 /// How long a change of what this client watches is coalesced before it is
@@ -1373,10 +1367,10 @@ impl Loop {
         }
     }
 
-    /// An attempt that never reached EOSE within [`CONNECT_DEADLINE_MS`]: the
-    /// socket may be open while AUTH or the initial REQs never complete, and
-    /// nothing else watches `Connecting`. Report it as a lost socket so the
-    /// FSM's normal backoff and retry path runs.
+    /// An attempt that never reached EOSE within the config's connect
+    /// deadline: the socket may be open while AUTH or the initial REQs never
+    /// complete, and nothing else watches `Connecting`. Report it as a lost
+    /// socket so the FSM's normal backoff and retry path runs.
     fn check_connect_deadline(&mut self) {
         // A hidden, dozing app is not a slow connect: no time passes against
         // the attempt while it is paused. The resume that brings it back
@@ -1384,11 +1378,12 @@ impl Loop {
         if !self.conn.visible {
             return;
         }
-        if !connect_attempt_expired(self.conn.status, self.connecting_since, self.clock.now_ms()) {
+        let deadline_ms = self.reconnect.connect_deadline_ms;
+        if !connect_attempt_expired(self.conn.status, self.connecting_since, self.clock.now_ms(), deadline_ms) {
             return;
         }
         self.connecting_since = None;
-        log::warn!("connection: no EOSE within {CONNECT_DEADLINE_MS}ms — abandoning the attempt");
+        log::warn!("connection: no EOSE within {deadline_ms}ms — abandoning the attempt");
         let random = Some(self.entropy.unit());
         self.dispatch(ConnectionEvent::SocketClose { random });
     }
@@ -2769,10 +2764,10 @@ fn stale_watchdog_needed(status: ConnectionStatus) -> bool {
     matches!(status, ConnectionStatus::Connecting | ConnectionStatus::Connected)
 }
 
-/// True when a `Connecting` attempt has outlived [`CONNECT_DEADLINE_MS`].
-fn connect_attempt_expired(status: ConnectionStatus, since: Option<u64>, now: u64) -> bool {
+/// True when a `Connecting` attempt has outlived `deadline_ms`.
+fn connect_attempt_expired(status: ConnectionStatus, since: Option<u64>, now: u64, deadline_ms: u64) -> bool {
     status == ConnectionStatus::Connecting
-        && since.is_some_and(|at| now.saturating_sub(at) >= CONNECT_DEADLINE_MS)
+        && since.is_some_and(|at| now.saturating_sub(at) >= deadline_ms)
 }
 
 fn incoming_of(event: &NostrEvent) -> IncomingEvent<'_> {

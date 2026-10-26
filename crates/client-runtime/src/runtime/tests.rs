@@ -57,7 +57,14 @@ fn fast_reconnect() -> ReconnectConfig {
         max_ms: 120,
         jitter_fraction: 0.0,
         heartbeat_stale_after_ms: 150_000,
+        connect_deadline_ms: 45_000,
     }
+}
+
+/// The connect deadline the `fast_reconnect` config uses, for advancing the
+/// fake clock.
+fn connect_deadline() -> u64 {
+    fast_reconnect().connect_deadline_ms
 }
 
 async fn settle() {
@@ -785,7 +792,7 @@ async fn a_connect_that_never_reaches_eose_is_abandoned_and_retried() {
             settle().await;
             assert_eq!(core.connection_status().await.0, ConnectionStatus::Connecting);
 
-            *clock.0.borrow_mut() += CONNECT_DEADLINE_MS + 1_000;
+            *clock.0.borrow_mut() += connect_deadline() + 1_000;
             core.tick();
             settle().await; // fast_reconnect's 40ms retry has fired by now
 
@@ -825,7 +832,7 @@ async fn a_paused_connect_is_not_abandoned_and_a_resume_restarts_its_clock() {
             // time moves beyond the deadline while the app runs nothing.
             core.pause();
             tokio::time::sleep(Duration::from_millis(600)).await;
-            *clock.0.borrow_mut() += CONNECT_DEADLINE_MS + 60_000;
+            *clock.0.borrow_mut() += connect_deadline() + 60_000;
             core.tick();
             settle().await;
             assert_eq!(
@@ -838,7 +845,7 @@ async fn a_paused_connect_is_not_abandoned_and_a_resume_restarts_its_clock() {
             // with a fresh window rather than the abandoned one's leftovers.
             core.resume();
             settle().await;
-            *clock.0.borrow_mut() += CONNECT_DEADLINE_MS - 1_000;
+            *clock.0.borrow_mut() += connect_deadline() - 1_000;
             core.tick();
             settle().await;
             assert_eq!(
