@@ -11,7 +11,9 @@ use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 
 use bridge_core::ports::Store;
 use protocol::crypto::{generate_keypair, keypair_from_secret_hex, Keypair};
@@ -40,7 +42,7 @@ pub fn write_private(path: &Path, content: &[u8]) -> std::io::Result<()> {
     fs::rename(&tmp, path)
 }
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StateDoc {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -49,11 +51,101 @@ struct StateDoc {
     kv: BTreeMap<String, String>,
 }
 
-/// The state file. Clones share one in-memory copy.
+/// One snapshot handed to the state writer. `ack`, when set, is answered once
+/// this snapshot — or a newer one that supersedes it — is on disk.
+struct Job {
+    doc: StateDoc,
+    ack: Option<Sender<Result<(), String>>>,
+}
+
+/// Writes `state.json` on a thread of its own. The bridge runs on one thread,
+/// and every write ends in an fsync that a slow disk (or a Docker Desktop
+/// volume) can hold for tens of milliseconds — time every relay and phone
+/// link would otherwise wait, on every session-list revision, heartbeat
+/// cursor and registry change. Snapshots queue up and coalesce: the thread
+/// writes the newest one it has, and a write of the newest makes every older
+/// one it supersedes unnecessary, so an acknowledgement taken for an older
+/// snapshot is answered by that write.
+struct Writer {
+    tx: Option<Sender<Job>>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl Writer {
+    fn spawn(path: PathBuf) -> Self {
+        let (tx, rx) = mpsc::channel::<Job>();
+        let thread = std::thread::Builder::new()
+            .name("codedeck-state-writer".into())
+            .spawn(move || writer_loop(&path, rx))
+            .map_err(|e| log::error!("[State] cannot start the state writer thread: {e}"))
+            .ok();
+        Self { tx: Some(tx), thread }
+    }
+
+    /// Queue a snapshot. Never touches the file and never blocks the caller on
+    /// it; only the newest snapshot waiting matters.
+    fn queue(&self, doc: StateDoc) -> Result<(), String> {
+        match &self.tx {
+            Some(tx) => tx.send(Job { doc, ack: None }).map_err(|_| "the state writer thread is gone".to_string()),
+            None => Err("the state writer thread is not running".into()),
+        }
+    }
+
+    /// Queue a snapshot and wait until it, or a newer one, is on disk.
+    fn write_now(&self, doc: StateDoc) -> Result<(), String> {
+        let (done, wait) = mpsc::channel();
+        let Some(tx) = &self.tx else { return Err("the state writer thread is not running".into()) };
+        tx.send(Job { doc, ack: Some(done) }).map_err(|_| "the state writer thread is gone".to_string())?;
+        wait.recv().map_err(|_| "the state writer thread is gone".to_string())?
+    }
+}
+
+impl Drop for Writer {
+    fn drop(&mut self) {
+        // Closing the channel ends the writer thread once it has drained and
+        // written what was still queued; joining makes the last snapshot
+        // durable before the process exits.
+        self.tx.take();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+fn write_doc(path: &Path, doc: &StateDoc) -> Result<(), String> {
+    let json = serde_json::to_vec_pretty(doc).expect("state serializes");
+    write_private(path, &json).map_err(|e| format!("cannot write {}: {e}", path.display()))
+}
+
+fn writer_loop(path: &Path, rx: Receiver<Job>) {
+    while let Ok(Job { doc, ack }) = rx.recv() {
+        let mut acks: Vec<Sender<Result<(), String>>> = ack.into_iter().collect();
+        let doc = coalesce(doc, &mut acks, &rx);
+        let result = write_doc(path, &doc);
+        if let Err(e) = &result {
+            log::warn!("[State] {e}");
+        }
+        for ack in acks {
+            let _ = ack.send(result.clone());
+        }
+    }
+}
+
+/// The newest snapshot queued behind `doc`, folding the acknowledgements of
+/// every snapshot it supersedes into `acks`.
+fn coalesce(mut doc: StateDoc, acks: &mut Vec<Sender<Result<(), String>>>, rx: &Receiver<Job>) -> StateDoc {
+    while let Ok(Job { doc: newer, ack }) = rx.try_recv() {
+        doc = newer;
+        acks.extend(ack);
+    }
+    doc
+}
+
+/// The state file. Clones share one in-memory copy and one writer.
 #[derive(Clone)]
 pub struct StateFile {
-    path: PathBuf,
     doc: Arc<Mutex<StateDoc>>,
+    writer: Arc<Writer>,
 }
 
 impl StateFile {
@@ -74,23 +166,27 @@ impl StateFile {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => StateDoc::default(),
             Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
         };
-        Ok(Self { path, doc: Arc::new(Mutex::new(doc)) })
+        let writer = Arc::new(Writer::spawn(path));
+        Ok(Self { doc: Arc::new(Mutex::new(doc)), writer })
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, StateDoc> {
         self.doc.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    fn persist(&self, doc: &StateDoc) -> Result<(), String> {
-        let json = serde_json::to_vec_pretty(doc).expect("state serializes");
-        write_private(&self.path, &json).map_err(|e| format!("cannot write {}: {e}", self.path.display()))
+    /// Wait until everything set so far is on disk. The runtime never needs
+    /// this — its writer flushes on drop — but it makes a reopen deterministic.
+    pub fn flush(&self) -> Result<(), String> {
+        self.writer.write_now(self.lock().clone())
     }
 
     pub fn has_identity(&self) -> bool {
         self.lock().secret_key_hex.is_some()
     }
 
-    /// The bridge identity, created and stored on first use.
+    /// The bridge identity, created and stored on first use. Persisted before
+    /// it is returned: the identity is the bridge, and a pairing made with a
+    /// key that never reached the disk would be lost.
     pub fn identity(&self) -> Result<Keypair, String> {
         let mut doc = self.lock();
         if let Some(hex) = &doc.secret_key_hex {
@@ -98,7 +194,7 @@ impl StateFile {
         }
         let keys = generate_keypair();
         doc.secret_key_hex = Some(keys.secret_hex());
-        self.persist(&doc)?;
+        self.writer.write_now(doc.clone())?;
         Ok(keys)
     }
 
@@ -112,7 +208,7 @@ impl StateFile {
             return Ok(());
         }
         doc.kv.insert(key.to_string(), value.to_string());
-        self.persist(&doc)
+        self.writer.queue(doc.clone())
     }
 }
 
@@ -195,9 +291,57 @@ mod tests {
         assert!(!state.has_identity());
         let keys = state.identity().unwrap();
         state.set("pairedPhones", "[]").unwrap();
+        state.flush().unwrap();
         let again = StateFile::open(dir.path()).unwrap();
         assert_eq!(again.identity().unwrap().pubkey_hex, keys.pubkey_hex);
         assert_eq!(again.get("pairedPhones").as_deref(), Some("[]"));
+    }
+
+    #[test]
+    fn a_burst_of_sets_leaves_the_last_value_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = StateFile::open(dir.path()).unwrap();
+        state.identity().unwrap();
+        for i in 0..100 {
+            state.set("cursor", &i.to_string()).unwrap();
+        }
+        state.flush().unwrap();
+        let again = StateFile::open(dir.path()).unwrap();
+        assert_eq!(again.get("cursor").as_deref(), Some("99"));
+    }
+
+    #[test]
+    fn dropping_the_state_file_flushes_what_was_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = StateFile::open(dir.path()).unwrap();
+        let keys = state.identity().unwrap();
+        state.set("pairedPhones", "[1]").unwrap();
+        drop(state);
+        let again = StateFile::open(dir.path()).unwrap();
+        assert_eq!(again.identity().unwrap().pubkey_hex, keys.pubkey_hex);
+        assert_eq!(again.get("pairedPhones").as_deref(), Some("[1]"));
+    }
+
+    #[test]
+    fn queued_snapshots_coalesce_to_the_newest_and_answer_every_wait() {
+        let (tx, rx) = mpsc::channel::<Job>();
+        let mut acks = Vec::new();
+        let mut waits = Vec::new();
+        for value in ["a", "b", "c"] {
+            let mut doc = StateDoc::default();
+            doc.kv.insert("k".into(), value.into());
+            let (ack, wait) = mpsc::channel();
+            tx.send(Job { doc, ack: Some(ack) }).unwrap();
+            waits.push(wait);
+        }
+        let Job { doc, ack } = rx.recv().unwrap();
+        acks.extend(ack);
+        let doc = coalesce(doc, &mut acks, &rx);
+        // The newest snapshot supersedes the two before it, and one write
+        // answers all three waiters.
+        assert_eq!(doc.kv["k"], "c");
+        assert_eq!(acks.len(), 3);
+        assert!(waits.iter().all(|wait| matches!(wait.try_recv(), Err(mpsc::TryRecvError::Empty))));
     }
 
     #[cfg(unix)]
