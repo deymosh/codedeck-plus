@@ -684,6 +684,14 @@ export class OpenCodeSession implements DriverSession {
       try {
         return { session: await client.session.get({ sessionID: params.resume }), resumeLost: false };
       } catch (err) {
+        // Only "the server does not have this session" is a lost
+        // conversation. A transport failure says nothing about the session:
+        // falling through to a fresh one would discard the transcript for a
+        // server that is merely unreachable, and that server could not
+        // create the new session either.
+        if (!isNotFound(err)) {
+          throw new Error(`OpenCode could not look up session ${params.resume}: ${formatOpenCodeError(err)}`);
+        }
         this.ctx.log(`[opencode] resume ${params.resume} not found server-side (${formatOpenCodeError(err)}) — starting a fresh session instead`);
       }
     }
