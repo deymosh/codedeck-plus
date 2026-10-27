@@ -136,7 +136,7 @@ mod tests {
     use super::*;
 
     // NIP-44 spec test keys (nips/44.md vectors): sec = 0x…01 and 0x…02.
-    const SEC1: &str = "0000000000000000000000000000000000000000000000000000000000000001";
+    use crate::TEST_SECRET_HEX as SEC1;
     const SEC2: &str = "0000000000000000000000000000000000000000000000000000000000000002";
 
     #[test]

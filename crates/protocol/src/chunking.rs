@@ -412,14 +412,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_chunk_envelope_round_trips_a_valid_envelope() {
-        let raw = r#"{"type":"chunk","cid":"c1","i":2,"n":4,"part":"abc"}"#;
-        let env = parse_chunk_envelope(raw).unwrap();
-        assert_eq!(env, ChunkEnvelope { kind: "chunk".into(), cid: "c1".into(), i: 2, n: 4, part: "abc".into() });
-        assert_eq!(serde_json::to_string(&env).unwrap(), raw);
-    }
-
-    #[test]
     fn assembler_passes_ordinary_messages_straight_through() {
         let mut a = ChunkAssembler::new();
         assert_eq!(

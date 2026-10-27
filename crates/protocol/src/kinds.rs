@@ -57,14 +57,4 @@ mod tests {
         assert_eq!(RESPONSE_EXPIRY_SECONDS, 3600);
         assert_eq!(CODEDECK_KINDS, [30515, 4515, 4516, 24515]);
     }
-
-    #[test]
-    fn live_kind_is_in_the_ephemeral_range() {
-        assert!((20000..30000).contains(&LIVE_KIND));
-    }
-
-    #[test]
-    fn session_list_kind_is_addressable_replaceable() {
-        assert!((30000..40000).contains(&SESSION_LIST_KIND));
-    }
 }

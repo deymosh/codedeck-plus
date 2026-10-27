@@ -36,7 +36,7 @@ mod tests {
     use super::*;
     use crate::crypto::keypair_from_secret_hex;
 
-    const SEC: &str = "0000000000000000000000000000000000000000000000000000000000000001";
+    use crate::TEST_SECRET_HEX as SEC;
 
     fn tag<'a>(e: &'a SignedEvent, name: &str) -> Option<&'a str> {
         e.tags

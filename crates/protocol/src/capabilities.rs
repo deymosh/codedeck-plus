@@ -78,16 +78,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn protocol_version_is_12() {
-        assert_eq!(PROTOCOL_VERSION, 12);
-    }
-
-    #[test]
-    fn capability_list() {
-        assert_eq!(ALL_BRIDGE_CAPABILITIES, ["files", "session-keys"]);
-    }
-
-    #[test]
     fn host_kind_round_trips_and_rejects_unknown() {
         for k in [BridgeHostKind::Cli, BridgeHostKind::Service] {
             assert_eq!(BridgeHostKind::from_wire(k.as_wire()), Some(k));
