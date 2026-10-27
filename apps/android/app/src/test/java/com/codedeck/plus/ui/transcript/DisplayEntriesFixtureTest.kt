@@ -1,5 +1,6 @@
 package com.codedeck.plus.ui.transcript
 
+import com.codedeck.plus.ui.DesignFixtures
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -21,14 +22,9 @@ import org.junit.Test
  */
 class DisplayEntriesFixtureTest {
 
-    private fun loadFixture(): String =
-        javaClass.classLoader!!.getResourceAsStream("display_entries_corpus.json")!!
-            .bufferedReader()
-            .readText()
-
     @Test
     fun decodes_the_shared_corpus_fixture_into_every_display_kind() {
-        val root = displayEntriesJson.parseToJsonElement(loadFixture()).jsonObject
+        val root = displayEntriesJson.parseToJsonElement(DesignFixtures.corpusText()).jsonObject
         val entries = parseDisplayEntries(root.getValue("displayEntries").toString())
         val pending = parsePendingPermission(root.getValue("pendingPermission").toString())
 

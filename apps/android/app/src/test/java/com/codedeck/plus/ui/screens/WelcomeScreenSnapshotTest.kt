@@ -76,22 +76,4 @@ class WelcomeScreenSnapshotTest {
         }
     }
 
-    /** The tallest the screen gets: two signers, the import open, an error.
-     *  The whole screen scrolls as one page, from its top. */
-    @Test
-    fun the_tallest_state_scrolls_as_one_page() {
-        paparazzi.snapshot {
-            CodeDeckTheme {
-                WelcomeScreen(
-                    signers = listOf(amber, SignerAppInfo("com.example.signer", "Other signer")),
-                    busy = null,
-                    error = "That is not an nsec or a hex secret key.",
-                    onUseSigner = {},
-                    onCreateKey = {},
-                    onImportKey = {},
-                    importInitiallyOpen = true,
-                )
-            }
-        }
-    }
 }

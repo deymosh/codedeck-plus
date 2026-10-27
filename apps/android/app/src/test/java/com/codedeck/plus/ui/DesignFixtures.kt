@@ -410,18 +410,18 @@ internal object DesignFixtures {
         UniffiQuickPrompt("q2", "Run the tests", "Run the tests and fix what fails."),
     )
 
-    /** The shared transcript corpus (see `DisplayEntriesFixtureTest`): every entry kind. */
-    fun transcript(): List<DisplayEntry> {
-        val raw = javaClass.classLoader!!.getResourceAsStream("display_entries_corpus.json")!!.bufferedReader().readText()
-        return parseDisplayEntries(displayEntriesJson.parseToJsonElement(raw).jsonObject.getValue("displayEntries").toString())
-    }
+    /** The raw shared corpus (see `DisplayEntriesFixtureTest`). */
+    fun corpusText(): String =
+        javaClass.classLoader!!.getResourceAsStream("display_entries_corpus.json")!!.bufferedReader().readText()
+
+    /** The shared transcript corpus: every entry kind. */
+    fun transcript(): List<DisplayEntry> =
+        parseDisplayEntries(displayEntriesJson.parseToJsonElement(corpusText()).jsonObject.getValue("displayEntries").toString())
 
     /** The corpus's activity: a plan under way, a sub-agent at work and a
      *  background command running beside one that failed. */
-    fun activity(): ActivityView {
-        val raw = javaClass.classLoader!!.getResourceAsStream("display_entries_corpus.json")!!.bufferedReader().readText()
-        return parseActivity(displayEntriesJson.parseToJsonElement(raw).jsonObject.getValue("activity").toString())
-    }
+    fun activity(): ActivityView =
+        parseActivity(displayEntriesJson.parseToJsonElement(corpusText()).jsonObject.getValue("activity").toString())
 
     /** A plan document and the cards that wait on the user, unanswered. */
     val waitingCards: List<DisplayEntry> = listOf(
