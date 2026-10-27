@@ -154,6 +154,7 @@ impl Engine {
                 device,
                 label,
                 present_until_ms,
+                presumed: false,
                 watch: WatchState::default(),
                 watch_terminal: WatchState::default(),
             });
@@ -256,7 +257,11 @@ impl Engine {
         let Some(phone) = self.paired.iter_mut().find(|p| p.pubkey_hex == identity) else { return false };
         let holds = |c: &&mut PhoneClient| c.key.pubkey_hex == key || c.previous.as_ref().is_some_and(|k| k.pubkey_hex == key);
         let Some(client) = phone.clients.iter_mut().find(holds) else { return false };
-        let was_present = client.present_until_ms > now;
+        // Presence the bridge only assumed at its restart is not presence:
+        // the client may have been away for days, and what it missed (old
+        // tombstones) only rides a heartbeat of its own.
+        let was_present = client.present_until_ms > now && !client.presumed;
+        client.presumed = false;
         client.present_until_ms = if away { 0 } else { now + PRESENCE_LEASE_SECS * 1000 };
         if away && was_present {
             log::info!("[Engine] A client of {}... is away", short(identity));
@@ -330,6 +335,7 @@ impl Engine {
         let until = self.now() + (PRESENCE_RENEW_SECS + 60) * 1000;
         for client in self.paired.iter_mut().flat_map(|p| p.clients.iter_mut()) {
             client.present_until_ms = until;
+            client.presumed = true;
         }
     }
 

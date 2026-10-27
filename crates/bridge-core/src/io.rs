@@ -110,6 +110,12 @@ pub struct PhoneClient {
     /// misses what happens before it renews.
     #[serde(skip)]
     pub present_until_ms: u64,
+    /// The client is present only because the bridge restarted and assumed
+    /// so: it has not been heard from since. Its first command is then a
+    /// return, answered with a heartbeat of its own, since it may have been
+    /// away long before the restart.
+    #[serde(skip)]
+    pub presumed: bool,
     /// What the client watches for live text. Not stored either: a bridge
     /// that has just restarted does not know, so it sends every session's
     /// live text until the client says again.

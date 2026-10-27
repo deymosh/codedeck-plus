@@ -1370,6 +1370,7 @@ mod tests {
                 device: "3f9a1c0e7b2d4a58".into(),
                 label: Some("Pixel 8a".into()),
                 present_until_ms: 1_700_000_000_000,
+                presumed: false,
                 watch: bridge_core::WatchState::default(),
                 watch_terminal: bridge_core::WatchState::default(),
             }],

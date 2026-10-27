@@ -370,6 +370,21 @@ fn a_restarted_bridge_counts_every_client_present() {
     assert_eq!(heartbeats(&rig.take())[0].len(), 2, "until each renews or says it is away");
 }
 
+/// Presence a restarted bridge only assumed is not presence: the client may
+/// have been away for days before the restart, and what it missed rides a
+/// heartbeat of its own. Its first word after the restart gets one; the next
+/// is an ordinary renewal.
+#[test]
+fn a_clients_first_word_after_a_restart_gets_a_heartbeat_of_its_own() {
+    let mut rig = Rig::new();
+    let key = generate_keypair();
+    grant(&mut rig, &key, NOW_SECS + DAY);
+    let mut rig = rig.restart();
+    rig.take();
+    assert_eq!(heartbeats(&presence(&mut rig, &key, false)), to(&rig.phone, &key));
+    assert!(heartbeats(&presence(&mut rig, &key, false)).is_empty(), "a renewal is not a return");
+}
+
 #[test]
 fn a_sync_goes_to_the_client_that_asked_alone() {
     let mut rig = Rig::new();
