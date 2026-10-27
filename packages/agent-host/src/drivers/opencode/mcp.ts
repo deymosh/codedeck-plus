@@ -106,10 +106,12 @@ export class OpenCodeMcp implements McpManager {
         const client = await this.client();
         for (const add of servers) {
           const config = openCodeServerConfig(add);
-          await this.call(`add ${add.name}`, () => client.mcp.add({ server: add.name, config: config as never }), secrets);
-          // A name another file already holds is replaced there, so the
-          // machine never has two entries for it.
+          // The file is settled first: one that cannot be written (comments)
+          // must stop the add before the running server has taken it. A name
+          // another file already holds is replaced there, so the machine
+          // never has two entries for it.
           const file = (await this.holding(add.name)) ?? (await this.writable());
+          await this.call(`add ${add.name}`, () => client.mcp.add({ server: add.name, config: config as never }), secrets);
           file.servers[add.name] = config;
           await this.write(file);
         }

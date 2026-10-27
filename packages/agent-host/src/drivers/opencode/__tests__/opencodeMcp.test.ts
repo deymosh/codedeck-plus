@@ -102,10 +102,13 @@ describe('OpenCode MCP servers', () => {
     mkdirSync(path.dirname(config.file), { recursive: true });
     const text = '{\n  // mine\n  "mcp": { "fs": { "type": "local", "command": ["x"] } }\n}\n';
     writeFileSync(config.file, text);
-    const mcp = new OpenCodeMcp(async () => fakeOpenCode().client, config.files);
+    const server = fakeOpenCode();
+    const mcp = new OpenCodeMcp(async () => server.client, config.files);
     await expect(mcp.act('remove', [], ['fs'])).rejects.toThrow(/has comments/);
     await expect(mcp.act('add', [{ name: 'gh', setup: { type: 'http', url: 'https://x' } }], [])).rejects.toThrow(/has comments/);
     expect(readFileSync(config.file, 'utf8')).toBe(text);
+    // Refused before the running server took it: the two never disagree.
+    expect(server.client.mcp.add).not.toHaveBeenCalled();
   });
 
   it('creates the global config when the machine has none', async () => {
