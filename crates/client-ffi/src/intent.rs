@@ -854,30 +854,6 @@ mod tests {
     }
 
     #[test]
-    fn send_session_file_maps_field_for_field() {
-        let intent = UniffiIntent::SendSessionFile {
-            machine: "m".into(),
-            session_id: "s".into(),
-            text: "look at this".into(),
-            data: vec![0x89, b'P', b'N', b'G'],
-            filename: "cat.png".into(),
-            mime_type: "image/png".into(),
-        };
-        let mapped: Intent = intent.try_into().unwrap();
-        assert_eq!(
-            mapped,
-            Intent::SendSessionFile(SessionFileSend {
-                machine: "m".into(),
-                session_id: "s".into(),
-                text: "look at this".into(),
-                data: vec![0x89, b'P', b'N', b'G'],
-                filename: "cat.png".into(),
-                mime_type: "image/png".into(),
-            })
-        );
-    }
-
-    #[test]
     fn set_option_parses_the_same_wire_spelling_the_protocol_uses() {
         let intent = UniffiIntent::SetOption {
             machine: "m".into(),
@@ -968,40 +944,6 @@ mod tests {
     }
 
     #[test]
-    fn set_provider_profile_upsert_maps_field_for_field() {
-        let intent = UniffiIntent::SetProviderProfile {
-            machine: "m".into(),
-            profile_id: "kimi-k3".into(),
-            profile: Some(UniffiProviderProfileWrite {
-                agent: "claude-code".into(),
-                label: "Kimi K3".into(),
-                base_url: "https://api.moonshot.ai/anthropic".into(),
-                auth_token: UniffiTristate::Set { value: "sk-1".into() },
-                models: vec![UniffiProviderModelWrite { id: "kimi-k3".into(), label: Some("Kimi K3".into()) }],
-                models_from_provider: true,
-                default_model: Some("kimi-k3".into()),
-            }),
-        };
-        let mapped: Intent = intent.try_into().unwrap();
-        assert_eq!(
-            mapped,
-            Intent::SetProviderProfile {
-                machine: "m".into(),
-                profile_id: "kimi-k3".into(),
-                profile: Some(ProviderProfileWrite {
-                    agent: "claude-code".into(),
-                    label: "Kimi K3".into(),
-                    base_url: "https://api.moonshot.ai/anthropic".into(),
-                    auth_token: Tristate::Set("sk-1".into()),
-                    models: vec![ProviderModel { id: "kimi-k3".into(), label: Some("Kimi K3".into()), ..Default::default() }],
-                    models_from_provider: true,
-                    default_model: Some("kimi-k3".into()),
-                }),
-            }
-        );
-    }
-
-    #[test]
     fn set_provider_profile_none_maps_to_delete() {
         let intent = UniffiIntent::SetProviderProfile {
             machine: "m".into(),
@@ -1045,111 +987,4 @@ mod tests {
         assert_eq!(mapped, Intent::ClearWebSignIn { machine: "m".into() });
     }
 
-    #[test]
-    fn delete_session_maps_field_for_field() {
-        let intent = UniffiIntent::DeleteSession {
-            machine: "m".into(),
-            session_id: "s".into(),
-            label: Some("Deleted the-slug".into()),
-        };
-        let mapped: Intent = intent.try_into().unwrap();
-        assert_eq!(
-            mapped,
-            Intent::DeleteSession {
-                machine: "m".into(),
-                session_id: "s".into(),
-                label: Some("Deleted the-slug".into()),
-            }
-        );
-    }
-
-    #[test]
-    fn undo_delete_maps_to_the_unit_variant() {
-        let mapped: Intent = UniffiIntent::UndoDelete.try_into().unwrap();
-        assert_eq!(mapped, Intent::UndoDelete);
-    }
-
-    #[test]
-    fn dismiss_pending_session_maps_field_for_field() {
-        let intent = UniffiIntent::DismissPendingSession { pending_id: "p1".into() };
-        let mapped: Intent = intent.try_into().unwrap();
-        assert_eq!(mapped, Intent::DismissPendingSession { pending_id: "p1".into() });
-    }
-
-    #[test]
-    fn the_terminal_intents_map_field_for_field() {
-        let mapped: Intent = UniffiIntent::OpenTerminal {
-            machine: "m".into(),
-            session: Some("s1".into()),
-            cols: 100,
-            rows: 40,
-        }
-        .try_into()
-        .unwrap();
-        assert_eq!(
-            mapped,
-            Intent::OpenTerminal { machine: "m".into(), session: Some("s1".into()), cols: 100, rows: 40 }
-        );
-
-        let mapped: Intent = UniffiIntent::AttachTerminal { machine: "m".into(), term: "t1".into() }
-            .try_into()
-            .unwrap();
-        assert_eq!(mapped, Intent::AttachTerminal { machine: "m".into(), term: "t1".into() });
-
-        let mapped: Intent = UniffiIntent::DetachTerminal { machine: "m".into() }.try_into().unwrap();
-        assert_eq!(mapped, Intent::DetachTerminal { machine: "m".into() });
-
-        let mapped: Intent = UniffiIntent::TerminalInput {
-            machine: "m".into(),
-            term: "t1".into(),
-            bytes: b"\x1b[A".to_vec(),
-            alternate_screen: true,
-        }
-        .try_into()
-        .unwrap();
-        assert_eq!(
-            mapped,
-            Intent::TerminalInput {
-                machine: "m".into(),
-                term: "t1".into(),
-                bytes: b"\x1b[A".to_vec(),
-                alternate_screen: true,
-            }
-        );
-
-        let mapped: Intent = UniffiIntent::TerminalPaste {
-            machine: "m".into(),
-            term: "t1".into(),
-            bytes: b"pasted".to_vec(),
-        }
-        .try_into()
-        .unwrap();
-        assert_eq!(
-            mapped,
-            Intent::TerminalPaste { machine: "m".into(), term: "t1".into(), bytes: b"pasted".to_vec() }
-        );
-
-        let mapped: Intent = UniffiIntent::ResizeTerminal {
-            machine: "m".into(),
-            term: "t1".into(),
-            cols: 132,
-            rows: 43,
-        }
-        .try_into()
-        .unwrap();
-        assert_eq!(
-            mapped,
-            Intent::ResizeTerminal { machine: "m".into(), term: "t1".into(), cols: 132, rows: 43 }
-        );
-
-        let mapped: Intent = UniffiIntent::TakeOverTerminal { machine: "m".into(), term: "t1".into() }
-            .try_into()
-            .unwrap();
-        assert_eq!(mapped, Intent::TakeOverTerminal { machine: "m".into(), term: "t1".into() });
-
-        let mapped: Intent = UniffiIntent::CloseTerminal { machine: "m".into(), term: "t1".into() }
-            .try_into()
-            .unwrap();
-        assert_eq!(mapped, Intent::CloseTerminal { machine: "m".into(), term: "t1".into() });
-    }
 }

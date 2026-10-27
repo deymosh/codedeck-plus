@@ -1135,6 +1135,86 @@ mod tests {
         assert!(r.route(R1, closed("s1", "auth-required: x")).is_empty());
     }
 
+    /// The NIP-42 prefix is matched leniently on purpose: relays spell it in
+    /// other cases and with leading whitespace, and treating a refusal as an
+    /// ordinary CLOSED would kill a subscription that AUTH could have
+    /// revived. It must still be the whole prefix, at the start of the
+    /// message.
+    #[test]
+    fn the_auth_required_prefix_is_case_insensitive_but_anchored() {
+        for yes in [
+            "auth-required: sign in",
+            "AUTH-REQUIRED: sign in",
+            "Auth-Required: sign in",
+            "  auth-required: sign in",
+            "\tauth-required:sign in",
+        ] {
+            assert!(is_auth_required(yes), "{yes:?} names the prefix");
+        }
+        for no in [
+            "",
+            "auth-required",
+            "auth-requiredx: not the prefix",
+            "error: auth-required: x",
+            "x auth-required: y",
+            "auth required: x",
+        ] {
+            assert!(!is_auth_required(no), "{no:?} does not name the prefix");
+        }
+    }
+
+    /// A relay that spells the prefix in another case or after a space must
+    /// still park the subscription until our AUTH is accepted, not kill it.
+    #[test]
+    fn a_refusal_spelled_with_other_case_still_waits_for_the_auth_ok() {
+        let mut r = router_with_two_relays();
+        r.open_sub("s1", &relays());
+        r.auth_sent(R1, "auth-1");
+        assert!(r.route(R1, closed("s1", "  AUTH-REQUIRED: sign in first")).is_empty());
+        // Parked on R1's AUTH (which does not hold EOSE back), not killed: R2's
+        // EOSE completes the stored set and no close fires.
+        assert_eq!(
+            r.route(R2, RelayMessage::Eose { sub_id: "s1".into() }),
+            vec![RouterAction::Eose { sub_id: "s1".into() }]
+        );
+        // When the AUTH lands, the REQ goes to R1 again.
+        assert_eq!(
+            r.route(R1, ok("auth-1", true, "")),
+            vec![RouterAction::ResubAfterAuth { relay: R1.into(), sub_id: "s1".into() }]
+        );
+    }
+
+    /// The same leniency applies to the `OK` verdict on a publish: an
+    /// upper-case refusal is re-sent after AUTH acceptance.
+    #[test]
+    fn an_ok_refusal_spelled_with_other_case_waits_for_the_auth_ok() {
+        let mut r = Router::new();
+        r.relay_connected(R1);
+        r.auth_sent(R1, "auth-1");
+        r.open_publish("evt", &[R1.to_string()]);
+        assert!(r.route(R1, ok("evt", false, "AUTH-REQUIRED: sign in")).is_empty());
+        assert_eq!(
+            r.route(R1, ok("auth-1", true, "")),
+            vec![RouterAction::RepublishAfterAuth { relay: R1.into(), event_id: "evt".into() }]
+        );
+    }
+
+    /// A message that merely mentions the phrase is not an auth demand: it
+    /// ends the subscription, which is what the anchoring in the match above
+    /// protects.
+    #[test]
+    fn a_message_that_only_mentions_auth_required_is_final() {
+        let mut r = Router::new();
+        r.relay_connected(R1);
+        r.open_sub("s1", &[R1.to_string()]);
+        r.auth_sent(R1, "auth-1");
+        let actions = r.route(R1, closed("s1", "error: auth-required: not at the start"));
+        assert!(
+            actions.iter().any(|a| matches!(a, RouterAction::SubClosed { .. })),
+            "{actions:?}"
+        );
+    }
+
     #[test]
     fn publish_settles_on_first_acceptance_across_relays() {
         let mut r = router_with_two_relays();

@@ -70,14 +70,6 @@ mod tests {
     }
 
     #[test]
-    fn base64_to_bytes_round_trips_and_handles_empty() {
-        let bytes = [0u8, 1, 2, 250, 255, 128];
-        let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
-        assert_eq!(base64_to_bytes(&b64).unwrap(), bytes);
-        assert!(base64_to_bytes("").unwrap().is_empty());
-    }
-
-    #[test]
     fn blossom_hash_from_url_extracts_the_trailing_segment() {
         let hash = "f".repeat(64);
         assert_eq!(

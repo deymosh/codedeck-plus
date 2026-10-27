@@ -1264,16 +1264,9 @@ pub(crate) fn apply_delete_effects(stores: &mut CoreStores, effects: Vec<DeleteE
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ports::{MemoryKv, MemoryTranscriptStore};
-    use crate::stores::{hydrate, StoresConfig};
 
     async fn stores() -> (CoreStores, PhoneKeys) {
-        let kv = MemoryKv::new();
-        let ts = MemoryTranscriptStore::new();
-        let h = hydrate(&kv, &ts, &StoresConfig::default()).await;
-        let identity = protocol::crypto::generate_keypair();
-        let (ring, _) = client_core::stores::session_key::SessionKeyRing::load(None, 1_000);
-        (h.stores, PhoneKeys::new(&identity.pubkey_hex, &ring.current, None))
+        (crate::test_support::stores().await, crate::test_support::phone_keys())
     }
 
     fn ctx() -> IntentCtx {

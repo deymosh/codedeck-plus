@@ -31,6 +31,9 @@ pub mod signer;
 pub mod stores;
 pub mod view;
 
+#[cfg(test)]
+mod test_support;
+
 /// The relay transport (WebSocket + SOCKS5 driver, frame codec, publish
 /// verdicts), shared with other runtimes as the `nostr-transport` crate.
 pub use nostr_transport as transport;

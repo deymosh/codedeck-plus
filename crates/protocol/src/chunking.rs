@@ -354,8 +354,24 @@ mod tests {
     #[test]
     fn message_right_at_the_threshold_goes_out_as_one_frame() {
         let json = big_json(NIP44_SAFE_PLAINTEXT_BYTES, "x");
-        assert!(json.len() <= NIP44_SAFE_PLAINTEXT_BYTES);
+        assert_eq!(json.len(), NIP44_SAFE_PLAINTEXT_BYTES);
         assert_eq!(frame_encoded_message(&json, cid_gen("cid")), vec![json.clone()]);
+    }
+
+    /// One byte past the safe plaintext size is one byte too many: the
+    /// message must split, every fragment must fit the cap, and the parts must
+    /// still reproduce it exactly.
+    #[test]
+    fn one_byte_past_the_threshold_splits_into_frames_within_the_cap() {
+        let json = big_json(NIP44_SAFE_PLAINTEXT_BYTES + 1, "x");
+        assert_eq!(json.len(), NIP44_SAFE_PLAINTEXT_BYTES + 1);
+        let frames = frame_encoded_message(&json, cid_gen("over"));
+        assert!(frames.len() >= 2, "a {} byte message went out as one frame", json.len());
+        for (i, f) in frames.iter().enumerate() {
+            assert!(utf8_size(f) <= NIP44_SAFE_PLAINTEXT_BYTES, "frame {i} is {} bytes", utf8_size(f));
+        }
+        let rebuilt: String = frames.iter().map(|f| parse_chunk_envelope(f).unwrap().part).collect();
+        assert_eq!(rebuilt, json);
     }
 
     #[test]
@@ -409,14 +425,6 @@ mod tests {
         assert!(parse_chunk_envelope("[]").is_none());
         assert!(parse_chunk_envelope(r#"{"type":"chunk","cid":"c","i":0}"#).is_none()); // no n/part
         assert!(parse_chunk_envelope(r#"{"type":"chunk","cid":"c","i":0,"n":1,"part":"x"}"#).is_none()); // n<2
-    }
-
-    #[test]
-    fn parse_chunk_envelope_round_trips_a_valid_envelope() {
-        let raw = r#"{"type":"chunk","cid":"c1","i":2,"n":4,"part":"abc"}"#;
-        let env = parse_chunk_envelope(raw).unwrap();
-        assert_eq!(env, ChunkEnvelope { kind: "chunk".into(), cid: "c1".into(), i: 2, n: 4, part: "abc".into() });
-        assert_eq!(serde_json::to_string(&env).unwrap(), raw);
     }
 
     #[test]
@@ -479,6 +487,25 @@ mod tests {
             AssemblerResult::Invalid { error } => assert!(error.contains("out of range")),
             other => panic!("expected Invalid, got {other:?}"),
         }
+    }
+
+    /// A second fragment for a cid that claims a different fragment count is a
+    /// corrupt sender: the group is abandoned and started afresh, never merged
+    /// into a message made of both senders' parts.
+    #[test]
+    fn assembler_abandons_a_group_when_the_fragment_count_changes() {
+        let mut a = ChunkAssembler::new();
+        assert_eq!(a.offer(&encode_envelope("c", 0, 2, "old-A"), 0), AssemblerResult::Buffered);
+        // Same cid, different n: the old group is dropped and this starts a new one.
+        assert_eq!(a.offer(&encode_envelope("c", 0, 3, "new-A"), 0), AssemblerResult::Buffered);
+        assert_eq!(a.open_count(), 1, "the abandoned group must be gone, not kept beside the new one");
+        assert_eq!(a.offer(&encode_envelope("c", 1, 3, "new-B"), 0), AssemblerResult::Buffered);
+        assert_eq!(
+            a.offer(&encode_envelope("c", 2, 3, "new-C"), 0),
+            AssemblerResult::Assembled { json: "new-Anew-Bnew-C".into() },
+            "the abandoned group's parts must not leak into the assembled message"
+        );
+        assert_eq!(a.open_count(), 0);
     }
 
     #[test]

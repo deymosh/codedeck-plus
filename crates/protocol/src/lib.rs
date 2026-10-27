@@ -33,3 +33,11 @@ pub use codec::{
     decode_bridge_to_phone, decode_phone_to_bridge, encode_bridge_to_phone, encode_phone_to_bridge,
     DecodeResult,
 };
+
+/// The fixed secret key this crate's tests derive identities from (NIP-44's
+/// own first vector). Derivation from it is deterministic, so a test computes
+/// the expected key or signature from this one value instead of hard-coding
+/// them a second time.
+#[cfg(test)]
+pub(crate) const TEST_SECRET_HEX: &str =
+    "0000000000000000000000000000000000000000000000000000000000000001";

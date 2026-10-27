@@ -20,15 +20,3 @@ pub fn protocol_defaults() -> ProtocolDefaults {
         provider_base_url_error: PROVIDER_BASE_URL_ERROR.to_string(),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn defaults_carry_the_relay_lists_and_error_text() {
-        let d = protocol_defaults();
-        assert_eq!(d.default_relays.len(), 3);
-        assert_eq!(d.provider_base_url_error, PROVIDER_BASE_URL_ERROR);
-    }
-}

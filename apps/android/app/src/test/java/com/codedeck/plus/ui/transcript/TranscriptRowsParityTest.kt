@@ -23,7 +23,6 @@ import com.codedeck.plus.ui.transcript.rows.PermissionCard
 import com.codedeck.plus.ui.transcript.rows.PlanApprovalCard
 import com.codedeck.plus.ui.transcript.rows.QuestionCard
 import com.codedeck.plus.ui.transcript.rows.ToolGroupRow
-import kotlinx.serialization.json.jsonObject
 import org.junit.Rule
 import org.junit.Test
 import androidx.compose.runtime.CompositionLocalProvider
@@ -58,13 +57,6 @@ class TranscriptRowsParityTest {
                 Column(Modifier.background(Tokens.Bg).fillMaxWidth().padding(16.dp)) { content() }
             }
         }
-    }
-
-    private fun corpus(): List<DisplayEntry> {
-        val root = displayEntriesJson.parseToJsonElement(
-            javaClass.classLoader!!.getResourceAsStream("display_entries_corpus.json")!!.bufferedReader().readText(),
-        ).jsonObject
-        return parseDisplayEntries(root.getValue("displayEntries").toString())
     }
 
     /** Lone calls and the working line as each agent's look draws them: the
@@ -102,7 +94,7 @@ class TranscriptRowsParityTest {
 
     @Test
     fun tool_group_rows() {
-        val groups = corpus().filterIsInstance<DisplayEntry.ToolGroup>()
+        val groups = DesignFixtures.transcript().filterIsInstance<DisplayEntry.ToolGroup>()
         val work = editGroup()
         // A lone running command, as the transcript shows it mid-turn.
         val lone = work.copy(
@@ -120,7 +112,7 @@ class TranscriptRowsParityTest {
                     ActivityRow(null, turn = 0, onOpen = null)
                     // A sub-agent at work, and background tasks as rows.
                     ActivityRow(agentGroup().steps[0] as ToolStep.Call, turn = 0, onOpen = {})
-                    corpus().filterIsInstance<DisplayEntry.Task>().forEach { TaskRow(it) }
+                    DesignFixtures.transcript().filterIsInstance<DisplayEntry.Task>().forEach { TaskRow(it) }
                     TaskRow(DisplayEntry.Task(0, "bg-2", "shell", "npm run dev", "stopped"))
                 }
             }
@@ -138,7 +130,7 @@ class TranscriptRowsParityTest {
 
     @Test
     fun tool_sheet_timeline() {
-        val work = corpus().filterIsInstance<DisplayEntry.ToolGroup>()[1]
+        val work = DesignFixtures.transcript().filterIsInstance<DisplayEntry.ToolGroup>()[1]
         paparazzi.snapshot { Sheet { ToolSheetContent(work, live = false, openPath = emptyList(), onOpenPath = {}, onClose = {}) } }
     }
 
@@ -156,12 +148,12 @@ class TranscriptRowsParityTest {
 
     /** The group with an edit and a failed command. */
     private fun editGroup(): DisplayEntry.ToolGroup =
-        corpus().filterIsInstance<DisplayEntry.ToolGroup>().first { it.added > 0 }
+        DesignFixtures.transcript().filterIsInstance<DisplayEntry.ToolGroup>().first { it.added > 0 }
 
     /** The group holding the corpus's sub-agent, checklist and background
      *  command. */
     private fun agentGroup(): DisplayEntry.ToolGroup =
-        corpus().filterIsInstance<DisplayEntry.ToolGroup>().first { g -> g.steps.any { (it as? ToolStep.Call)?.toolKind == "agent" } }
+        DesignFixtures.transcript().filterIsInstance<DisplayEntry.ToolGroup>().first { g -> g.steps.any { (it as? ToolStep.Call)?.toolKind == "agent" } }
 
     @Test
     fun tool_sheet_agent_page() {
@@ -192,23 +184,16 @@ class TranscriptRowsParityTest {
         paparazzi.snapshot { Sheet { ToolSheetContent(group, live = false, openPath = listOf(group.steps[1].seq), onOpenPath = {}, onClose = {}) } }
     }
 
-    private fun activity(): ActivityView {
-        val root = displayEntriesJson.parseToJsonElement(
-            javaClass.classLoader!!.getResourceAsStream("display_entries_corpus.json")!!.bufferedReader().readText(),
-        ).jsonObject
-        return parseActivity(root.getValue("activity").toString())
-    }
-
     @Test
     fun activity_sheet() {
         paparazzi.snapshot {
-            Sheet { ActivitySheetContent(activity(), live = false, canStop = true, onOpenAgent = {}, onStopTask = {}, onClose = {}) }
+            Sheet { ActivitySheetContent(DesignFixtures.activity(), live = false, canStop = true, onOpenAgent = {}, onStopTask = {}, onClose = {}) }
         }
     }
 
     @Test
     fun activity_bar() {
-        val a = activity()
+        val a = DesignFixtures.activity()
         paparazzi.snapshot {
             Dark {
                 Column {
@@ -222,13 +207,13 @@ class TranscriptRowsParityTest {
 
     @Test
     fun diff_card() {
-        val diff = corpus().filterIsInstance<DisplayEntry.Diff>().first()
+        val diff = DesignFixtures.transcript().filterIsInstance<DisplayEntry.Diff>().first()
         paparazzi.snapshot { Dark { DiffRow(diff.path, diff.lines, diff.truncated, expanded = false, onToggle = {}) } }
     }
 
     @Test
     fun permission_card_pending() {
-        val permission = corpus().filterIsInstance<DisplayEntry.PermissionRequest>().last()
+        val permission = DesignFixtures.transcript().filterIsInstance<DisplayEntry.PermissionRequest>().last()
         paparazzi.snapshot {
             Dark { PermissionCard(permission, "machine", "session", responded = false, actions = {}) }
         }
@@ -236,7 +221,7 @@ class TranscriptRowsParityTest {
 
     @Test
     fun plan_approval_card_pending() {
-        val plan = corpus().filterIsInstance<DisplayEntry.PlanApproval>().first()
+        val plan = DesignFixtures.transcript().filterIsInstance<DisplayEntry.PlanApproval>().first()
         paparazzi.snapshot {
             Dark { PlanApprovalCard(plan, "machine", "session", responded = false, choice = null, actions = {}) }
         }
@@ -244,7 +229,7 @@ class TranscriptRowsParityTest {
 
     @Test
     fun question_card_pending() {
-        val question = corpus().filterIsInstance<DisplayEntry.Question>().first()
+        val question = DesignFixtures.transcript().filterIsInstance<DisplayEntry.Question>().first()
         paparazzi.snapshot {
             Dark { QuestionCard(question, "machine", "session", respondedCards = emptySet(), actions = {}) }
         }
@@ -252,7 +237,7 @@ class TranscriptRowsParityTest {
 
     @Test
     fun question_group_card_pending() {
-        val group = corpus().filterIsInstance<DisplayEntry.Question>().first { it.questions.size > 1 }
+        val group = DesignFixtures.transcript().filterIsInstance<DisplayEntry.Question>().first { it.questions.size > 1 }
         paparazzi.snapshot {
             Dark { QuestionCard(group, "machine", "session", respondedCards = emptySet(), actions = {}) }
         }

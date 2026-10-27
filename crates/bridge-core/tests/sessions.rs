@@ -165,21 +165,18 @@ fn an_agent_that_stops_before_ready_fails_the_session() {
 }
 
 #[test]
-fn an_unknown_mode_or_effort_falls_back_to_the_agent_default() {
+fn a_session_without_a_known_mode_or_effort_records_the_agent_defaults() {
     let mut rig = Rig::new();
     rig.host_up();
-    rig.send(json!({"v":12,"type":"create-session","agent":"alpha","mode":"warp","effort":"max"}));
-    let (_, p) = rig.start_request();
-    assert_eq!((p.mode.as_deref(), p.effort.as_deref()), (Some("ask"), Some("high")));
-}
-
-#[test]
-fn a_session_without_mode_or_effort_records_the_agent_defaults() {
-    let mut rig = Rig::new();
-    rig.host_up();
-    rig.send(json!({"v":12,"type":"create-session","agent":"alpha"}));
-    let (_, p) = rig.start_request();
-    assert_eq!((p.mode.as_deref(), p.effort.as_deref()), (Some("ask"), Some("high")));
+    // Neither given, and values the catalog does not know: both end at the
+    // agent's own defaults rather than being forwarded.
+    for extra in [json!({}), json!({"mode": "warp", "effort": "max"})] {
+        let mut msg = json!({"v":12,"type":"create-session","agent":"alpha"});
+        msg.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        rig.send(msg);
+        let (_, p) = rig.start_request();
+        assert_eq!((p.mode.as_deref(), p.effort.as_deref()), (Some("ask"), Some("high")));
+    }
     // An agent with no default effort leaves it unset.
     rig.send(json!({"v":12,"type":"create-session","agent":"beta"}));
     let (_, p) = rig.start_request();

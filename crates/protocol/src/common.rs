@@ -1562,16 +1562,6 @@ mod tests {
     }
 
     #[test]
-    fn enum_wire_values() {
-        assert_eq!(serde_json::to_string(&SessionState::WaitingPermission).unwrap(), r#""waiting_permission""#);
-        assert_eq!(serde_json::to_string(&DiffLineType::Del).unwrap(), r#""del""#);
-        assert_eq!(serde_json::to_string(&ToolKind::SwitchMode).unwrap(), r#""switch_mode""#);
-        assert_eq!(serde_json::to_string(&PermissionOptionKind::AllowAlways).unwrap(), r#""allow_always""#);
-        assert_eq!(serde_json::to_string(&SessionOption::Effort).unwrap(), r#""effort""#);
-        assert_eq!(serde_json::to_string(&NoticeKind::AuthError).unwrap(), r#""auth_error""#);
-    }
-
-    #[test]
     fn an_open_vocabulary_takes_an_unknown_value_as_its_catch_all() {
         let de = |s: &str| serde_json::from_str::<SessionState>(s).unwrap();
         assert_eq!(de(r#""paused""#), SessionState::Unknown);

@@ -10,10 +10,36 @@ use std::time::Duration;
 
 use tokio::process::Command;
 
+use crate::config::Config;
+
 const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub fn http_client() -> reqwest::Client {
     reqwest::Client::builder().timeout(HTTP_TIMEOUT).build().expect("the HTTP client builds")
+}
+
+/// The two transports that carry Nostr traffic — relay connections and
+/// HTTP to a Blossom server — built from one config value. They are built
+/// together because Tor is all-or-nothing: when the owner set a proxy, a
+/// relay dial or a Blossom request that skipped it would tell a Nostr server
+/// where the bridge is, which is exactly what the proxy is there to prevent.
+/// Both take their proxy from here, so neither path can drift to a direct
+/// connection while one is configured.
+pub struct NostrTransports {
+    pub relays: Vec<String>,
+    /// `host:port`, for the relay transport.
+    pub proxy: Option<String>,
+    pub http: NostrHttp,
+}
+
+impl NostrTransports {
+    /// A proxy the HTTP client cannot build is an error, never a silent
+    /// fallback to a direct connection.
+    pub fn from_config(config: &Config) -> Result<Self, String> {
+        let proxy = config.tor_proxy.clone();
+        let http = NostrHttp::new(proxy.as_deref())?;
+        Ok(Self { relays: config.relays.clone(), proxy, http })
+    }
 }
 
 /// HTTP to Nostr servers. With a Tor proxy set it all goes through the
@@ -101,11 +127,5 @@ mod tests {
         assert!(!is_onion_http("https://abcdef.onion/x"));
         assert!(!is_onion_http("http://.onion/x"));
         assert!(!is_onion_http("http://abcdef.onion.example.com/x"));
-    }
-
-    #[tokio::test]
-    async fn git_head_is_none_outside_a_repository() {
-        let dir = tempfile::tempdir().unwrap();
-        assert_eq!(git_head(dir.path()).await, None);
     }
 }

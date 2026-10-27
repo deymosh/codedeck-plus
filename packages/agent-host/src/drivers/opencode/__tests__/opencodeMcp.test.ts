@@ -1,44 +1,9 @@
-import { describe, expect, it, vi } from 'vitest';
-import type { OpenCodeClient } from '@opencode/client';
+import { describe, expect, it } from 'vitest';
 import { OpenCodeMcp, openCodeServerConfig, openCodeServers, openCodeSessionMcp, toggleOpenCodeMcp } from '../mcp';
 import { redactUrl } from '../../../sdk/mcp';
+import { fakeOpenCode } from './fakeServer';
 
-type Entry = { name: string; status: { status: string; error?: string } };
-
-/** A server that holds its MCP servers as v2 does: the config is where a
- *  server's own settings live, the MCP API is where its lifecycle does. */
-function server(config: Record<string, Record<string, unknown>>, status: Entry[] = []) {
-  const servers = [...status];
-  const client = {
-    config: {
-      get: vi.fn(async () => [{ type: 'document', info: { mcp: config } }]),
-    },
-    mcp: {
-      list: vi.fn(async () => ({ location: { directory: '/w' }, data: servers })),
-      add: vi.fn(async ({ server: name, config: entry }: { server: string; config: Record<string, unknown> }) => {
-        config[name] = entry;
-        servers.push({ name, status: { status: 'connected' } });
-      }),
-      remove: vi.fn(async ({ server: name }: { server: string }) => {
-        delete config[name];
-        const at = servers.findIndex((s) => s.name === name);
-        if (at >= 0) servers.splice(at, 1);
-      }),
-      connect: vi.fn(async ({ server: name }: { server: string }) => {
-        const found = servers.find((s) => s.name === name);
-        if (found) found.status = { status: 'connected' };
-        if (config[name]) delete config[name]!.disabled;
-      }),
-      disconnect: vi.fn(async ({ server: name }: { server: string }) => {
-        const found = servers.find((s) => s.name === name);
-        if (found) found.status = { status: 'disabled' };
-        // Switching a server off leaves it configured but disabled.
-        if (config[name]) config[name] = { ...config[name], disabled: true };
-      }),
-    },
-  } as unknown as OpenCodeClient;
-  return { client, config, servers };
-}
+const at = { location: { directory: '/w' } };
 
 describe('OpenCode MCP servers', () => {
   it('are listed without a secret: the program, the redacted URL, the key names', () => {
@@ -54,56 +19,52 @@ describe('OpenCode MCP servers', () => {
   });
 
   it('adds a server through the MCP API, whole', async () => {
-    const { client, config } = server({});
-    const mcp = new OpenCodeMcp(async () => client);
+    const server = fakeOpenCode();
+    const mcp = new OpenCodeMcp(async () => server.client);
     const state = await mcp.act('add', [{ name: 'gh', setup: { type: 'http', url: 'https://new/mcp' } }], []);
-    expect(config.gh).toEqual({ type: 'remote', url: 'https://new/mcp' });
+    // The API keeps it in the running inventory; the config document is not
+    // where 2.1.4 records an add.
+    expect(server.state.mcpConfig).toEqual({});
+    expect(server.state.mcp.get('gh')).toMatchObject({ status: 'connected' });
     expect(state.servers.map((s) => s.name)).toEqual(['gh']);
 
     await mcp.act('add', [{ name: 'fs', setup: { type: 'stdio', command: 'uvx', args: ['srv'], env: { K: 'v' } } }], []);
-    expect(config.fs).toEqual({ type: 'local', command: ['uvx', 'srv'], environment: { K: 'v' } });
+    expect((await mcp.list()).servers.find((s) => s.name === 'fs')).toMatchObject({
+      transport: 'stdio',
+      target: 'uvx',
+      envKeys: ['K'],
+    });
   });
 
   it('switches a server off and on through the MCP API', async () => {
-    const { client, servers } = server(
-      { fs: { type: 'local', command: ['uvx', 'srv'] } },
-      [{ name: 'fs', status: { status: 'connected' } }],
-    );
-    const mcp = new OpenCodeMcp(async () => client);
+    const server = fakeOpenCode({ mcpConfig: { fs: { type: 'local', command: ['uvx', 'srv'] } } });
+    const mcp = new OpenCodeMcp(async () => server.client);
     expect((await mcp.act('disable', [], ['fs'])).servers[0]!.enabled).toBe(false);
-    expect(servers[0]!.status.status).toBe('disabled');
+    expect(server.state.mcp.get('fs')!.status).toBe('disabled');
     expect((await mcp.act('enable', [], ['fs'])).servers[0]!.enabled).toBe(true);
+    expect(server.state.mcp.get('fs')!.status).toBe('connected');
     await expect(mcp.act('enable', [], ['nope'])).rejects.toThrow(/no MCP server 'nope'/);
     await expect(mcp.act('remove', [], ['nope'])).rejects.toThrow(/no MCP server 'nope'/);
   });
 
-  it('removes a server through the MCP API', async () => {
-    const { client, config } = server(
-      { gh: { type: 'remote', url: 'https://x' }, fs: { type: 'local', command: ['x'] } },
-      [{ name: 'gh', status: { status: 'connected' } }, { name: 'fs', status: { status: 'connected' } }],
-    );
-    const mcp = new OpenCodeMcp(async () => client);
+  it('removes a server through the MCP API, from the running inventory', async () => {
+    const server = fakeOpenCode({ mcpConfig: { gh: { type: 'remote', url: 'https://x' }, fs: { type: 'local', command: ['x'] } } });
+    const mcp = new OpenCodeMcp(async () => server.client);
     expect((await mcp.act('remove', [], ['gh'])).servers.map((s) => s.name)).toEqual(['fs']);
-    expect(Object.keys(config)).toEqual(['fs']);
-    expect(client.mcp.remove).toHaveBeenCalledWith({ server: 'gh' });
+    expect(server.client.mcp.remove).toHaveBeenCalledWith({ server: 'gh' });
+    // The config file keeps the entry; a new server would start with it.
+    expect(server.state.mcpConfig).toHaveProperty('gh');
   });
 
   it('reports and switches a session project-wide', async () => {
-    const client = {
-      mcp: {
-        list: vi.fn(async () => ({
-          location: { directory: '/w' },
-          data: [
-            { name: 'gh', status: { status: 'connected' } },
-            { name: 'lin', status: { status: 'needs_auth', error: 'login' } },
-            { name: 'fs', status: { status: 'failed', error: 'exit 1' } },
-          ],
-        })),
-        connect: vi.fn(async () => {}),
-        disconnect: vi.fn(async () => {}),
-      },
-    } as unknown as OpenCodeClient;
-    expect(await openCodeSessionMcp(client, '/w')).toEqual({
+    const server = fakeOpenCode({
+      mcpServers: [
+        { name: 'gh', status: 'connected' },
+        { name: 'lin', status: 'needs_auth', error: 'login' },
+        { name: 'fs', status: 'failed', error: 'exit 1' },
+      ],
+    });
+    expect(await openCodeSessionMcp(server.client, '/w')).toEqual({
       servers: [
         { name: 'fs', status: 'failed', error: 'exit 1' },
         { name: 'gh', status: 'connected' },
@@ -112,8 +73,8 @@ describe('OpenCode MCP servers', () => {
       toggles: true,
       projectWide: true,
     });
-    await toggleOpenCodeMcp(client, '/w', 'gh', false);
-    expect(client.mcp.disconnect).toHaveBeenCalledWith({ server: 'gh', location: { directory: '/w' } });
+    await toggleOpenCodeMcp(server.client, '/w', 'gh', false);
+    expect(server.client.mcp.disconnect).toHaveBeenCalledWith({ server: 'gh', ...at });
   });
 
   it('writes remote servers as OpenCode remote, stdio as local', () => {

@@ -4,6 +4,7 @@ import { createServer, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { SESSION_REQUEST_TIMEOUT_MS } from '../../../acp/session';
 import { recordingContext, type RecordingContext } from '../../../sdk/__tests__/context';
 import type { StartSession } from '../../../sdk/types';
 import type { DriverSession } from '../../../sdk/driver';
@@ -76,7 +77,7 @@ function withDriver(
   options: { idleCloseMs?: number; env?: NodeJS.ProcessEnv; dshPath?: string; log?: (line: string) => void } = {},
 ): Harness {
   const home = harnessHome();
-  const harness = new FakeAgent();
+  const harness = new FakeAgent('deepseek');
   harness.options = configOptions();
   const spawns: Harness['spawns'] = [];
   const logs: string[] = [];
@@ -531,6 +532,46 @@ describe('DeepSeekSession lifecycle', () => {
     await ready.session.end();
     expect(ready.harness.closed).toEqual(['s1']);
     await vi.waitFor(() => expect(ready.harness.child.killed).toContain('SIGTERM'));
+  });
+
+  it('closes the session the harness creates after the start request timed out', async () => {
+    const ready = withDriver();
+    // A live session keeps the shared process (and connection) up while the
+    // next start times out.
+    await started(ready);
+    ready.harness.holdNextNewSession = true;
+    vi.useFakeTimers();
+    try {
+      const ctx = recordingContext();
+      ready.driver.startSession(start({ sessionId: 'b2' }), ctx);
+      await vi.advanceTimersByTimeAsync(SESSION_REQUEST_TIMEOUT_MS);
+      expect(ctx.events.find((event) => event.type === 'ended')).toMatchObject({
+        error: expect.stringMatching(/session\/new did not answer/),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // The harness advertises `session/close`: the session it finally
+    // answered with is not this driver's to keep, so it is closed rather
+    // than orphaned.
+    ready.harness.answerNewSession();
+    await vi.waitFor(() => expect(ready.harness.closed).toEqual(['s2']));
+  });
+
+  it('returns from end() when the harness never answers session/close', async () => {
+    const ready = withDriver();
+    await started(ready);
+    ready.harness.ignoreClose = true;
+    vi.useFakeTimers();
+    try {
+      const ending = ready.session.end();
+      await vi.advanceTimersByTimeAsync(SESSION_REQUEST_TIMEOUT_MS);
+      await ending;
+      expect(ready.harness.closed).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('closes sessions ended together one by one, and the shared process only after the last', async () => {

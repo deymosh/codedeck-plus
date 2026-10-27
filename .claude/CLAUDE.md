@@ -70,7 +70,8 @@ the vendored toolchain — the caller does not choose, and does not need to know
 ./codedeck doctor
 
 # Workspace verification, in throwaway containers (nothing installed locally
-# is required). A change is not done until `check` is green.
+# is required). A change is not done until `check` is green — plus, for a
+# change the app sees, `./codedeck android test verifyPaparazziDebug lintDebug`.
 ./codedeck check         # agent host typecheck + test, cargo clippy + test (every crate)
 ./codedeck typecheck     # typecheck / clippy only
 ./codedeck test          # tests only
@@ -134,6 +135,30 @@ credentials (`--env` is for the agent's own paths, not its keys).
    chooses its own tool arguments and writes prose. Everything else on
    claude-code, deepseek-harness or qwen-code spends the account. The
    commands for each tier are in the verify-changes skill.
+
+### Tests
+
+What a test is for here: catching the regression an agent would otherwise
+ship. So:
+
+- **Behaviour through the public surface** (a command in, effects or wire
+  frames out) — never a restated constant, a serde derive, a library round
+  trip or a private counter.
+- **A fake must match the real agent.** Every fake of an agent or server
+  (OpenCode client, ACP agent, Claude SDK) states only behaviour checked
+  against the real binary (`./codedeck live <agent> --fake-model`); one
+  shared fake per agent, and a divergence found live becomes a test case.
+- **Each absolute constraint has a test that fails when it is broken** (Tor
+  routing, secrets out of logs and the wire, total decoders). A new test is
+  proven by breaking the code it guards once and watching it fail.
+- **Deterministic:** injected clocks or paused tokio time, waits on events;
+  a sleep is a timeout guard, never the thing that orders a test.
+- A bug fix starts with the test that reproduces it.
+
+Narrowest run per area: `dev cargo test -p <crate> [name]`, `dev vitest run
+<file> [-t name]`, `android test --tests <Class>`, and the corpora
+(`crates/protocol/fixtures/corpus.json`, the display corpus) for wire and
+transcript shape.
 
 ### CI and releases
 

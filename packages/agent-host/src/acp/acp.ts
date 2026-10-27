@@ -84,6 +84,11 @@ export class AcpClient {
   private readonly notifications = new Map<string, (params: never) => void>();
   private readonly requests = new Map<string, (params: never) => Promise<unknown>>();
   private unknownRequest: ((method: string, params: unknown) => Promise<unknown> | undefined) | undefined;
+  /** Agent requests being handled, and who waits for the last answer to be
+   *  written: a session ending settles its pending asks and must not let the
+   *  connection drop before their replies are on the wire. */
+  private inFlight = 0;
+  private readonly idleWaiters: Array<() => void> = [];
   private nextId = 1;
   private buffer = '';
   /** A character whose bytes straddle two chunks waits in here, so a
@@ -116,6 +121,23 @@ export class AcpClient {
   /** Whether the connection can still carry messages. */
   get isOpen(): boolean {
     return this.ending === undefined;
+  }
+
+  /**
+   * Settles once every request the agent has sent so far has been answered
+   * (or the connection has closed). A session ending waits on this after
+   * settling its pending asks: the reply to an ask is written a few microtasks
+   * after the decision, and tearing the connection down first would leave the
+   * agent with a dropped request instead of the cancellation the session
+   * decided.
+   */
+  whenIdle(): Promise<void> {
+    if (this.ending !== undefined || this.inFlight === 0) return Promise.resolve();
+    return new Promise((resolve) => this.idleWaiters.push(resolve));
+  }
+
+  private releaseIdle(): void {
+    for (const resolve of this.idleWaiters.splice(0)) resolve();
   }
 
   /** Send one request and wait for its reply. */
@@ -187,6 +209,7 @@ export class AcpClient {
       pending.reject(reason);
     }
     this.pending.clear();
+    this.releaseIdle();
     this.settleDone(closed);
   }
 
@@ -264,6 +287,16 @@ export class AcpClient {
   /** Answer one agent request. A handler that throws becomes a JSON-RPC
    *  error, so the agent is never left waiting on a reply. */
   private async answer(id: WireId, method: string, params: unknown): Promise<void> {
+    this.inFlight++;
+    try {
+      await this.answerNow(id, method, params);
+    } finally {
+      this.inFlight--;
+      if (this.inFlight === 0) this.releaseIdle();
+    }
+  }
+
+  private async answerNow(id: WireId, method: string, params: unknown): Promise<void> {
     const handler = this.requests.get(method);
     if (!handler) {
       // An agent's own extension method: the driver's fallback gets it, and

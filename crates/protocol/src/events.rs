@@ -715,7 +715,6 @@ pub enum BridgeToPhone {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::EntryBody;
     use serde_json::json;
 
     fn rt(v: &serde_json::Value) -> BridgeToPhone {
@@ -727,9 +726,6 @@ mod tests {
 
     fn session() -> serde_json::Value {
         json!({"id":"s","agent":"claude-code","slug":"sl","cwd":"/w","lastActivity":"t","lineCount":1,"title":null,"project":"p","state":"running","seqHigh":10})
-    }
-    fn entry() -> serde_json::Value {
-        json!({"timestamp":"t","entryType":"text","role":"agent","text":"hello"})
     }
     fn agent() -> serde_json::Value {
         json!({
@@ -778,29 +774,9 @@ mod tests {
     }
 
     #[test]
-    fn every_variant_decodes_from_a_representative_fixture() {
-        rt(&json!({"v":12,"type":"output","sessionId":"s","seq":7,"entries":[entry(),entry()]}));
-        rt(&json!({"v":12,"type":"input-ack","sessionId":"s","inputId":"i"}));
-        rt(&json!({"v":12,"type":"sync-begin","sessionId":"s","syncId":"y","seqHigh":100,"ranges":[[1,50]]}));
-        rt(&json!({"v":12,"type":"sync-chunk","sessionId":"s","syncId":"y","range":[1,2],"entries":[{"seq":1,"entry":entry()},{"seq":2,"entry":entry()}]}));
-        rt(&json!({"v":12,"type":"sync-end","sessionId":"s","syncId":"y","deliveredRanges":[[1,50]]}));
-        rt(&json!({"v":12,"type":"session-pending","pendingId":"p","machine":"m","createdAt":"t"}));
-        rt(&json!({"v":12,"type":"session-ready","pendingId":"p","session":session()}));
-        rt(&json!({"v":12,"type":"session-failed","pendingId":"p","reason":"boom"}));
-        rt(&json!({"v":12,"type":"input-failed","sessionId":"s","reason":"no-session","inputId":"i"}));
-        rt(&json!({"v":12,"type":"close-session-ack","sessionId":"s","success":true}));
-        rt(&json!({"v":12,"type":"option-confirmed","sessionId":"s","option":"mode","value":"plan"}));
-        rt(&json!({"v":12,"type":"folder-ack","requestId":"r","success":true,"path":"a/b"}));
-        rt(&json!({"v":12,"type":"usage","sessionId":"s","usage":{"available":true,"plan":"max","windows":[{"label":"5h","utilization":42.0,"resetsAt":"t"}],"fetchedAt":"t"}}));
-        rt(&json!({"v":12,"type":"models","agent":"claude-code","models":[{"id":"m1","label":"M1"},{"id":"m2"}],"defaultModel":"m1"}));
-        rt(&json!({"v":12,"type":"models","agent":"opencode","models":[],"error":"sdk offline"}));
-        rt(&json!({"v":12,"type":"agent-style","agent":"pi"}));
-        let styled = rt(&json!({"v":12,"type":"agent-style","agent":"claude-code","styleHash":"0123456789abcdef","style":{
-            "spinner":{"frames":["·","✢"],"intervalMs":120,"bounce":true},
-            "workingWords":["Brewing"],"workingCounter":true,
-            "toolGlyphs":{"other":"⏺"},"resultMark":"⎿",
-            "userMessage":{"shape":"prompt","mark":">"},
-            "wordmark":["▐▛███▜▌"],"accent":"#D77757"
+    fn an_agent_style_user_message_shape_decodes_to_its_variant() {
+        let styled = rt(&json!({"v":12,"type":"agent-style","agent":"claude-code","style":{
+            "userMessage":{"shape":"prompt","mark":">"}
         }}));
         let BridgeToPhone::AgentStyle(m) = styled else { panic!() };
         assert_eq!(m.style.unwrap().user_message, crate::common::UserMessageStyle::Prompt { mark: ">".into() });
@@ -808,58 +784,6 @@ mod tests {
         let m = rt(&json!({"v":12,"type":"agent-style","agent":"x","style":{"userMessage":{"shape":"card"}}}));
         let BridgeToPhone::AgentStyle(m) = m else { panic!() };
         assert_eq!(m.style.unwrap().user_message, crate::common::UserMessageStyle::Unknown);
-        rt(&json!({"v":12,"type":"commands","sessionId":"s","commands":[{"name":"compact","description":"Compact","argumentHint":"<focus>"},{"name":"p:x"}]}));
-        rt(&json!({"v":12,"type":"commands","sessionId":"s","commands":[],"error":"not running"}));
-        rt(&json!({"v":12,"type":"personas","agent":"opencode","sessionId":"s","personas":[{"id":"build","label":"Build"},{"id":"review","label":"review","description":"Reviews","color":"#E5C07B"}]}));
-        rt(&json!({"v":12,"type":"personas","agent":"opencode","personas":[],"error":"not running"}));
-        rt(&json!({"v":12,"type":"plugins","agent":"claude-code",
-            "installed":[{"id":"c@m","name":"c","marketplace":"m","version":"1","description":"d","enabled":false}],
-            "marketplaces":[{"name":"m","source":"me/skills"}],"toggles":true,
-            "available":[{"id":"x@m","name":"x","marketplace":"m","installCount":12}]}));
-        rt(&json!({"v":12,"type":"plugins","agent":"opencode","installed":[{"id":"opencode-wakatime","name":"opencode-wakatime","enabled":true}]}));
-        rt(&json!({"v":12,"type":"plugins","agent":"claude-code","installed":[],"error":"no claude"}));
-        rt(&json!({"v":12,"type":"plugin-ack","agent":"claude-code","action":"install","target":"x@m","success":false,"error":"not found"}));
-        rt(&json!({"v":12,"type":"plugin-ack","agent":"claude-code","action":"update","target":"c@m","success":true,"message":"Updated from 0.1.0 to 0.2.0."}));
-        rt(&json!({"v":12,"type":"agent-ack","agent":"opencode","action":"install","success":true}));
-        rt(&json!({"v":12,"type":"agent-ack","agent":"claude-code","action":"remove","success":false,"error":"Claude Code is on this machine outside CodeDeck."}));
-        rt(&json!({"v":12,"type":"mcp-servers","agent":"claude-code","servers":[
-            {"name":"github","transport":"http","target":"https://api.githubcopilot.com/mcp/","headerKeys":["Authorization"],"enabled":true},
-            {"name":"fs","transport":"stdio","target":"npx","envKeys":["K"],"enabled":false}],"toggles":true}));
-        rt(&json!({"v":12,"type":"mcp-servers","agent":"claude-code","servers":[],"error":"no claude"}));
-        rt(&json!({"v":12,"type":"mcp-ack","agent":"claude-code","action":"add","names":["github"],"success":false,"error":"bad url"}));
-        rt(&json!({"v":12,"type":"session-mcp","sessionId":"s","servers":[
-            {"name":"github","status":"connected","tools":12},{"name":"x","status":"needs-auth"},
-            {"name":"y","status":"failed","error":"exit 1"}],"toggles":true,"projectWide":true}));
-        rt(&json!({"v":12,"type":"session-mcp","sessionId":"s","servers":[],"error":"not running"}));
-        rt(&json!({"v":12,"type":"permission-rules","agent":"opencode","rules":[
-            {"id":"psv_1","project":"/home/me/code","tool":"shell","pattern":"git status *","createdAt":1_792_008_058_637_u64}]}));
-        rt(&json!({"v":12,"type":"permission-rules","agent":"opencode","rules":[],"error":"OpenCode is not running"}));
-        rt(&json!({"v":12,"type":"accounts","agent":"opencode","all":true,"accounts":[
-            {"id":"github-copilot","name":"GitHub Copilot","methods":[{"id":"device","kind":"sign-in","label":"Login with GitHub Copilot","fields":[
-                {"key":"deploymentType","title":"Select GitHub deployment type","required":true,"options":[{"id":"github.com","label":"GitHub.com"}]},
-                {"key":"enterpriseUrl","title":"GitHub Enterprise URL","required":true,"when":[{"key":"deploymentType","value":"enterprise"}]}]}],
-             "connections":[{"id":"GITHUB_TOKEN","label":"GITHUB_TOKEN","kind":"env"}]},
-            {"id":"nano-gpt","name":"NanoGPT","methods":[{"id":"key","kind":"key"}],"connections":[{"id":"cred_1","label":"work","kind":"key","active":true,"removable":true}]}]}));
-        rt(&json!({"v":12,"type":"accounts","agent":"opencode","accounts":[],"error":"OpenCode is not running"}));
-        rt(&json!({"v":12,"type":"account-sign-in","agent":"opencode","account":"opencode","status":"started","attemptId":"con_1",
-            "attempt":{"attemptId":"con_1","url":"https://opencode.ai/console/device?user_code=WFZW-JRCC","instructions":"Enter code: WFZW-JRCC","expiresAt":1_792_010_428_118_u64}}));
-        rt(&json!({"v":12,"type":"account-sign-in","agent":"opencode","account":"openai","status":"failed","attemptId":"con_2","error":"ChatGPT sign-in did not return a client ID."}));
-        rt(&json!({"v":12,"type":"credentials-ack","machine":"m","agent":"claude-code","success":true,
-            "credentials":[{"id":"anthropic_api_key","label":"Anthropic API key","present":true,"valid":true}]}));
-        rt(&json!({"v":12,"type":"pair-ack","machine":"m","ok":false,"reason":"bad-token","relays":["wss://r"],"host":"cli"}));
-        rt(&json!({"v":12,"type":"provider-profiles","machine":"m","profiles":[{"id":"p","agent":"claude-code","label":"L","baseUrl":"https://x","models":[{"id":"m"}],"hasToken":true}]}));
-        rt(&json!({"v":12,"type":"provider-profile-ack","machine":"m","profileId":"p","success":true,"tokenValid":false}));
-        rt(&json!({"v":12,"type":"terminal-opened","openId":"o1","term":"t1","shell":"/bin/bash"}));
-        rt(&json!({"v":12,"type":"terminal-output","term":"t1","offset":0,"data":"bHMgLWxhCg=="}));
-        rt(&json!({"v":12,"type":"terminal-input-from","term":"t1","seq":4}));
-        rt(&json!({"v":12,"type":"terminal-exited","term":"t1","code":0,"reason":"exit"}));
-        rt(&json!({"v":12,"type":"terminal-exited","openId":"o1","reason":"not-allowed","device":"d1"}));
-        rt(&json!({"v":12,"type":"terminal-event","term":"t1","what":"takeover","device":"d1","name":"Pixel 8","via":"relay","at":1792008058637_u64}));
-        rt(&json!({"v":12,"type":"web-sign-in-result","code":"K7QM-4XPA","signedIn":true}));
-        rt(&json!({"v":12,"type":"web-browsers","browsers":[]}));
-        rt(&json!({"v":12,"type":"web-browsers","browsers":[{
-            "id":"0123456789abcdef","by":"npub1owner","sinceMs":1792008058637_u64,"lastSeenMs":1792008059000_u64,
-            "expiresMs":1804598458637_u64,"peer":"192.168.1.20","agent":"Mozilla/5.0"}]}));
     }
 
     #[test]
@@ -893,22 +817,5 @@ mod tests {
         let BridgeToPhone::TerminalEvent(e) = m else { panic!() };
         assert_eq!(e.what, crate::common::TerminalEventKind::Unknown);
         assert_eq!(e.via, crate::common::TerminalVia::Unknown);
-    }
-
-    #[test]
-    fn a_typed_entry_survives_the_full_message() {
-        let m = rt(&json!({"v":12,"type":"output","sessionId":"s","seq":1,"entries":[{
-            "timestamp":"t","entryType":"diff","path":"f","lines":[{"type":"add","text":"a"}],"truncated":true
-        }]}));
-        match m {
-            BridgeToPhone::Output(o) => match &o.entries[0].body {
-                EntryBody::Diff { truncated, lines, .. } => {
-                    assert!(*truncated);
-                    assert_eq!(lines.len(), 1);
-                }
-                other => panic!("{other:?}"),
-            },
-            _ => panic!(),
-        }
     }
 }

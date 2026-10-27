@@ -8,81 +8,37 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { OpenCodeClient } from '@opencode/client';
 import { OpenCodeDriver } from '../../drivers/opencode/driver';
+import { fakeOpenCode, type FakeOpenCodeServer } from '../../drivers/opencode/__tests__/fakeServer';
 import { Agents } from '../agents';
 import { AgentHost } from '../host';
 
-/** The v2 client calls a session makes as it starts, answered from one
- *  scripted room. Only what a default (no persona, no resume) start touches
- *  is here. */
-function fakeClient(stream: () => AsyncGenerator<Record<string, unknown>>): OpenCodeClient {
-  const session = () => ({
-    id: 'ses_1',
-    projectID: 'p',
-    cost: 0,
-    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-    time: { created: 0, updated: 0 },
-    location: { directory: '/tmp' },
-  });
-  return {
-    event: { subscribe: vi.fn(stream) },
-    session: {
-      create: vi.fn(async () => session()),
-      get: vi.fn(async () => session()),
-      remove: vi.fn(async () => undefined),
-      update: vi.fn(async () => undefined),
-      switchAgent: vi.fn(async () => undefined),
-      switchModel: vi.fn(async () => undefined),
-      interrupt: vi.fn(async () => undefined),
-      prompt: vi.fn(async () => ({})),
-      command: vi.fn(async () => undefined),
-      compact: vi.fn(async () => ({})),
-      diff: vi.fn(async () => []),
-      revert: { stage: vi.fn(async () => ({})), clear: vi.fn(async () => undefined), commit: vi.fn(async () => undefined) },
-      form: { reply: vi.fn(async () => undefined), cancel: vi.fn(async () => undefined) },
-    },
-    shell: { list: vi.fn(async () => ({ location: { directory: '/tmp' }, data: [] })) },
-    permission: { reply: vi.fn(async () => undefined) },
-    agent: {
-      get: vi.fn(async ({ agentID }: { agentID: string }) => ({
-        location: { directory: '/tmp' },
-        data: { id: agentID, name: agentID, mode: 'primary', hidden: false, request: {}, permissions: [] },
-      })),
-      list: vi.fn(async () => ({
-        location: { directory: '/tmp' },
-        data: [
-          { id: 'build', name: 'Build', mode: 'primary', hidden: false, request: {}, permissions: [] },
-          { id: 'plan', name: 'Plan', mode: 'primary', hidden: false, request: {}, permissions: [] },
+/** A stock 2.1.4 server with one usable provider and its model, as the
+ *  driver's catalog reads them. The stream stays open, so a session outlives
+ *  the test's start until the fake server is lost. */
+function fakeServer(): FakeOpenCodeServer {
+  return fakeOpenCode({
+    holdStream: true,
+    providers: [
+      {
+        info: { id: 'opencode', name: 'OpenCode', activation: 'enabled', package: '@opencode/ai/providers/openai-compatible' },
+        models: [
+          {
+            id: 'cat-jam-free',
+            modelID: 'cat-jam-free',
+            providerID: 'opencode',
+            name: 'cat-jam-free',
+            enabled: true,
+            status: 'active',
+            cost: [],
+            variants: [],
+            limit: { context: 0, output: 0 },
+            capabilities: { tools: true, input: ['text'], output: ['text'] },
+          } as never,
         ],
-      })),
-    },
-    location: { get: vi.fn(async () => ({ directory: '/tmp' })) },
-    message: { list: vi.fn(async () => ({ data: [], cursor: {} })) },
-    command: { list: vi.fn(async () => ({ location: { directory: '/tmp' }, data: [] })) },
-    mcp: { list: vi.fn(async () => ({ location: { directory: '/tmp' }, data: [] })) },
-    // A server lists the provider it can use once it has registered it.
-    provider: {
-      list: vi.fn(async () => ({
-        location: { directory: '/tmp' },
-        data: [{ id: 'opencode', name: 'OpenCode', activation: 'enabled', package: '@opencode/ai/providers/openai-compatible' }],
-      })),
-    },
-    model: {
-      list: vi.fn(async () => ({
-        location: { directory: '/tmp' },
-        data: [{ providerID: 'opencode', modelID: 'cat-jam-free', name: 'cat-jam-free', enabled: true, status: 'active' }],
-      })),
-      default: vi.fn(async () => ({ location: { directory: '/tmp' }, data: null })),
-    },
-    plugin: { list: vi.fn(async () => ({ location: { directory: '/tmp' }, data: [] })) },
-    server: { info: vi.fn(async () => ({ version: '2.0.28' })) },
-  } as unknown as OpenCodeClient;
-}
-
-/** The stream a session reads until the test ends it. */
-async function* openStream(): AsyncGenerator<Record<string, unknown>> {
-  await new Promise(() => {});
+      },
+    ],
+  });
 }
 
 /** An AgentHost over one driver, with a reader for its session events. */
@@ -107,6 +63,7 @@ describe('an OpenCode server the host starts', () => {
 
   it('is started again after it crashed, and its exit is not reported as unavailable', async () => {
     vi.stubEnv('XDG_DATA_HOME', mkdtempSync(path.join(tmpdir(), 'oc-data-')));
+    const server = fakeServer();
     const exits: Array<() => void> = [];
     let starts = 0;
     const driver = await OpenCodeDriver.create({
@@ -119,7 +76,7 @@ describe('an OpenCode server the host starts', () => {
         const exited = new Promise<void>((resolve) => exits.push(resolve));
         return { url: 'http://127.0.0.1:4100', pid: 1, exited, close: async () => {} };
       },
-      connect: () => fakeClient(openStream),
+      connect: () => server.client,
     });
     const { out, send, events } = hostFor(driver);
     await send('st1', 'start-session', { sessionId: 's1', agent: 'opencode', cwd: '/tmp' });
@@ -145,6 +102,7 @@ describe('an OpenCode server the host starts', () => {
 
   it('is started again on the next session after its first start failed', async () => {
     vi.stubEnv('XDG_DATA_HOME', mkdtempSync(path.join(tmpdir(), 'oc-data-')));
+    const server = fakeServer();
     let starts = 0;
     const driver = await OpenCodeDriver.create({
       autoStart: true,
@@ -156,7 +114,7 @@ describe('an OpenCode server the host starts', () => {
         if (starts === 1) throw new Error('port 4100 is in use');
         return { url: 'http://127.0.0.1:4100', pid: 1, exited: new Promise(() => {}), close: async () => {} };
       },
-      connect: () => fakeClient(openStream),
+      connect: () => server.client,
     });
     // A failed first start is retried, not refused for the host's lifetime.
     expect(driver.info().unavailableReason).toBeUndefined();

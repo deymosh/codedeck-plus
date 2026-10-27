@@ -380,30 +380,6 @@ mod tests {
     }
 
     #[test]
-    fn decide_notify_matrix() {
-        // hidden -> always
-        assert!(decide_notify(&perm("m", "s"), false, Some("m s")));
-        // visible + viewing this session -> no
-        assert!(!decide_notify(&perm("m", "s"), true, Some("m s")));
-        // visible + viewing a different session -> yes
-        assert!(decide_notify(&perm("m", "s"), true, Some("m other")));
-        // visible + no session panel (e.g. the session list) -> yes
-        assert!(decide_notify(&perm("m", "s"), true, None));
-    }
-
-    #[test]
-    fn decide_ping_matrix() {
-        // hidden -> always
-        assert!(decide_ping(&perm("m", "s"), false, Some("m s")));
-        // visible + viewing this session -> no
-        assert!(!decide_ping(&perm("m", "s"), true, Some("m s")));
-        // visible + viewing a different session -> yes
-        assert!(decide_ping(&perm("m", "s"), true, Some("m other")));
-        // visible + no session panel -> yes
-        assert!(decide_ping(&perm("m", "s"), true, None));
-    }
-
-    #[test]
     fn keys_and_tags() {
         assert_eq!(notify_key(&perm("m", "s")), "permission-request m s");
         assert_eq!(notify_tag(&perm("m", "s")), "session:m:s");

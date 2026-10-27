@@ -16,6 +16,7 @@ import { placeProfiles, providersFingerprint, servedBy, withoutProfiles } from '
 import type { StartOpenCodeServerOptions } from '../server';
 import type { ProviderBinding } from '../../../sdk/types';
 import { recordingContext } from '../../../sdk/__tests__/context';
+import { fakeOpenCode, type FakeProviderConfig } from './fakeServer';
 
 const router = (over: Partial<ProviderBinding> = {}): ProviderBinding => ({
   id: 'router',
@@ -151,70 +152,33 @@ describe('an OpenCode driver with a kept catalog', () => {
 
   type AddedProvider = { name?: string; settings?: { baseURL?: string }; models?: Record<string, unknown> };
 
+  // A model as the server lists it: its variants spelled from how it reasons.
+  const listed = (m: Partial<CatalogModel> & { providerID: string; modelID: string }): ModelInfo =>
+    ({
+      id: m.modelID,
+      name: m.modelID,
+      enabled: true,
+      status: 'active',
+      cost: [],
+      limit: { context: 0, output: 0 },
+      capabilities: { tools: false, input: [], output: [] },
+      ...m,
+      variants: m.reasoning?.supported ? (m.reasoning.effort ?? []).map((id) => ({ id })) : [],
+    }) as unknown as ModelInfo;
+
   /** A server as OpenCode 2.x is one: it lists the providers it can use
    *  (`known`'s connected ones, and what its config adds) and their models,
    *  names every other as an integration and describes it when asked. */
   function serverFor(known: Catalog, config: { providers?: Record<string, AddedProvider> }): OpenCodeClient {
-    const providers = new Map<string, ProviderInfo>(
-      [...known.providers].map(([id, p]) => [id, { ...p, activation: known.connected.has(id) ? 'enabled' : 'auto' } as ProviderInfo]),
-    );
-    const available = new Set(known.connected);
-    // A model as the server lists it: its variants spelled from how it reasons.
-    const listed = (m: Partial<CatalogModel> & { providerID: string; modelID: string }): ModelInfo =>
-      ({
-        id: m.modelID,
-        name: m.modelID,
-        enabled: true,
-        status: 'active',
-        cost: [],
-        limit: { context: 0, output: 0 },
-        capabilities: { tools: false, input: [], output: [] },
-        ...m,
-        variants: m.reasoning?.supported ? (m.reasoning.effort ?? []).map((id) => ({ id })) : [],
-      }) as unknown as ModelInfo;
-    const models = [...known.models.values()].map(listed);
-    for (const [id, entry] of Object.entries(config.providers ?? {})) {
-      const base = providers.get(id);
-      providers.set(id, {
-        id,
-        name: entry.name ?? id,
-        activation: 'enabled',
-        package: '@opencode/ai/providers/openai-compatible',
-        settings: { ...(base?.settings ?? {}), ...(entry.settings?.baseURL ? { baseURL: entry.settings.baseURL } : {}) },
-      } as ProviderInfo);
-      available.add(id);
-      for (const modelID of Object.keys(entry.models ?? {})) models.push(listed({ modelID, providerID: id }));
-    }
-    const at = { location: { directory: '/tmp' } };
-    return {
-      // The stream opens and never yields: a session stays on its server.
-      event: {
-        subscribe: () =>
-          (async function* () {
-            await new Promise(() => {});
-          })(),
-      },
-      integration: { list: async () => ({ ...at, data: [...providers.keys(), 'tinyfish'].map((id) => ({ id, name: id, methods: [], connections: [] })) }) },
-      provider: {
-        list: async () => ({ ...at, data: [...providers.values()].filter((p) => available.has(p.id)) }),
-        get: async ({ providerID }: { providerID: string }) => {
-          const provider = providers.get(providerID);
-          if (!provider) throw Object.assign(new Error('not found'), { name: 'ProviderNotFoundError' });
-          return { ...at, data: provider };
-        },
-      },
-      model: {
-        list: async () => ({ ...at, data: models.filter((m) => available.has(m.providerID)) }),
-        default: async () => ({ ...at, data: null }),
-      },
-      session: {
-        get: async () => {
-          throw new Error('that session is gone');
-        },
-        create: async () => ({ id: 'ses_1' }),
-        update: async () => ({ id: 'ses_1' }),
-      },
-    } as unknown as OpenCodeClient;
+    return fakeOpenCode({
+      providers: [...known.providers].map(([id, info]) => ({
+        info: { ...info, activation: known.connected.has(id) ? 'enabled' : 'auto' } as ProviderInfo,
+        usable: known.connected.has(id),
+        models: [...known.models.values()].filter((m) => m.providerID === id).map(listed),
+      })),
+      config: config as { providers?: Record<string, FakeProviderConfig> },
+      integrations: ['tinyfish'],
+    }).client;
   }
 
   function managed(catalogCache: string, firstProvidersWaitMs?: number) {
