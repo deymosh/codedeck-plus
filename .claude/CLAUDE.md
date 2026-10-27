@@ -108,7 +108,11 @@ caches between commands: `./codedeck dev cargo test -p <crate>`,
 `#[ignore]` need Node and a built agent host: the driver-protocol spawn test
 (`./codedeck dev cargo test -p agent-protocol --test agent_host -- --ignored`)
 and the bridge end-to-end test (`-p bridge-runtime --test e2e`) — the host
-bundle is `./codedeck dev pnpm --filter @codedeck/agent-host run build`. After
+bundle is `./codedeck dev pnpm --filter @codedeck/agent-host run build`.
+Before a release, the acceptance test runs the real phone core against a
+throwaway bridge with the real OpenCode (MCP changes across restarts, a free
+model's session resumed across a restart):
+`./codedeck dev sh -c 'CODEDECK_AGENT_CACHE=/agents cargo test -p bridge-runtime --test acceptance -- --ignored --test-threads 1'`. After
 changing a driver-protocol type, regenerate the host's types with
 `./codedeck dev cargo test -p agent-protocol --test gen_ts_bindings -- --ignored`.
 
