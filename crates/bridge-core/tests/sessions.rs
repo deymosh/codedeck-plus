@@ -588,6 +588,31 @@ fn close_session_ends_it_tombstones_it_and_forgets_its_transcript() {
     assert!(rig.transcripts.entries(&s).is_empty());
 }
 
+/// A tombstone is applied by a present phone from the next heartbeat, so the
+/// shared heartbeat stops repeating it after a day; a phone coming back asks
+/// for a heartbeat of its own, and that one still carries it — across a
+/// restart too, since the removal time is stored with it.
+#[test]
+fn an_old_tombstone_leaves_the_shared_heartbeat_but_reaches_a_phone_that_asks() {
+    let mut rig = Rig::new();
+    rig.host_up();
+    let s = rig.ready_session("alpha");
+    rig.send(json!({"v":12,"type":"close-session","sessionId":s}));
+    rig.advance(25 * 3600 * 1000);
+    rig.take();
+
+    let mut rig = rig.restart();
+    rig.host_up();
+    rig.take();
+    rig.advance(60_000);
+    let shared = last_heartbeat(&rig.messages());
+    assert_eq!(shared.removed_sessions, None, "a day-old tombstone rides the shared heartbeat no more");
+
+    rig.send(json!({"v":12,"type":"refresh-sessions"}));
+    let own = last_heartbeat(&rig.messages());
+    assert_eq!(own.removed_sessions, Some(vec![s.clone()]), "the phone's own heartbeat carries every tombstone kept");
+}
+
 fn conversation_deletes(frames: &[agent_protocol::BridgeFrame]) -> Vec<(String, String, String)> {
     frames
         .iter()

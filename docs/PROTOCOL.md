@@ -711,7 +711,7 @@ on relays and image servers only ever see the identity. From the grant on:
   never earlier. Each client's copy is
   encrypted to its newest key; the first heartbeat after the grant is the
   client's confirmation;
-- `expiresAt` (seconds) is at most 90 days ahead; a client whose key lapses
+- `expiresAt` (seconds) is at most 30 days ahead; a client whose key lapses
   is dropped, and an identity left with none is encrypted to again. The
   phone grants a new key before then;
 - an event authored by a session key is not heard (only paired identities
@@ -866,6 +866,9 @@ is capped at 32 MiB.
 
 - Absence from `sessions[]` NEVER deletes on the phone — it marks `stale`.
 - Removal happens only via `removedSessions[]` tombstones (or a user delete).
+  The heartbeat every present client shares carries the tombstones of the
+  last day; a heartbeat a client asked for (coming back, or
+  `refresh-sessions`) carries every one kept: the last 100, for 30 days.
 - A clean bridge shutdown publishes the full list with every session
   `state: 'offline'` and `machineOffline: true` — never an empty list.
 

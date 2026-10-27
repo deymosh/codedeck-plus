@@ -62,7 +62,7 @@ impl World {
             &phone,
             json!({"v":12,"type":"session-key","sessionKey":{
                 "pubkeyHex": key.pubkey_hex, "bridgePubkeyHex": bridge,
-                "expiresAt": NOW_SECS + 90 * DAY, "label": label}}),
+                "expiresAt": NOW_SECS + 30 * DAY, "label": label}}),
             Via::Direct,
         );
         self.rig.take();
@@ -110,7 +110,7 @@ impl World {
             json!({"v":12,"type":"pair-request","npub": phone.npub, "pubkeyHex": phone.pubkey_hex,
                 "label": label, "token": token,
                 "sessionKey": {"pubkeyHex": key.pubkey_hex, "bridgePubkeyHex": bridge,
-                    "expiresAt": NOW_SECS + 90 * DAY, "label": label}}),
+                    "expiresAt": NOW_SECS + 30 * DAY, "label": label}}),
             Via::Pairing,
         );
         self.rig.take();
@@ -306,7 +306,7 @@ fn audits_of(acts: &[Effect], what: TerminalAuditWhat) -> Vec<TerminalAuditRecor
 fn pending(acts: &[Effect]) -> Vec<Vec<bridge_core::PendingDevice>> {
     acts.iter()
         .filter_map(|e| match e {
-            Effect::TerminalPending(p) => Some(p.clone()),
+            Effect::TerminalDevices(d) => Some(d.pending.clone()),
             _ => None,
         })
         .collect()
@@ -579,6 +579,45 @@ fn an_open_without_a_client_is_refused_rather_than_ignored() {
     assert_eq!(refusal[0].reason, TerminalEndReason::NotAllowed);
     assert!(refusal[0].device.is_none(), "there is no device to name");
     assert!(pending(&acts).is_empty(), "and none to record");
+}
+
+/// A device is its client's first key: once the client is gone, the phone
+/// comes back as a new device, so the old approval is dropped from the file
+/// rather than left there for good.
+#[test]
+fn an_approved_device_whose_client_lapsed_leaves_the_allowlist() {
+    let mut world = World::new();
+    let key = generate_keypair();
+    let short_lived = device_id(&key.pubkey_hex);
+    let bridge = world.rig.bridge.pubkey_hex.clone();
+    let phone = world.rig.phone.clone();
+    world.rig.phone_event(
+        &phone,
+        json!({"v":12,"type":"session-key","sessionKey":{
+            "pubkeyHex": key.pubkey_hex, "bridgePubkeyHex": bridge, "expiresAt": NOW_SECS + 120, "label": "Tablet"}}),
+        Via::Direct,
+    );
+    let first = world.device.clone();
+    world.allow(&[&first, &short_lived]);
+    world.rig.take();
+
+    world.rig.advance(180_000);
+    let written: Vec<_> = world
+        .rig
+        .take()
+        .into_iter()
+        .filter_map(|e| match e {
+            Effect::TerminalDevices(d) => Some(d),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(written.len(), 1, "the file is told once: {written:?}");
+    assert_eq!(written[0].live.iter().collect::<Vec<_>>(), [&first], "only the device whose client remains is live");
+
+    // The device that remains still opens a terminal.
+    world.command(json!({"v":12,"type":"terminal-open","openId":"o1","cols":80,"rows":24}));
+    let (_, msgs) = world.take();
+    assert!(exits(&msgs).is_empty(), "the remaining device is still approved");
 }
 
 // --- input ---
@@ -1269,7 +1308,7 @@ fn a_device_survives_its_keys_rotation_but_a_new_client_is_a_new_device() {
         &world.key,
         json!({"v":12,"type":"session-key","sessionKey":{
             "pubkeyHex": next.pubkey_hex, "bridgePubkeyHex": bridge,
-            "expiresAt": NOW_SECS + 90 * DAY, "replaces": world.key.pubkey_hex, "label": "Pixel 8 Pro"}}),
+            "expiresAt": NOW_SECS + 30 * DAY, "replaces": world.key.pubkey_hex, "label": "Pixel 8 Pro"}}),
         Via::Direct,
     );
     world.rig.take();
@@ -1302,7 +1341,7 @@ fn a_state_file_from_before_devices_existed_still_hydrates() {
     let phones = json!([{"npub": world.rig.phone.npub, "pubkeyHex": world.rig.phone.pubkey_hex,
         "label":"Pixel", "pairedAt":"t",
         "clients":[{"key":{"pubkeyHex": world.key.pubkey_hex, "bridgePubkeyHex": world.rig.bridge.pubkey_hex,
-            "expiresAt": NOW_SECS + 90 * DAY, "label":"Pixel 8"}}]}]);
+            "expiresAt": NOW_SECS + 30 * DAY, "label":"Pixel 8"}}]}]);
     world.rig.store.put("pairedPhones", &phones.to_string());
     let mut restarted = world.rig.restart();
     restarted.take();

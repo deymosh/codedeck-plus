@@ -290,7 +290,9 @@ async fn a_quiet_client_renews_its_presence_and_says_when_it_goes_away() {
             let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
             let machine = generate_keypair();
             let start_ms: u64 = 1_000_000;
-            let key = SessionKey { keypair: generate_keypair(), expires_at: start_ms / 1000 + 80 * 24 * 3600 };
+            // A fresh key: far from its renewal window.
+            let lifetime = client_core::stores::session_key::GRANT_LIFETIME_SECS;
+            let key = SessionKey { keypair: generate_keypair(), expires_at: start_ms / 1000 + lifetime };
             let store = MemoryKeyStore::default();
             *store.0.borrow_mut() = Some(SessionKeyRing::single(key.clone()).encode());
             let mut state = client_core::stores::machines::MachinesState::default();
@@ -425,7 +427,9 @@ async fn a_rotated_key_is_granted_and_the_old_one_dropped_once_confirmed() {
             let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
             let machine = generate_keypair();
             let now_secs = 1_000;
-            let old = SessionKey { keypair: generate_keypair(), expires_at: now_secs + 10 * 24 * 3600 };
+            // Inside the renewal window, so the boot rotates it.
+            let left = client_core::stores::session_key::RENEW_BEFORE_SECS / 2;
+            let old = SessionKey { keypair: generate_keypair(), expires_at: now_secs + left };
             let store = MemoryKeyStore::default();
             *store.0.borrow_mut() = Some(SessionKeyRing::single(old.clone()).encode());
             let mut state = client_core::stores::machines::MachinesState::default();

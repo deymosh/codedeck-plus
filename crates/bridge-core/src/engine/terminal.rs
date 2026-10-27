@@ -48,7 +48,7 @@ use protocol::events::{
 use serde::{Deserialize, Serialize};
 
 use super::Engine;
-use crate::io::{Addressee, Effect, TimerId, Via, WatchState};
+use crate::io::{Addressee, Effect, TerminalDevices, TimerId, Via, WatchState};
 use crate::out::{Out, TimerKind};
 
 /// The most terminals one bridge runs at once: a fifth `terminal-open` is
@@ -727,7 +727,31 @@ impl Engine {
             pending.drain(..drop);
         }
         let pending = pending.clone();
-        self.out.push(Effect::TerminalPending(pending));
+        let live = self.live_devices();
+        self.out.push(Effect::TerminalDevices(TerminalDevices { pending, live }));
+    }
+
+    /// Every device a client of a paired identity is now.
+    fn live_devices(&self) -> BTreeSet<String> {
+        self.paired.iter().flat_map(|p| p.clients.iter()).map(|c| c.device.clone()).filter(|d| !d.is_empty()).collect()
+    }
+
+    /// Forget the allowlist's devices that no client is any more, approved
+    /// or waiting, and have the file do the same. Such a device cannot ask
+    /// again: the phone it was comes back as a new device, so its approval
+    /// would only linger in the file.
+    pub(super) fn forget_gone_devices(&mut self) {
+        let live = self.live_devices();
+        let list = &mut self.terminals.config.allowlist;
+        let before = (list.devices.len(), list.pending.len());
+        list.devices.retain(|d| live.contains(d));
+        list.pending.retain(|p| live.contains(&p.device));
+        if (list.devices.len(), list.pending.len()) == before {
+            return;
+        }
+        log::info!("[Engine] Forgetting terminal devices whose client is gone");
+        let pending = list.pending.clone();
+        self.out.push(Effect::TerminalDevices(TerminalDevices { pending, live }));
     }
 
     /// `terminal-open`: the gates, then a shell for the runtime to start. The

@@ -35,8 +35,10 @@ use super::machines::MachinesState;
 /// How long a key, and so every grant of it, runs: the protocol maximum,
 /// less an hour of headroom for a phone clock running ahead of the bridge's.
 pub const GRANT_LIFETIME_SECS: u64 = SESSION_KEY_MAX_LIFETIME_SECS - 3600;
-/// A key is replaced by a fresh one once less than this is left of it.
-pub const RENEW_BEFORE_SECS: u64 = 30 * 24 * 3600;
+/// A key is replaced by a fresh one once less than this is left of it: a
+/// third of its life, so a phone opened every few weeks rotates before its
+/// key lapses and stays the same device.
+pub const RENEW_BEFORE_SECS: u64 = 10 * 24 * 3600;
 /// A grant this close to lapsing is no longer used: commands go through the
 /// identity rather than risk arriving after the bridge dropped the key.
 const USE_MARGIN_SECS: u64 = 600;
@@ -391,12 +393,13 @@ mod tests {
     }
 
     #[test]
-    fn a_key_is_replaced_a_month_before_it_lapses_and_kept_as_the_previous() {
+    fn a_key_is_replaced_before_it_lapses_and_kept_as_the_previous() {
         let (mut ring, _) = SessionKeyRing::load(None, NOW);
         let first = ring.current.pubkey_hex().to_string();
         let lifetime_ms = GRANT_LIFETIME_SECS * 1000;
-        assert!(!ring.rotate_if_due(NOW + lifetime_ms - 31 * DAY_MS));
-        let later = NOW + lifetime_ms - 29 * DAY_MS;
+        let renew_ms = RENEW_BEFORE_SECS * 1000;
+        assert!(!ring.rotate_if_due(NOW + lifetime_ms - renew_ms - DAY_MS));
+        let later = NOW + lifetime_ms - renew_ms + DAY_MS;
         assert!(ring.rotate_if_due(later));
         assert_ne!(ring.current.pubkey_hex(), first);
         assert_eq!(ring.previous.as_ref().unwrap().pubkey_hex(), first);
@@ -416,10 +419,12 @@ mod tests {
         let first = ring.first_pubkey_hex().to_string();
         assert_eq!(ring.device_id(), protocol::recipients::device_id(&first));
         let lifetime_ms = GRANT_LIFETIME_SECS * 1000;
-        assert!(ring.rotate_if_due(NOW + lifetime_ms - 29 * DAY_MS));
+        let renew_ms = RENEW_BEFORE_SECS * 1000;
+        let first_rotation = NOW + lifetime_ms - renew_ms + DAY_MS;
+        assert!(ring.rotate_if_due(first_rotation));
         // The second rotation drops the first key from the ring; the device
         // this install is stays the same, since a bridge derives it once.
-        assert!(ring.rotate_if_due(NOW + 2 * lifetime_ms - 29 * DAY_MS));
+        assert!(ring.rotate_if_due(first_rotation + lifetime_ms - renew_ms + DAY_MS));
         assert_eq!(ring.first_pubkey_hex(), first);
         let (again, _) = SessionKeyRing::load(Some(&ring.encode()), NOW);
         assert_eq!(again.first_pubkey_hex(), first);

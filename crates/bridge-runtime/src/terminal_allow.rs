@@ -28,7 +28,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime};
 
-use bridge_core::{PendingDevice, TerminalAllowlist};
+use bridge_core::{PendingDevice, TerminalAllowlist, TerminalDevices};
 
 /// The file's name in the bridge home.
 pub const ALLOWLIST_FILE: &str = "terminal-allow.json";
@@ -134,12 +134,13 @@ impl Cache {
 
 /// The engine's refused-device list merged with the approved devices as they
 /// are on disk now (the owner may have approved or withdrawn one in the CLI
-/// while this bridge ran). Only the allowlist's writer thread calls this, from
-/// its own thread: reading the file is file work, and the bridge's runtime
-/// thread must not do it.
-fn merge_pending(path: &Path, pending: Vec<PendingDevice>) -> TerminalAllowlist {
+/// while this bridge ran), less those no client is any more. Only the
+/// allowlist's writer thread calls this, from its own thread: reading the
+/// file is file work, and the bridge's runtime thread must not do it.
+fn merge(path: &Path, devices: TerminalDevices) -> TerminalAllowlist {
     let mut list = read(path);
-    list.pending = pending;
+    list.pending = devices.pending;
+    list.devices.retain(|d| devices.live.contains(d));
     list
 }
 
@@ -151,13 +152,13 @@ fn merge_pending(path: &Path, pending: Vec<PendingDevice>) -> TerminalAllowlist 
 /// channel and writes only the newest list, so a device spamming
 /// `terminal-open` costs the file one write, not one per message.
 pub struct Writer {
-    tx: Option<Sender<Vec<PendingDevice>>>,
+    tx: Option<Sender<TerminalDevices>>,
     thread: Option<JoinHandle<()>>,
 }
 
 impl Writer {
     pub fn start(path: PathBuf) -> Writer {
-        let (tx, rx) = mpsc::channel::<Vec<PendingDevice>>();
+        let (tx, rx) = mpsc::channel::<TerminalDevices>();
         let thread = std::thread::Builder::new()
             .name("terminal-allow".into())
             .spawn(move || writer_loop(path, rx))
@@ -166,11 +167,11 @@ impl Writer {
         Writer { tx: Some(tx), thread }
     }
 
-    /// Hand the refused devices over to be written. Never blocks the caller on
-    /// the file, and only the newest list matters: a burst coalesces.
-    pub fn set_pending(&self, pending: Vec<PendingDevice>) {
+    /// Hand the devices over to be written. Never blocks the caller on the
+    /// file, and only the newest list matters: a burst coalesces.
+    pub fn set(&self, devices: TerminalDevices) {
         if let Some(tx) = &self.tx {
-            if tx.send(pending).is_err() {
+            if tx.send(devices).is_err() {
                 log::warn!("[Terminal] the allowlist writer thread is gone; a change was lost");
             }
         }
@@ -187,15 +188,15 @@ impl Drop for Writer {
     }
 }
 
-/// The writer thread: take the newest refused-device list, merge it with the
-/// file as it is now, and write it — all under the lock, so the CLI editing
-/// the file at the same moment cannot lose this write (nor this one the CLI's).
-fn writer_loop(path: PathBuf, rx: Receiver<Vec<PendingDevice>>) {
-    while let Ok(mut pending) = rx.recv() {
+/// The writer thread: take the newest device lists, merge them with the file
+/// as it is now, and write it — all under the lock, so the CLI editing the
+/// file at the same moment cannot lose this write (nor this one the CLI's).
+fn writer_loop(path: PathBuf, rx: Receiver<TerminalDevices>) {
+    while let Ok(mut devices) = rx.recv() {
         // Everything that arrived while this one waited is superseded by the
         // newest: only the last list needs writing.
         while let Ok(newer) = rx.try_recv() {
-            pending = newer;
+            devices = newer;
         }
         let _lock = match Lock::acquire(&path) {
             Ok(lock) => lock,
@@ -204,7 +205,7 @@ fn writer_loop(path: PathBuf, rx: Receiver<Vec<PendingDevice>>) {
                 continue;
             }
         };
-        let list = merge_pending(&path, pending);
+        let list = merge(&path, devices);
         if let Err(err) = write(&path, &list) {
             log::warn!("[Terminal] cannot write the allowlist: {err}");
         }
@@ -458,19 +459,40 @@ mod tests {
         assert_eq!(cache.changed(), None);
     }
 
+    /// What the engine sends: `pending`, with `live` naming every device a
+    /// client still is (the pending ones are clients too).
+    fn devices(pending: &[(&str, &str)], live: &[&str]) -> TerminalDevices {
+        let pending = pending_of(pending);
+        let live = live.iter().map(|d| d.to_string()).chain(pending.iter().map(|p| p.device.clone())).collect();
+        TerminalDevices { pending, live }
+    }
+
     #[test]
-    fn merge_pending_keeps_the_approved_devices_as_on_disk() {
+    fn merge_keeps_the_approved_devices_as_on_disk() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(ALLOWLIST_FILE);
         // The owner approved one device in the CLI since the bridge last read.
         write(&path, &list_with(&["aaaa"], &[])).unwrap();
 
-        let pending = vec![PendingDevice { device: "cccc".into(), label: Some("Pixel 8".into()), last_seen_ms: 5 }];
-        let merged = merge_pending(&path, pending.clone());
+        let sent = devices(&[("cccc", "Pixel 8")], &["aaaa"]);
+        let merged = merge(&path, sent.clone());
         assert!(merged.devices.contains("aaaa"), "the device on disk is kept");
-        assert_eq!(merged.pending, pending);
+        assert_eq!(merged.pending, sent.pending);
         // Merging only reads: the file is unchanged until a write follows.
         assert!(read(&path).pending.is_empty());
+    }
+
+    #[test]
+    fn an_approved_device_no_client_is_any_more_is_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(ALLOWLIST_FILE);
+        write(&path, &list_with(&["aaaa", "gone"], &[])).unwrap();
+
+        let writer = Writer::start(path.clone());
+        writer.set(devices(&[], &["aaaa"]));
+        drop(writer); // joins, so the write has landed
+        let list = read(&path);
+        assert_eq!(list.devices.iter().map(String::as_str).collect::<Vec<_>>(), ["aaaa"]);
     }
 
     #[test]
@@ -481,7 +503,7 @@ mod tests {
         write(&path, &list_with(&["aaaa"], &[])).unwrap();
 
         let writer = Writer::start(path.clone());
-        writer.set_pending(pending_of(&[("cccc", "Pixel 8")]));
+        writer.set(devices(&[("cccc", "Pixel 8")], &["aaaa"]));
         drop(writer); // joins, so the write has landed
         let list = read(&path);
         assert!(list.devices.contains("aaaa"), "the approved device on disk is kept");
@@ -496,9 +518,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(ALLOWLIST_FILE);
         let writer = Writer::start(path.clone());
-        writer.set_pending(pending_of(&[("d1", "one")]));
-        writer.set_pending(pending_of(&[("d2", "two")]));
-        writer.set_pending(pending_of(&[("d3", "three")]));
+        writer.set(devices(&[("d1", "one")], &[]));
+        writer.set(devices(&[("d2", "two")], &[]));
+        writer.set(devices(&[("d3", "three")], &[]));
         drop(writer); // joins, so the queue has drained
 
         let list = read(&path);

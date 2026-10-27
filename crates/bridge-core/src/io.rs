@@ -14,6 +14,18 @@ use serde::{Deserialize, Serialize};
 
 use crate::engine::{PendingDevice, TerminalAllowlist, TerminalAuditRecord};
 
+/// What the allowlist file is told of the devices: the refused ones, and the
+/// devices a client of a paired identity still is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerminalDevices {
+    pub pending: Vec<PendingDevice>,
+    /// A device is the first key its client granted; once that client is
+    /// gone (its key lapsed, it was dropped for a newer one, or its identity
+    /// was unpaired) the same phone comes back as a new device, so an
+    /// approval of the old one only lingers.
+    pub live: std::collections::BTreeSet<String>,
+}
+
 /// A command event from a phone, signature already verified. `content` is
 /// still NIP-44 ciphertext.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,6 +110,12 @@ pub struct PhoneClient {
     /// misses what happens before it renews.
     #[serde(skip)]
     pub present_until_ms: u64,
+    /// The client is present only because the bridge restarted and assumed
+    /// so: it has not been heard from since. Its first command is then a
+    /// return, answered with a heartbeat of its own, since it may have been
+    /// away long before the restart.
+    #[serde(skip)]
+    pub presumed: bool,
     /// What the client watches for live text. Not stored either: a bridge
     /// that has just restarted does not know, so it sends every session's
     /// live text until the client says again.
@@ -291,10 +309,11 @@ pub enum Effect {
     /// Hang up a terminal: SIGHUP, then kill once it does not go. The engine
     /// has already ended it; this is the shell's part.
     TerminalClose { term: String },
-    /// The devices waiting for the owner's approval changed: write them where
-    /// the owner lists them (`codedeck-bridge terminal pending`). Sent whole,
-    /// so the file always says what the engine knows.
-    TerminalPending(Vec<PendingDevice>),
+    /// The allowlist's devices changed: write the ones waiting for the
+    /// owner's approval where the owner lists them (`codedeck-bridge terminal
+    /// pending`), and drop every approved device no client holds any more.
+    /// Sent whole, so the file always says what the engine knows.
+    TerminalDevices(TerminalDevices),
     /// One line for the terminal audit, in the order the engine decided it.
     /// The engine holds no file: the runtime chains the line to the one
     /// before it and stores it, and denies the audit to no one running as

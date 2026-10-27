@@ -6,9 +6,13 @@
 //!   when anything in it changes. On start every record is resumed, so a
 //!   bridge restart forgets nothing.
 //! - A session leaves the phone only through an explicit tombstone in the
-//!   heartbeat's `removedSessions` (the last [`TOMBSTONE_CAP`] ids). Absence
-//!   from the list never deletes, so a heartbeat that happens to be empty
-//!   cannot wipe the phone.
+//!   heartbeat's `removedSessions`. Absence from the list never deletes, so
+//!   a heartbeat that happens to be empty cannot wipe the phone.
+//! - A tombstone is needed once per phone, not on every heartbeat: a client
+//!   that is present applies it from the next one. So the shared heartbeat
+//!   carries only the tombstones of the last [`TOMBSTONE_RECENT_MS`], and a
+//!   client coming back (whose heartbeat is its own) gets every one kept —
+//!   the last [`TOMBSTONE_CAP`], for at most [`TOMBSTONE_KEEP_MS`].
 
 use std::collections::VecDeque;
 
@@ -16,6 +20,12 @@ use protocol::common::{RemoteSessionInfo, SessionState};
 use serde::{Deserialize, Serialize};
 
 pub const TOMBSTONE_CAP: usize = 100;
+/// How long a tombstone rides every heartbeat: far longer than any present
+/// client goes without one.
+pub const TOMBSTONE_RECENT_MS: u64 = 24 * 3600 * 1000;
+/// How long a tombstone is kept for a client that was away. A phone away
+/// longer than this keeps the session, shown stale, until removed by hand.
+pub const TOMBSTONE_KEEP_MS: u64 = 30 * 24 * 3600 * 1000;
 
 fn is_false(b: &bool) -> bool {
     !*b
@@ -95,12 +105,20 @@ impl SessionRecord {
     }
 }
 
+/// A removed session's id, and when it was removed (ms).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Tombstone {
+    pub id: String,
+    pub removed_at: u64,
+}
+
 /// The stored registry document.
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RegistryDoc {
     pub sessions: Vec<SessionRecord>,
-    pub removed_sessions: Vec<String>,
+    pub removed_sessions: Vec<Tombstone>,
 }
 
 impl RegistryDoc {
@@ -138,41 +156,66 @@ impl RegistryDoc {
                 }
             })
             .collect();
-        let mut removed: Vec<String> = raw
-            .removed_sessions
-            .into_iter()
-            .filter_map(|v| v.as_str().map(str::to_string))
-            .collect();
+        // An entry that is not a tombstone is skipped like an unreadable
+        // record.
+        let mut removed: Vec<Tombstone> =
+            raw.removed_sessions.into_iter().filter_map(|v| serde_json::from_value(v).ok()).collect();
         let excess = removed.len().saturating_sub(TOMBSTONE_CAP);
         removed.drain(..excess);
         Self { sessions, removed_sessions: removed }
     }
 }
 
-/// Ids of removed sessions, oldest first, capped at [`TOMBSTONE_CAP`].
+/// Removed sessions, oldest first, capped at [`TOMBSTONE_CAP`].
 #[derive(Debug, Default)]
-pub struct Tombstones(VecDeque<String>);
+pub struct Tombstones(VecDeque<Tombstone>);
 
 impl Tombstones {
-    pub fn new(ids: Vec<String>) -> Self {
+    pub fn new(stored: Vec<Tombstone>) -> Self {
         let mut t = Self::default();
-        for id in ids {
-            t.add(&id);
+        for stone in stored {
+            t.add(&stone.id, stone.removed_at);
         }
         t
     }
 
-    pub fn add(&mut self, id: &str) {
-        if self.0.iter().any(|x| x == id) {
+    /// `id` was removed at `now` (ms). A second removal keeps the first.
+    pub fn add(&mut self, id: &str, now: u64) {
+        if self.0.iter().any(|t| t.id == id) {
             return;
         }
-        self.0.push_back(id.to_string());
+        self.0.push_back(Tombstone { id: id.to_string(), removed_at: now });
         while self.0.len() > TOMBSTONE_CAP {
             self.0.pop_front();
         }
     }
 
+    /// Drop tombstones older than [`TOMBSTONE_KEEP_MS`]; whether any went.
+    pub fn prune(&mut self, now: u64) -> bool {
+        let before = self.0.len();
+        self.0.retain(|t| now.saturating_sub(t.removed_at) < TOMBSTONE_KEEP_MS);
+        self.0.len() != before
+    }
+
+    /// Every id kept: what a client coming back may have missed.
     pub fn ids(&self) -> Vec<String> {
+        self.0.iter().map(|t| t.id.clone()).collect()
+    }
+
+    /// The ids removed within [`TOMBSTONE_RECENT_MS`] of `now`: what the
+    /// shared heartbeat carries.
+    pub fn recent_ids(&self, now: u64) -> Vec<String> {
+        self.0.iter().filter(|t| now.saturating_sub(t.removed_at) < TOMBSTONE_RECENT_MS).map(|t| t.id.clone()).collect()
+    }
+
+    /// Whether every tombstone kept is a recent one, so the shared
+    /// heartbeat carries them all.
+    pub fn all_recent(&self, now: u64) -> bool {
+        self.0.iter().all(|t| now.saturating_sub(t.removed_at) < TOMBSTONE_RECENT_MS)
+    }
+
+    /// The stored form.
+    pub fn stored(&self) -> Vec<Tombstone> {
         self.0.iter().cloned().collect()
     }
 }
@@ -216,10 +259,11 @@ mod tests {
 
     #[test]
     fn a_registry_round_trips_through_its_stored_form() {
-        let doc = RegistryDoc { sessions: vec![record("a"), record("b")], removed_sessions: vec!["x".into()] };
+        let stone = Tombstone { id: "x".into(), removed_at: 7 };
+        let doc = RegistryDoc { sessions: vec![record("a"), record("b")], removed_sessions: vec![stone.clone()] };
         let back = RegistryDoc::load(&serde_json::to_string(&doc).unwrap());
         assert_eq!(back.sessions, doc.sessions);
-        assert_eq!(back.removed_sessions, ["x"]);
+        assert_eq!(back.removed_sessions, [stone]);
     }
 
     #[test]
@@ -243,13 +287,27 @@ mod tests {
     fn tombstones_cap_at_100_fifo_without_duplicates() {
         let mut t = Tombstones::default();
         for i in 0..105 {
-            t.add(&format!("s{i}"));
+            t.add(&format!("s{i}"), i);
         }
-        t.add("s104");
+        t.add("s104", 999);
         let ids = t.ids();
         assert_eq!(ids.len(), TOMBSTONE_CAP);
         assert_eq!(ids[0], "s5");
         assert_eq!(ids.last().unwrap(), "s104");
+    }
+
+    #[test]
+    fn the_shared_heartbeat_carries_a_day_and_a_client_back_a_month() {
+        const DAY: u64 = 24 * 3600 * 1000;
+        let mut t = Tombstones::default();
+        t.add("old", 0);
+        t.add("new", 40 * DAY);
+        let now = 40 * DAY + DAY / 2;
+        assert_eq!(t.recent_ids(now), ["new"]);
+        assert_eq!(t.ids(), ["old", "new"]);
+        assert!(t.prune(now), "a tombstone past the keep window goes");
+        assert_eq!(t.ids(), ["new"]);
+        assert!(!t.prune(now));
     }
 
     #[test]
