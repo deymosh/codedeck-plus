@@ -152,6 +152,54 @@ describe('OpenCode session lifecycle', () => {
   });
 });
 
+describe('OpenCode resuming a conversation', () => {
+  /** The session_restart notices the session reported. */
+  const notices = (ctx: ReturnType<typeof start>) =>
+    ctx.entries().filter((e) => e.entryType === 'notice') as Array<{ kind: string; text: string }>;
+
+  it('starts a fresh conversation and says so when the server no longer has the session', async () => {
+    // Verified against 2.1.4: `session.get` for an id the server does not
+    // know throws `SessionNotFoundError` ("Session not found: <id>").
+    const server = fakeOpenCode({ holdStream: false, sessionId: 'ses_new' });
+    const ctx = start(server.client, { resume: 'ses_gone' });
+    await ctx.ended();
+
+    expect(notices(ctx)).toHaveLength(1);
+    expect(notices(ctx)[0]).toMatchObject({ kind: 'session_restart' });
+    expect(notices(ctx)[0]!.text).toMatch(/does not remember earlier turns/);
+    // The phone must learn the id actually running: the one it asked to
+    // resume no longer exists, and a silent swap would make it resume the
+    // dead id again.
+    expect(ctx.events).toContainEqual(expect.objectContaining({ type: 'info', nativeSessionId: 'ses_new' }));
+    expect(server.client.session.create).toHaveBeenCalled();
+    expect(ctx.logs.join('\n')).toMatch(/resume ses_gone not found server-side/);
+  });
+
+  it('ends with the error, not a lost-resume, when looking the session up fails', async () => {
+    // Verified: an unreachable server is a `ClientError` ("Transport: fetch
+    // failed"), not a not-found. Starting a fresh conversation on it would
+    // throw the transcript away for a failure that says nothing about the
+    // session, and the new session could not be created anyway.
+    const server = fakeOpenCode({
+      holdStream: true,
+      over: {
+        session: {
+          get: vi.fn(async () => {
+            throw Object.assign(new Error('Transport: fetch failed'), { name: 'ClientError' });
+          }),
+        },
+      },
+    });
+    const ctx = start(server.client, { resume: 'ses_1' });
+    expect(await ctx.ended()).toMatchObject({
+      type: 'ended',
+      error: expect.stringMatching(/could not look up session ses_1.*Transport: fetch failed/),
+    });
+    expect(notices(ctx)).toEqual([]);
+    expect(server.client.session.create).not.toHaveBeenCalled();
+  });
+});
+
 describe('OpenCode turn reporting', () => {
   it('reports the model text, and the turn running then idle', async () => {
     const ctx = start(clientWith(turn('hello there')));
