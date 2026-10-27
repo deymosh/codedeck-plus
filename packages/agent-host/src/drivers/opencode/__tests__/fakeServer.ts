@@ -20,6 +20,13 @@
  *    without touching the file, so it returns on the next start.
  *    `disconnect` reports status `disabled` in `mcp.list` and changes
  *    nothing in the config document; `connect` reports `connected`.
+ *  - The global config file, by contrast, is watched: within half a second
+ *    of an edit, an added entry is in `mcp.list` and `config.get`, a removed
+ *    one is gone, and an entry with `enabled: false` reports `disabled`
+ *    (`config.get` reads it back as `disabled: true`; a `disabled: true` in
+ *    the file itself is ignored). The file may spell its servers as a bare
+ *    `mcp` map or under `mcp.servers`. These are file behaviours, so the
+ *    fake does not model them; the MCP manager's tests use a real file.
  *  - `plugin.list` is the 90 built-in plugins by `id` plus package plugins
  *    named by `source.target` (they carry no `id`). A package that fails to
  *    load is a `{source:{type:'package',target}, state:{status:'failed',
