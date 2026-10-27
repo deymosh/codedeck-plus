@@ -451,9 +451,11 @@ check_rust() {
     -v codedeck-cargo-registry:/usr/local/cargo/registry \
     -v codedeck-check-target:/repo/target
 
-  # The pack list must carry every repository-root file the workspace reads
-  # at compile time: bridge-runtime's tests include_str! config.example.json.
-  pack_repo_into "$name" /repo crates Cargo.toml Cargo.lock config.example.json
+  # The pack list must carry every file outside crates/ the workspace reads
+  # at compile time: bridge-runtime's tests include_str! config.example.json,
+  # and client-ffi's corpus test the Android copy of the display corpus.
+  pack_repo_into "$name" /repo crates Cargo.toml Cargo.lock config.example.json \
+    apps/android/app/src/test/resources/display_entries_corpus.json
   case "$1" in
     typecheck) dexec -w /repo "$name" cargo clippy --locked --workspace --all-targets -- -D warnings ;;
     test) dexec -w /repo "$name" cargo test --locked --workspace ;;
