@@ -829,6 +829,7 @@ mod tests {
     use super::*;
     use protocol::crypto::generate_keypair;
     use protocol::nip42::build_auth_event;
+    use tokio::task::LocalSet;
 
     #[test]
     fn a_container_does_not_advertise_its_own_address() {
@@ -1040,4 +1041,130 @@ mod tests {
         assert_eq!(first.sha256_hex().len(), 64);
         assert!(first.acceptor().is_ok());
     }
+
+    // --- the listener's bounds ---
+
+    /// A plain listener (no TLS, no page) on a loopback port, with `limits`.
+    /// The accept task lives on the test's `LocalSet`.
+    async fn plain_listener(limits: Limits) -> (SocketAddr, Rc<Hub>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (inputs, _rx) = mpsc::unbounded_channel();
+        let hub = Hub::new("b".into(), inputs);
+        let accepting = Rc::clone(&hub);
+        tokio::task::spawn_local(accept_loop(listener, accepting, None, |stream| async move { Some(stream) }, limits));
+        (addr, hub)
+    }
+
+    /// Wait until the accept loop has opened `n` connections: its counters
+    /// move before the handshake, so this is the state the next connect sees.
+    async fn connections_reach(hub: &Hub, n: usize) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while hub.open.get() != n {
+            assert!(tokio::time::Instant::now() < deadline, "the accept loop did not open {n} connection(s); open={}", hub.open.get());
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    }
+
+    /// The next connection is accepted, then closed before any handshake:
+    /// reading it yields end-of-file.
+    async fn assert_refused_and_closed(addr: SocketAddr, hub: &Hub, open_now: usize) {
+        use tokio::io::AsyncReadExt;
+        let mut refused = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let mut buf = [0u8; 1];
+        let read = tokio::time::timeout(Duration::from_secs(5), refused.read(&mut buf))
+            .await
+            .expect("the refused connection is closed")
+            .expect("the refused connection is readable to its end");
+        assert_eq!(read, 0, "the connection over a cap is closed, not served");
+        assert_eq!(hub.open.get(), open_now, "a refused connection takes no slot");
+    }
+
+    #[tokio::test]
+    async fn one_host_past_its_connection_cap_is_refused() {
+        LocalSet::new()
+            .run_until(async {
+                let limits = Limits { max_connections: 8, max_per_host: 1, handshake: Duration::from_secs(5), ..Limits::default() };
+                let (addr, hub) = plain_listener(limits).await;
+                let _held = tokio::net::TcpStream::connect(addr).await.unwrap();
+                connections_reach(&hub, 1).await;
+                assert_refused_and_closed(addr, &hub, 1).await;
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn the_total_connection_cap_refuses_the_next_one() {
+        LocalSet::new()
+            .run_until(async {
+                let limits = Limits { max_connections: 1, max_per_host: 8, handshake: Duration::from_secs(5), ..Limits::default() };
+                let (addr, hub) = plain_listener(limits).await;
+                let _held = tokio::net::TcpStream::connect(addr).await.unwrap();
+                connections_reach(&hub, 1).await;
+                assert_refused_and_closed(addr, &hub, 1).await;
+            })
+            .await;
+    }
+
+    async fn next_ws_frame(ws: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>) -> DirectFrame {
+        loop {
+            match ws.next().await.expect("the socket is open").expect("a valid frame") {
+                Message::Text(text) => return decode_direct_frame(&text).unwrap(),
+                _ => continue,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_peer_that_never_says_hello_is_dropped_after_the_hello_timeout() {
+        LocalSet::new()
+            .run_until(async {
+                // The production wait is a minute; the test says 50 ms.
+                let limits = Limits { hello: Duration::from_millis(50), handshake: Duration::from_secs(5), ..Limits::default() };
+                let (addr, _hub) = plain_listener(limits).await;
+                let tcp = tokio::net::TcpStream::connect(addr).await.unwrap();
+                let (mut ws, _) = tokio_tungstenite::client_async(format!("ws://{addr}"), tcp).await.expect("the WebSocket handshake");
+                assert!(matches!(next_ws_frame(&mut ws).await, DirectFrame::Challenge(_)));
+                let answer = tokio::time::timeout(Duration::from_secs(5), next_ws_frame(&mut ws))
+                    .await
+                    .expect("a silent peer is answered once its hello deadline passes");
+                assert_eq!(answer, DirectFrame::Closed("expected HELLO".into()));
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn a_frame_over_the_socket_limit_closes_the_connection() {
+        LocalSet::new()
+            .run_until(async {
+                let limits = Limits { max_frame_bytes: 1024, hello: Duration::from_secs(5), handshake: Duration::from_secs(5), ..Limits::default() };
+                let (addr, hub) = plain_listener(limits).await;
+                let phone = generate_keypair();
+                hub.set_paired(std::slice::from_ref(&phone.pubkey_hex));
+                let tcp = tokio::net::TcpStream::connect(addr).await.unwrap();
+                let (mut ws, _) = tokio_tungstenite::client_async(format!("ws://{addr}"), tcp).await.expect("the WebSocket handshake");
+                let DirectFrame::Challenge(challenge) = next_ws_frame(&mut ws).await else { panic!("expected a challenge") };
+                let auth = build_auth_event(&phone, "ws://direct", &challenge, now_secs() * 1000).unwrap();
+                let hello = DirectFrame::Hello { auth, since: 0, recipients: vec![] };
+                ws.send(Message::Text(encode_direct_frame(&hello))).await.unwrap();
+                assert_eq!(next_ws_frame(&mut ws).await, DirectFrame::Ready);
+
+                // One text message larger than the server accepts.
+                ws.send(Message::Text("x".repeat(limits.max_frame_bytes + 1))).await.unwrap();
+                let ended = tokio::time::timeout(Duration::from_secs(5), async {
+                    loop {
+                        match ws.next().await {
+                            Some(Ok(Message::Text(text))) => panic!("an oversize frame was delivered: {text}"),
+                            Some(Ok(_)) => continue,
+                            Some(Err(_)) | None => break,
+                        }
+                    }
+                })
+                .await;
+                assert!(ended.is_ok(), "an oversize frame ends the connection");
+                assert!(hub.conns.borrow().is_empty(), "the connection was unregistered");
+            })
+            .await;
+    }
 }
+
