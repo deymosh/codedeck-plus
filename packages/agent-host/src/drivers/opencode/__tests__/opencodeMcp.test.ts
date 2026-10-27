@@ -97,15 +97,69 @@ describe('OpenCode MCP servers', () => {
     expect(config.read().mcp).toEqual({ servers: { fs: { type: 'local', command: ['x'], enabled: false } } });
   });
 
-  it('leaves a file with comments untouched and says so', async () => {
+  it('edits an opencode.jsonc in place, keeping its comments', async () => {
+    // OpenCode's own tools may leave the global config as JSONC; it is
+    // edited as OpenCode edits it, not refused and not rewritten.
+    const config = configDir();
+    const jsonc = path.join(path.dirname(config.file), 'opencode.jsonc');
+    mkdirSync(path.dirname(jsonc), { recursive: true });
+    writeFileSync(jsonc, '{\n  // the owner\'s note\n  "$schema": "https://opencode.ai/config.json",\n  "mcp": { "fs": { "type": "local", "command": ["x"] }, },\n}\n');
+    const mcp = new OpenCodeMcp(async () => fakeOpenCode().client, config.files);
+
+    expect((await mcp.list()).servers.map((s) => s.name)).toEqual(['fs']);
+    await mcp.act('add', [{ name: 'gh', setup: { type: 'http', url: 'https://x/mcp' } }], []);
+    await mcp.act('disable', [], ['fs']);
+    const text = readFileSync(jsonc, 'utf8');
+    expect(text).toContain("// the owner's note");
+    expect(text).toContain('"$schema"');
+    expect(existsSync(config.file)).toBe(false);
+    expect((await restarted(config.files).list()).servers).toEqual([
+      { name: 'fs', transport: 'stdio', target: 'x', enabled: false },
+      { name: 'gh', transport: 'http', target: 'https://x/mcp', enabled: true },
+    ]);
+  });
+
+  it('lists a name as the last file has it, and removes it from every file', async () => {
+    // OpenCode reads config.json, opencode.json, opencode.jsonc in that
+    // order, a later file overriding an earlier one.
+    const config = configDir({ mcp: { fs: { type: 'local', command: ['old'] } } });
+    writeFileSync(path.join(path.dirname(config.file), 'opencode.jsonc'), '{ "mcp": { "fs": { "type": "local", "command": ["new"] } } }');
+    const mcp = new OpenCodeMcp(async () => fakeOpenCode().client, config.files);
+    expect((await mcp.list()).servers[0]).toMatchObject({ name: 'fs', target: 'new' });
+    expect((await mcp.act('remove', [], ['fs'])).servers).toEqual([]);
+    expect((await restarted(config.files).list()).servers).toEqual([]);
+  });
+
+  it('repairs a config file an interrupted write left empty', async () => {
+    // The file is written through a rename for this reason; an empty one is
+    // a config with nothing in it, not a broken one.
     const config = configDir();
     mkdirSync(path.dirname(config.file), { recursive: true });
-    const text = '{\n  // mine\n  "mcp": { "fs": { "type": "local", "command": ["x"] } }\n}\n';
+    writeFileSync(config.file, '');
+    const mcp = new OpenCodeMcp(async () => fakeOpenCode().client, config.files);
+    await mcp.act('add', [{ name: 'gh', setup: { type: 'http', url: 'https://x/mcp' } }], []);
+    expect(config.read()).toEqual({ mcp: { gh: { type: 'remote', url: 'https://x/mcp' } } });
+  });
+
+  it('a file that does not parse blocks only its own servers', async () => {
+    // A broken later file that never mentions the name does not stop a
+    // change to a server the readable file holds.
+    const config = configDir({ mcp: { fs: { type: 'local', command: ['x'] } } });
+    writeFileSync(path.join(path.dirname(config.file), 'opencode.jsonc'), '{ "mcp": { "gh": ');
+    const mcp = new OpenCodeMcp(async () => fakeOpenCode().client, config.files);
+    expect((await mcp.act('remove', [], ['fs'])).servers).toEqual([]);
+    // But a change to the name it does mention still stops there.
+    await expect(mcp.act('remove', [], ['gh'])).rejects.toThrow(/not a valid OpenCode config/);
+  });
+
+  it('leaves a file that does not parse untouched, and the server unasked', async () => {
+    const config = configDir();
+    mkdirSync(path.dirname(config.file), { recursive: true });
+    const text = '{ "mcp": { "fs": ';
     writeFileSync(config.file, text);
     const server = fakeOpenCode();
     const mcp = new OpenCodeMcp(async () => server.client, config.files);
-    await expect(mcp.act('remove', [], ['fs'])).rejects.toThrow(/has comments/);
-    await expect(mcp.act('add', [{ name: 'gh', setup: { type: 'http', url: 'https://x' } }], [])).rejects.toThrow(/has comments/);
+    await expect(mcp.act('add', [{ name: 'gh', setup: { type: 'http', url: 'https://x' } }], [])).rejects.toThrow(/not a valid OpenCode config/);
     expect(readFileSync(config.file, 'utf8')).toBe(text);
     // Refused before the running server took it: the two never disagree.
     expect(server.client.mcp.add).not.toHaveBeenCalled();
