@@ -18,7 +18,9 @@ use protocol::capabilities::PROTOCOL_VERSION;
 #[derive(Parser)]
 #[command(
     name = "codedeck-bridge",
-    version,
+    // The release number stamped at build time, as `version` prints it, not
+    // the crate's own: a release build is stamped with its tag.
+    version = bridge_runtime::version(),
     about = "Run agent sessions on this machine and drive them from the CodeDeck phone app.",
     after_help = "Configuration: flags > CODEDECK_* environment > <home>/config.json > defaults.\n\
                   State: <home>/state.json (bridge key and pairings, owner-only)."
