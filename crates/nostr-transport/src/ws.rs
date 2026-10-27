@@ -1457,6 +1457,116 @@ mod tests {
             .await;
     }
 
+    /// `set_relays` only touches the diff: a relay dropped from the list is
+    /// closed deliberately (no `on_close`) and its socket stops holding up
+    /// the subscriptions it carried, so EOSE the other relays already sent
+    /// completes them right away.
+    #[tokio::test]
+    async fn set_relays_closes_a_removed_relay_and_stops_the_sub_waiting_on_it() {
+        LocalSet::new()
+            .run_until(async {
+                let mut a = mock_relay().await;
+                let mut b = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let t = WsTransport::new(WsConfig {
+                    relays: vec![a.url.clone(), b.url.clone()],
+                    auth: Rc::new(phone.clone()),
+                    proxy: None,
+                });
+                t.ensure_connected();
+                wait_until(|| t.connected_relays().len() == 2).await;
+                let (_sub, seen) = recording_sub(&t, &phone);
+                assert!(a.next_frame().await.starts_with(r#"["REQ","cd-1""#));
+                assert!(b.next_frame().await.starts_with(r#"["REQ","cd-1""#));
+
+                // B has stored everything it has, A has not: the subscription
+                // is not complete while A still carries it. The barrier event
+                // orders the wait behind B's EOSE.
+                b.push(r#"["EOSE","cd-1"]"#.to_string());
+                b.push(format!(r#"["EVENT","cd-1",{}]"#, signed_note(24515, "barrier")));
+                wait_until(|| !seen.events.borrow().is_empty()).await;
+                assert_eq!(seen.eoses.get(), 0, "A has not EOSEd, so the sub must still wait on it");
+
+                t.set_relays(std::slice::from_ref(&b.url));
+
+                assert_eq!(t.connected_relays(), BTreeSet::from([b.url.clone()]), "the removed relay must no longer be connected");
+                assert_eq!(seen.eoses.get(), 1, "with A closed, the sub is complete from B alone");
+                assert_eq!(seen.closes.get(), 0, "a relay removed on purpose does not close the subscription");
+                t.shutdown();
+            })
+            .await;
+    }
+
+    /// A relay added by `set_relays` is dialled and every open subscription is
+    /// REQ'd to it as it comes up, so it starts carrying traffic immediately.
+    #[tokio::test]
+    async fn set_relays_dials_and_subscribes_an_added_relay() {
+        LocalSet::new()
+            .run_until(async {
+                let mut a = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let t = transport(&a, &phone);
+                t.ensure_connected();
+                let (_sub, _seen) = recording_sub(&t, &phone);
+                assert!(a.next_frame().await.starts_with(r#"["REQ","cd-1""#));
+
+                let mut c = mock_relay().await;
+                t.set_relays(&[a.url.clone(), c.url.clone()]);
+                wait_until(|| t.connected_relays().len() == 2).await;
+
+                assert!(
+                    c.next_frame().await.starts_with(r#"["REQ","cd-1""#),
+                    "the added relay must be sent the open subscription's REQ"
+                );
+                assert!(t.connected_relays().contains(&a.url), "the unchanged relay keeps its socket");
+                t.shutdown();
+            })
+            .await;
+    }
+
+    /// `subscribe_to` pins a subscription to the named relays: only they get
+    /// the REQ, and EOSE from one of them is enough although another relay is
+    /// connected and has said nothing.
+    #[tokio::test]
+    async fn subscribe_to_opens_the_subscription_only_on_the_named_relays() {
+        LocalSet::new()
+            .run_until(async {
+                let mut a = mock_relay().await;
+                let mut b = mock_relay().await;
+                let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+                let t = WsTransport::new(WsConfig {
+                    relays: vec![a.url.clone(), b.url.clone()],
+                    auth: Rc::new(phone.clone()),
+                    proxy: None,
+                });
+                t.ensure_connected();
+                wait_until(|| t.connected_relays().len() == 2).await;
+
+                let (callbacks, seen_b) = recording_callbacks();
+                let _pinned = t.subscribe_to(std::slice::from_ref(&b.url), a_filter(&phone), callbacks);
+                assert!(b.next_frame().await.starts_with(r#"["REQ","cd-1""#), "the named relay must carry the sub");
+
+                // A second, ordinary subscription goes everywhere. A's first
+                // frame must be ITS REQ: had cd-1 been sent to A, that would
+                // have arrived first.
+                let (_all, _seen_a) = recording_sub(&t, &phone);
+                assert!(
+                    a.next_frame().await.starts_with(r#"["REQ","cd-2""#),
+                    "the pinned subscription must never reach an unnamed relay"
+                );
+                assert!(b.next_frame().await.starts_with(r#"["REQ","cd-2""#));
+
+                // B's EOSE completes the pinned sub although A, connected and
+                // REQ'd for the other sub only, never answered for this one.
+                b.push(r#"["EOSE","cd-1"]"#.to_string());
+                b.push(format!(r#"["EVENT","cd-1",{}]"#, signed_note(24515, "barrier")));
+                wait_until(|| !seen_b.events.borrow().is_empty()).await;
+                assert_eq!(seen_b.eoses.get(), 1, "the pinned sub waits only on the relay it named");
+                t.shutdown();
+            })
+            .await;
+    }
+
     #[tokio::test]
     async fn a_deliberate_shutdown_stops_reporting_the_relay_as_connected_at_once() {
         LocalSet::new()
@@ -2014,18 +2124,20 @@ mod tests {
         closes: Cell<u32>,
     }
 
-    fn recording_sub(t: &WsTransport, phone: &Keypair) -> (Box<dyn TransportSub>, Rc<Seen>) {
+    fn recording_callbacks() -> (SubCallbacks, Rc<Seen>) {
         let seen = Rc::new(Seen::default());
         let (a, b, c) = (Rc::clone(&seen), Rc::clone(&seen), Rc::clone(&seen));
-        let sub = t.subscribe(
-            a_filter(phone),
-            SubCallbacks {
-                on_event: Rc::new(move |ev| a.events.borrow_mut().push(ev.id.clone())),
-                on_eose: Rc::new(move || b.eoses.set(b.eoses.get() + 1)),
-                on_close: Rc::new(move |_| c.closes.set(c.closes.get() + 1)),
-            },
-        );
-        (sub, seen)
+        let callbacks = SubCallbacks {
+            on_event: Rc::new(move |ev| a.events.borrow_mut().push(ev.id.clone())),
+            on_eose: Rc::new(move || b.eoses.set(b.eoses.get() + 1)),
+            on_close: Rc::new(move |_| c.closes.set(c.closes.get() + 1)),
+        };
+        (callbacks, seen)
+    }
+
+    fn recording_sub(t: &WsTransport, phone: &Keypair) -> (Box<dyn TransportSub>, Rc<Seen>) {
+        let (callbacks, seen) = recording_callbacks();
+        (t.subscribe(a_filter(phone), callbacks), seen)
     }
 
     #[tokio::test]
