@@ -10,10 +10,14 @@
 //! - A paired phone's payload is encrypted with one of its live session
 //!   keys, or its identity; the event itself is always signed by the
 //!   identity.
-//! - Event ids are remembered (the last [`MAX_PROCESSED_IDS`]) and persisted:
-//!   a reconnect subscribes with `since` = last seen − 5 s, so the relay
-//!   replays recent commands, and without the ids they would run twice
-//!   (duplicate sessions, re-sent input).
+//! - Event ids are remembered and persisted: a reconnect subscribes with
+//!   `since` = last seen − 5 s, so the relay replays recent commands, and
+//!   without the ids they would run twice (duplicate sessions, re-sent
+//!   input). An id is kept only while its event is young enough to act on:
+//!   past [`MAX_EVENT_AGE_SECS`] a replay is dropped as stale whether or not
+//!   its id is remembered, so the set holds the last few minutes' commands
+//!   (written on every command) and [`MAX_PROCESSED_IDS`] only bounds a
+//!   flood.
 //! - Terminal keystrokes take the live kind and [`Ingest::accept_live`]
 //!   instead: their per-terminal `seq` is the dedup, and remembering their
 //!   ids here would age command ids out of the set (see below).
@@ -50,7 +54,9 @@ pub struct CommandsFilter {
 }
 
 pub struct Ingest {
-    order: VecDeque<String>,
+    /// Remembered ids with their events' `created_at`, oldest remembered
+    /// first.
+    order: VecDeque<(String, u64)>,
     seen: HashSet<String>,
     last_seen: u64,
 }
@@ -61,11 +67,15 @@ fn short(pubkey: &str) -> &str {
 
 impl Ingest {
     /// Resume from a persisted cursor and dedup set (oldest id first).
+    ///
+    /// Only the ids are stored, so each is given the cursor's time: no
+    /// command handled before the restart is newer than the cursor, so none
+    /// is forgotten while a replay of it could still be acted on.
     pub fn new(last_seen: u64, processed: Vec<String>) -> Self {
         let mut ingest = Self { order: VecDeque::new(), seen: HashSet::new(), last_seen };
         let skip = processed.len().saturating_sub(MAX_PROCESSED_IDS);
         for id in processed.into_iter().skip(skip) {
-            ingest.mark(&id);
+            ingest.mark(&id, last_seen);
         }
         ingest
     }
@@ -77,7 +87,20 @@ impl Ingest {
 
     /// The dedup ids, oldest first, for persisting beside the cursor.
     pub fn processed_ids(&self) -> Vec<String> {
-        self.order.iter().cloned().collect()
+        self.order.iter().map(|(id, _)| id.clone()).collect()
+    }
+
+    /// Forget the ids of events too old to act on: a replay of one is
+    /// dropped as stale by the same rule, so its id guards nothing.
+    pub fn forget_stale(&mut self, now_secs: u64) {
+        let seen = &mut self.seen;
+        self.order.retain(|(id, at)| {
+            let keep = !is_stale(*at, now_secs);
+            if !keep {
+                seen.remove(id);
+            }
+            keep
+        });
     }
 
     /// An event from the standing subscription, whose author the caller has
@@ -98,9 +121,10 @@ impl Ingest {
         if self.stale(event, now_secs) {
             return None;
         }
+        self.forget_stale(now_secs);
         // Remembered before it is read, as it always was: a paired phone's
         // junk takes a slot rather than being read again on every redelivery.
-        if !self.mark(&event.id) {
+        if !self.mark(&event.id, event.created_at) {
             return None;
         }
         let opened = self.open(event, keys, session_keys);
@@ -140,7 +164,7 @@ impl Ingest {
     /// Whether an event is too old to act on: a relay that does not honour
     /// `since` must not replay old commands (or type old keystrokes).
     fn stale(&self, event: &InboundEvent, now_secs: u64) -> bool {
-        if event.created_at + MAX_EVENT_AGE_SECS < now_secs {
+        if is_stale(event.created_at, now_secs) {
             log::info!("[Ingest] Ignoring stale event ({}s old)", now_secs - event.created_at);
             return true;
         }
@@ -169,11 +193,12 @@ impl Ingest {
 
     /// An event from the pairing window's subscription.
     pub fn accept_pairing(&mut self, event: &InboundEvent, keys: &Keypair, now_secs: u64) -> Option<PairRequestMsg> {
-        if event.created_at + MAX_EVENT_AGE_SECS < now_secs {
+        if is_stale(event.created_at, now_secs) {
             return None;
         }
         let plaintext = decrypt_from(&keys.secret_key, &event.pubkey, &event.content).ok()?;
-        if !self.mark(&event.id) {
+        self.forget_stale(now_secs);
+        if !self.mark(&event.id, event.created_at) {
             return None;
         }
         match protocol::decode_phone_to_bridge(&plaintext) {
@@ -187,19 +212,25 @@ impl Ingest {
         }
     }
 
-    /// Remember an id; false when it was already there.
-    fn mark(&mut self, id: &str) -> bool {
+    /// Remember an id, of an event created at `at`; false when it was
+    /// already there.
+    fn mark(&mut self, id: &str, at: u64) -> bool {
         if !self.seen.insert(id.to_string()) {
             return false;
         }
-        self.order.push_back(id.to_string());
+        self.order.push_back((id.to_string(), at));
         if self.order.len() > MAX_PROCESSED_IDS {
-            if let Some(old) = self.order.pop_front() {
+            if let Some((old, _)) = self.order.pop_front() {
                 self.seen.remove(&old);
             }
         }
         true
     }
+}
+
+/// Whether an event created at `created_at` is too old to act on.
+fn is_stale(created_at: u64, now_secs: u64) -> bool {
+    created_at + MAX_EVENT_AGE_SECS < now_secs
 }
 
 #[cfg(test)]
@@ -286,10 +317,42 @@ mod tests {
         let first = f.event(INPUT);
         assert!(f.accept(&first).is_some());
         for i in 0..MAX_PROCESSED_IDS {
-            assert!(f.ingest.mark(&format!("filler{i}")));
+            assert!(f.ingest.mark(&format!("filler{i}"), NOW));
         }
         assert!(f.accept(&first).is_some(), "the oldest id aged out");
         assert_eq!(f.ingest.processed_ids().len(), MAX_PROCESSED_IDS);
+    }
+
+    #[test]
+    fn an_id_is_forgotten_once_its_event_is_too_old_to_act_on() {
+        let mut f = Fixture::new();
+        let ev = f.event(INPUT);
+        assert!(f.accept(&ev).is_some());
+        // Still guarded while a replay could be acted on.
+        let phone = f.phone.clone();
+        let next = f.event_from(&phone, INPUT, NOW + MAX_EVENT_AGE_SECS);
+        assert!(f.ingest.accept(&next, &f.bridge, &[], NOW + MAX_EVENT_AGE_SECS).is_some());
+        assert!(f.ingest.processed_ids().contains(&ev.id));
+        assert!(f.ingest.accept(&ev, &f.bridge, &[], NOW + MAX_EVENT_AGE_SECS).is_none(), "a replay in the window is a duplicate");
+        // One second later the event is stale: its id goes, and a replay of
+        // it is still refused, by its age.
+        let later = NOW + MAX_EVENT_AGE_SECS + 1;
+        let last = f.event_from(&phone, INPUT, later);
+        assert!(f.ingest.accept(&last, &f.bridge, &[], later).is_some());
+        assert!(!f.ingest.processed_ids().contains(&ev.id), "the stale id is no longer stored");
+        assert!(f.ingest.accept(&ev, &f.bridge, &[], later).is_none(), "a stale replay is still not run");
+    }
+
+    #[test]
+    fn ids_loaded_at_a_restart_are_kept_while_the_cursor_is_recent() {
+        // The store holds ids only; each takes the cursor's time on load.
+        let mut f = Fixture::new();
+        let ev = f.event(INPUT);
+        f.ingest = Ingest::new(NOW, vec![ev.id.clone()]);
+        f.ingest.forget_stale(NOW + MAX_EVENT_AGE_SECS);
+        assert!(f.accept(&ev).is_none(), "the replay after a restart is a duplicate");
+        f.ingest.forget_stale(NOW + MAX_EVENT_AGE_SECS + 1);
+        assert!(f.ingest.processed_ids().is_empty());
     }
 
     #[test]

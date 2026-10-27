@@ -590,6 +590,9 @@ impl Engine {
     }
 
     fn persist_cursor(&mut self) {
+        // Only ids a replay could still run are worth a byte of the state
+        // file, which this rewrites on every command.
+        self.ingest.forget_stale(self.now() / 1000);
         let processed = serde_json::to_string(&self.ingest.processed_ids()).expect("ids serialize");
         let last_seen = self.ingest.last_seen().to_string();
         for (key, value) in [(store_keys::LAST_SEEN, last_seen), (store_keys::PROCESSED_IDS, processed)] {
