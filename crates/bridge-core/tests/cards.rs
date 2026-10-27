@@ -271,11 +271,6 @@ fn a_card_for_a_session_that_is_not_running_is_cancelled_at_once() {
     assert!(matches!(reply_to(&mut rig, &h), BridgeMessage::PermissionOutcome(SelectOutcome::Cancelled { .. })));
 }
 
-fn set_option(rig: &mut Rig, s: &str, option: &str, value: &str) -> Option<String> {
-    rig.send(json!({"v":12,"type":"set-option","sessionId":s,"option":option,"value":value}));
-    rig.host_frames().into_iter().find(|f| matches!(f.message, BridgeMessage::SetOption { .. })).and_then(|f| f.id)
-}
-
 fn confirmed(rig: &mut Rig) -> Vec<String> {
     rig.messages()
         .into_iter()
@@ -290,27 +285,27 @@ fn confirmed(rig: &mut Rig) -> Vec<String> {
 fn set_option_is_checked_against_the_catalog_then_confirmed() {
     let mut rig = Rig::new();
     let s = ready(&mut rig);
-    assert_eq!(set_option(&mut rig, &s, "mode", "warp"), None, "not an alpha mode");
-    let id = set_option(&mut rig, &s, "mode", "plan").expect("sent");
+    assert!(set_option(&mut rig, &s, "mode", "warp").is_none(), "not an alpha mode");
+    let (id, _) = set_option(&mut rig, &s, "mode", "plan").expect("sent");
     rig.host_reply(&id, HostMessage::Ack);
     let msgs = rig.messages();
     assert!(msgs.iter().any(|m| matches!(m, BridgeToPhone::OptionConfirmed(o) if o.value == "plan")));
     assert_eq!(last_heartbeat(&msgs).sessions[0].mode.as_deref(), Some("plan"));
 
-    let id = set_option(&mut rig, &s, "effort", "high").unwrap();
+    let (id, _) = set_option(&mut rig, &s, "effort", "high").unwrap();
     rig.host_reply(&id, HostMessage::Error { message: "no".into() });
     assert_eq!(confirmed(&mut rig), ["high"], "the agent's default effort stays in force");
-    let id = set_option(&mut rig, &s, "effort", "low").unwrap();
+    let (id, _) = set_option(&mut rig, &s, "effort", "low").unwrap();
     rig.host_reply(&id, HostMessage::Ack);
     assert_eq!(confirmed(&mut rig), ["low"]);
-    let id = set_option(&mut rig, &s, "effort", "high").unwrap();
+    let (id, _) = set_option(&mut rig, &s, "effort", "high").unwrap();
     rig.host_reply(&id, HostMessage::Error { message: "no".into() });
     assert_eq!(confirmed(&mut rig), ["low"], "a refused change confirms the effort in force");
 
     // Beta lists no levels of its own: its levels are per model, so the
     // agent judges one — and its refusal confirms nothing new.
     let b = rig.ready_session("beta");
-    let id = set_option(&mut rig, &b, "effort", "max").expect("left to the agent");
+    let (id, _) = set_option(&mut rig, &b, "effort", "max").expect("left to the agent");
     rig.host_reply(&id, HostMessage::Error { message: "not a level of this model".into() });
     assert!(!confirmed(&mut rig).contains(&"max".to_string()));
 }

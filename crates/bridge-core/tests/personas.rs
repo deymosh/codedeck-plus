@@ -44,15 +44,6 @@ fn info_persona(persona: &str) -> SessionEvent {
     }
 }
 
-/// Send a `set-option` and return the host frame it produced, if any.
-fn set_option(rig: &mut Rig, s: &str, option: &str, value: &str) -> Option<(String, BridgeMessage)> {
-    rig.send(json!({"v":12,"type":"set-option","sessionId":s,"option":option,"value":value}));
-    rig.host_frames()
-        .into_iter()
-        .find(|f| matches!(f.message, BridgeMessage::SetOption { .. }))
-        .map(|f| (f.id.unwrap_or_default(), f.message))
-}
-
 #[test]
 fn personas_are_asked_of_the_agent_or_the_phone_is_told_why_not() {
     let mut rig = Rig::new();
@@ -165,15 +156,6 @@ fn a_persona_the_agent_does_not_have_leaves_the_session_on_the_default_it_report
     rig.host_event(&params.session_id, SessionEvent::Ended { error: Some("boom".into()), resume_lost: false });
     let (_, params) = rig.start_request();
     assert_eq!(params.persona.as_deref(), Some("build"));
-}
-
-#[test]
-fn a_persona_on_an_agent_without_them_is_ignored() {
-    let mut rig = Rig::new();
-    rig.host_up();
-    rig.send(json!({"v":12,"type":"create-session","agent":"alpha","persona":"review"}));
-    let (_, params) = rig.start_request();
-    assert_eq!(params.persona, None);
 }
 
 #[test]

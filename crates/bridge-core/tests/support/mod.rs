@@ -413,3 +413,12 @@ pub fn heartbeats(msgs: &[BridgeToPhone]) -> Vec<protocol::events::SessionListMs
 pub fn last_heartbeat(msgs: &[BridgeToPhone]) -> protocol::events::SessionListMsg {
     heartbeats(msgs).pop().expect("a heartbeat was published")
 }
+
+/// Send a `set-option` and return the host frame it produced, if any.
+pub fn set_option(rig: &mut Rig, s: &str, option: &str, value: &str) -> Option<(String, BridgeMessage)> {
+    rig.send(json!({"v":12,"type":"set-option","sessionId":s,"option":option,"value":value}));
+    rig.host_frames()
+        .into_iter()
+        .find(|f| matches!(f.message, BridgeMessage::SetOption { .. }))
+        .map(|f| (f.id.unwrap_or_default(), f.message))
+}

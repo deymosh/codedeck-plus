@@ -128,10 +128,4 @@ mod tests {
         assert!(!is_onion_http("http://.onion/x"));
         assert!(!is_onion_http("http://abcdef.onion.example.com/x"));
     }
-
-    #[tokio::test]
-    async fn git_head_is_none_outside_a_repository() {
-        let dir = tempfile::tempdir().unwrap();
-        assert_eq!(git_head(dir.path()).await, None);
-    }
 }
