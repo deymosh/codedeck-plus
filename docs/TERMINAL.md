@@ -34,6 +34,10 @@ Three gates, all of which must pass:
    the bridge runs (atomic file writes; the bridge re-reads the file, cached
    by modification time, on every terminal message), and **withdrawing a
    device closes its terminals at once** — the kill switch for a lost phone.
+   A device is its client's first session key, so once that client is gone
+   (its key lapsed, it was dropped for a newer client, or its identity was
+   unpaired) the bridge drops the device from the file at the next
+   heartbeat: the same phone comes back as a new device, to approve again.
 
 Optionally, the **phone can require fingerprint or PIN** (Android
 `BiometricPrompt`, device credential as fallback) before opening or attaching

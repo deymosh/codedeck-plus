@@ -538,16 +538,16 @@ impl Runtime {
                 }
             }
             Effect::TerminalClose { term } => self.terminals.close(&term),
-            Effect::TerminalPending(pending) => {
-                // The refused devices go to the allowlist's writer thread,
-                // which reads the file, replaces `pending` with this list and
-                // writes it — never the runtime's thread, which an unapproved
+            Effect::TerminalDevices(devices) => {
+                // The devices go to the allowlist's writer thread, which
+                // reads the file, replaces `pending`, drops the approved
+                // devices no client is any more, and writes it — never the runtime's thread, which an unapproved
                 // device spamming `terminal-open` would otherwise stall with a
                 // read per message. The engine already holds its own pending
                 // list, and the write's new mtime reaches it through the
                 // per-message and periodic allowlist checks, so nothing is
                 // sent back to it here.
-                self.allowlist_writer.set_pending(pending);
+                self.allowlist_writer.set(devices);
             }
             Effect::Audit(record) => self.audit.record(record),
         }

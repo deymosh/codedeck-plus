@@ -306,7 +306,7 @@ fn audits_of(acts: &[Effect], what: TerminalAuditWhat) -> Vec<TerminalAuditRecor
 fn pending(acts: &[Effect]) -> Vec<Vec<bridge_core::PendingDevice>> {
     acts.iter()
         .filter_map(|e| match e {
-            Effect::TerminalPending(p) => Some(p.clone()),
+            Effect::TerminalDevices(d) => Some(d.pending.clone()),
             _ => None,
         })
         .collect()
@@ -579,6 +579,45 @@ fn an_open_without_a_client_is_refused_rather_than_ignored() {
     assert_eq!(refusal[0].reason, TerminalEndReason::NotAllowed);
     assert!(refusal[0].device.is_none(), "there is no device to name");
     assert!(pending(&acts).is_empty(), "and none to record");
+}
+
+/// A device is its client's first key: once the client is gone, the phone
+/// comes back as a new device, so the old approval is dropped from the file
+/// rather than left there for good.
+#[test]
+fn an_approved_device_whose_client_lapsed_leaves_the_allowlist() {
+    let mut world = World::new();
+    let key = generate_keypair();
+    let short_lived = device_id(&key.pubkey_hex);
+    let bridge = world.rig.bridge.pubkey_hex.clone();
+    let phone = world.rig.phone.clone();
+    world.rig.phone_event(
+        &phone,
+        json!({"v":12,"type":"session-key","sessionKey":{
+            "pubkeyHex": key.pubkey_hex, "bridgePubkeyHex": bridge, "expiresAt": NOW_SECS + 120, "label": "Tablet"}}),
+        Via::Direct,
+    );
+    let first = world.device.clone();
+    world.allow(&[&first, &short_lived]);
+    world.rig.take();
+
+    world.rig.advance(180_000);
+    let written: Vec<_> = world
+        .rig
+        .take()
+        .into_iter()
+        .filter_map(|e| match e {
+            Effect::TerminalDevices(d) => Some(d),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(written.len(), 1, "the file is told once: {written:?}");
+    assert_eq!(written[0].live.iter().collect::<Vec<_>>(), [&first], "only the device whose client remains is live");
+
+    // The device that remains still opens a terminal.
+    world.command(json!({"v":12,"type":"terminal-open","openId":"o1","cols":80,"rows":24}));
+    let (_, msgs) = world.take();
+    assert!(exits(&msgs).is_empty(), "the remaining device is still approved");
 }
 
 // --- input ---

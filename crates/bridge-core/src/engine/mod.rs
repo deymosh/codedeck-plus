@@ -400,6 +400,7 @@ impl Engine {
         match kind {
             TimerKind::Heartbeat => {
                 self.prune_session_keys();
+                self.forget_gone_devices();
                 self.persist_cursor();
                 self.registry_dirty |= self.tombstones.prune(self.now());
                 self.registry_dirty |= self.activity_dirty;
