@@ -17,25 +17,32 @@ export const REDACTED = '[redacted]';
 /** Below this length a value is not treated as a credential. */
 const MIN_SECRET_LENGTH = 8;
 
-/** The forms one secret may appear in, longest first. */
+/** The forms one secret may appear in. */
 function formsOf(secret: string): string[] {
   const bytes = Buffer.from(secret, 'utf8');
-  const forms = new Set([
+  return [
     secret,
     `Bearer ${secret}`,
+    // A key in an address (a query string, a pasted callback) is escaped.
+    encodeURIComponent(secret),
     bytes.toString('base64'),
     bytes.toString('base64').replace(/=+$/, ''),
     bytes.toString('base64url'),
-  ]);
-  return [...forms].filter((form) => form.length >= MIN_SECRET_LENGTH).sort((a, b) => b.length - a.length);
+  ];
 }
 
 /** `text` with every occurrence of each secret (and its encodings) removed. */
 export function redactSecrets(text: string, secrets: Iterable<string | null | undefined>): string {
-  let out = text;
+  const forms = new Set<string>();
   for (const secret of secrets) {
     if (typeof secret !== 'string' || secret.length < MIN_SECRET_LENGTH) continue;
-    for (const form of formsOf(secret)) out = out.split(form).join(REDACTED);
+    for (const form of formsOf(secret)) if (form.length >= MIN_SECRET_LENGTH) forms.add(form);
   }
+  // Longest first across every secret, not per secret: one secret can be
+  // part of another (a token, and a header value built from it), and
+  // removing the shorter first would cut the longer apart and leave the rest
+  // of it in the text.
+  let out = text;
+  for (const form of [...forms].sort((a, b) => b.length - a.length)) out = out.split(form).join(REDACTED);
   return out;
 }
