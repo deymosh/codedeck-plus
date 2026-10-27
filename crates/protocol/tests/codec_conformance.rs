@@ -13,10 +13,31 @@ fn corpus() -> Value {
     serde_json::from_str(CORPUS).expect("corpus.json is valid JSON")
 }
 
+/// A corpus entry is a message object, or — for a packed payload — the raw
+/// wire text as a JSON string. Decoders take wire text, so a string entry is
+/// used as-is; re-serializing it would quote it into valid but meaningless
+/// JSON and the packing path would never run.
+fn wire_text(entry: &Value) -> String {
+    entry.as_str().map(str::to_string).unwrap_or_else(|| entry.to_string())
+}
+
+/// A packed fixture must really be packed, or the corpus has stopped
+/// exercising `packing::unpack` through the public decoders.
+fn assert_packed(entry: &Value, where_: &str) {
+    if entry.is_string() {
+        let text = wire_text(entry);
+        assert!(
+            text.starts_with(protocol::packing::PACKED_PREFIX),
+            "{where_}: a string fixture must be a packed payload, got {text:.80}"
+        );
+    }
+}
+
 #[test]
 fn phone_to_bridge_valid_decode_and_semantic_round_trip() {
     for (i, msg) in corpus()["phoneToBridge"]["valid"].as_array().unwrap().iter().enumerate() {
-        let json = msg.to_string();
+        assert_packed(msg, &format!("phoneToBridge.valid[{i}]"));
+        let json = wire_text(msg);
         let decoded = decode_phone_to_bridge(&json)
             .unwrap_or_else(|e| panic!("phoneToBridge.valid[{i}] {json} -> {e}"));
         let wire = encode_phone_to_bridge(&decoded)
@@ -30,18 +51,26 @@ fn phone_to_bridge_valid_decode_and_semantic_round_trip() {
 #[test]
 fn phone_to_bridge_rejected_are_errors() {
     for (i, msg) in corpus()["phoneToBridge"]["rejected"].as_array().unwrap().iter().enumerate() {
-        let json = msg.to_string();
-        assert!(
-            decode_phone_to_bridge(&json).is_err(),
-            "phoneToBridge.rejected[{i}] {json} decoded but should not have"
-        );
+        let json = wire_text(msg);
+        let error = decode_phone_to_bridge(&json)
+            .err()
+            .unwrap_or_else(|| panic!("phoneToBridge.rejected[{i}] {json:.160} decoded but should not have"));
+        if msg.is_string() {
+            // A malformed packed fixture must be refused by unpacking, not
+            // merely fail JSON parsing after a wrong successful unpack.
+            assert!(
+                error.to_string().starts_with("invalid packed payload"),
+                "phoneToBridge.rejected[{i}] must fail unpacking, got: {error}"
+            );
+        }
     }
 }
 
 #[test]
 fn bridge_to_phone_valid_decode_and_semantic_round_trip() {
     for (i, msg) in corpus()["bridgeToPhone"]["valid"].as_array().unwrap().iter().enumerate() {
-        let json = msg.to_string();
+        assert_packed(msg, &format!("bridgeToPhone.valid[{i}]"));
+        let json = wire_text(msg);
         let decoded = decode_bridge_to_phone(&json)
             .unwrap_or_else(|e| panic!("bridgeToPhone.valid[{i}] {json} -> {e}"));
         let wire = encode_bridge_to_phone(&decoded);
@@ -54,11 +83,16 @@ fn bridge_to_phone_valid_decode_and_semantic_round_trip() {
 #[test]
 fn bridge_to_phone_rejected_are_errors() {
     for (i, msg) in corpus()["bridgeToPhone"]["rejected"].as_array().unwrap().iter().enumerate() {
-        let json = msg.to_string();
-        assert!(
-            decode_bridge_to_phone(&json).is_err(),
-            "bridgeToPhone.rejected[{i}] {json} decoded but should not have"
-        );
+        let json = wire_text(msg);
+        let error = decode_bridge_to_phone(&json)
+            .err()
+            .unwrap_or_else(|| panic!("bridgeToPhone.rejected[{i}] {json:.160} decoded but should not have"));
+        if msg.is_string() {
+            assert!(
+                error.to_string().starts_with("invalid packed payload"),
+                "bridgeToPhone.rejected[{i}] must fail unpacking, got: {error}"
+            );
+        }
     }
 }
 
@@ -167,14 +201,18 @@ fn corpus_covers_every_message_type() {
     let c = corpus();
     let mut p2b = std::collections::BTreeSet::new();
     for msg in c["phoneToBridge"]["valid"].as_array().unwrap() {
-        let decoded = decode_phone_to_bridge(&msg.to_string()).unwrap();
-        assert_eq!(p2b_type(&decoded), msg["type"].as_str().unwrap(), "wire name of {msg}");
+        let decoded = decode_phone_to_bridge(&wire_text(msg)).unwrap();
+        if let Some(ty) = msg["type"].as_str() {
+            assert_eq!(p2b_type(&decoded), ty, "wire name of {msg}");
+        }
         p2b.insert(p2b_type(&decoded));
     }
     let mut b2p = std::collections::BTreeSet::new();
     for msg in c["bridgeToPhone"]["valid"].as_array().unwrap() {
-        let decoded = decode_bridge_to_phone(&msg.to_string()).unwrap();
-        assert_eq!(b2p_type(&decoded), msg["type"].as_str().unwrap(), "wire name of {msg}");
+        let decoded = decode_bridge_to_phone(&wire_text(msg)).unwrap();
+        if let Some(ty) = msg["type"].as_str() {
+            assert_eq!(b2p_type(&decoded), ty, "wire name of {msg}");
+        }
         b2p.insert(b2p_type(&decoded));
     }
     assert_eq!(p2b.len(), P2B_TYPES, "phone→bridge types with a fixture: {p2b:?}");

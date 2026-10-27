@@ -8,6 +8,14 @@ implementation of the protocol can test itself against.
 - `phoneToBridge.valid` / `bridgeToPhone.valid` — each decodes, and
   `encode(decode(x))` re-decodes to an equal value (semantic round-trip).
 - `phoneToBridge.rejected` / `bridgeToPhone.rejected` — each is a decode error.
+- A **string** entry in either list is raw wire text rather than a JSON
+  object: a packed payload (`~` + base64 of the raw deflate stream, see
+  `packing.rs`). It is generated with the crate's own `pack`, not by hand, and
+  is written verbatim (re-serializing it as a JSON string would hide it from
+  the packing path). A rejected string fixture must fail *unpacking*.
+  The malformed ones are: bad base64, a truncated deflate stream, a stream
+  that inflates to non-UTF-8, and one that inflates past
+  `MAX_UNPACKED_BYTES`.
 - `forwardCompatible` — each still decodes: unknown fields are ignored, and
   an unknown value of an open vocabulary (entry type, tool, task and notice
   kind, MCP status, session state, install state, terminal end reason,
