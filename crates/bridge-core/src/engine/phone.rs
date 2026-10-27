@@ -99,7 +99,16 @@ impl Engine {
                 let accepted = if event.kind == protocol::kinds::LIVE_KIND {
                     self.ingest.accept_live(event, &self.config.keys, &keys, now_secs)
                 } else {
-                    self.ingest.accept(event, &self.config.keys, &keys, now_secs)
+                    let accepted = self.ingest.accept(event, &self.config.keys, &keys, now_secs);
+                    // The id is durable before the command runs. The cursor is
+                    // otherwise written only on the heartbeat, and a crash in
+                    // between leaves the relay's `since` replay free to run the
+                    // same command a second time (a duplicate session, input
+                    // sent twice).
+                    if accepted.is_some() {
+                        self.persist_cursor();
+                    }
+                    accepted
                 };
                 let Some((msg, key)) = accepted else { return };
                 // The live kind carries terminal input from a phone and
