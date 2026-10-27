@@ -923,6 +923,29 @@ describe('OpenCode modes, models and effort', () => {
     await session.end();
   });
 
+  it('waits for the agent of a directory OpenCode has only just booted', async () => {
+    // Verified against 2.1.4: right after a session is created in a new
+    // directory, agent.get answers AgentNotFoundError for a moment, even for
+    // the built-in agents. Reading then would drop the plan agent's edit deny.
+    const client = clientWith([]);
+    const get = asMock(client.agent.get);
+    const plain = get.getMockImplementation()!;
+    let calls = 0;
+    get.mockImplementation(async (input: { agentID: string }) => {
+      if (calls++ < 2) throw Object.assign(new Error('Agent not found: plan'), { name: 'AgentNotFoundError' });
+      return plain(input);
+    });
+    const ctx = recordingContext();
+    const session = OpenCodeDriver.withClient(client).startSession({ sessionId: 's1', agent: 'opencode', cwd: '/tmp', mode: 'plan' }, ctx);
+    await ctx.waitFor((e) => e.type === 'ready');
+    expect(client.session.update).toHaveBeenLastCalledWith({
+      sessionID: 'ses_1',
+      permissions: expect.arrayContaining([{ action: 'edit', resource: '*', effect: 'deny' }]),
+    });
+    expect(ctx.logs.some((l) => l.includes('could not read agent'))).toBe(false);
+    await session.end();
+  });
+
   it('refuses a mode, a model and an effort the model does not offer', async () => {
     const client = clientWith([], over);
     const ctx = recordingContext();

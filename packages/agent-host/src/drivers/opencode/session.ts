@@ -6,7 +6,7 @@
  * bridge.
  */
 import * as path from 'node:path';
-import type { OpenCodeClient, PermissionAsked, SessionInfo, V2Event } from '@opencode/client';
+import type { OpenCodeClient, PermissionAsked, PermissionRule, SessionInfo, V2Event } from '@opencode/client';
 import { parseSlashCommand } from '../../sdk/commands';
 import type { DriverSession, SessionContext, SessionMcpState } from '../../sdk/driver';
 import { PartialCoalescer } from '../../sdk/partial';
@@ -1169,18 +1169,31 @@ export class OpenCodeSession implements DriverSession {
    *  agent that cannot be read leaves only the mode's catch-all, which is
    *  logged: nothing the agent forbids would then be refused. */
   private async statePermissions(client: OpenCodeClient, sessionID: string, agent: string): Promise<void> {
-    const agentRules = await Promise.resolve()
-      .then(() => client.agent.get({ agentID: agent, location: { directory: this.cwd } }))
-      .then(
-        (got) => got.data.permissions,
-        (err) => {
-          this.ctx.log(`[opencode] could not read agent ${agent}'s permissions: ${formatOpenCodeError(err)}`);
-          return [];
-        },
-      );
+    const agentRules = await this.agentRules(client, agent);
     await client.session
       .update({ sessionID, permissions: permissionRules(this.mode, agentRules) })
       .catch((err) => this.ctx.log(`[opencode] could not set the session's permissions: ${formatOpenCodeError(err)}`));
+  }
+
+  /** `agent`'s own permission rules in this session's directory. A directory
+   *  OpenCode has only just booted has no agents for a moment — even `build`
+   *  is not found until about 0.1-0.3 s after the session was created
+   *  (verified against 2.1.4) — so a missing agent is waited for, as a
+   *  persona is; reading too early would drop rules such as the plan agent's
+   *  edit deny for the session's first turn. */
+  private async agentRules(client: OpenCodeClient, agent: string): Promise<PermissionRule[]> {
+    const deadline = Date.now() + PERSONA_WAIT_MS;
+    for (;;) {
+      try {
+        return (await client.agent.get({ agentID: agent, location: { directory: this.cwd } })).data.permissions;
+      } catch (err) {
+        if (!isNotFound(err) || Date.now() >= deadline) {
+          this.ctx.log(`[opencode] could not read agent ${agent}'s permissions: ${formatOpenCodeError(err)}`);
+          return [];
+        }
+        await delay(PERSONA_POLL_MS);
+      }
+    }
   }
 
   /** Tell the server which model (and reasoning variant) the session runs. */
