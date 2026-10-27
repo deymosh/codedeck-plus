@@ -86,6 +86,32 @@ const FRAME_LANE_BYTES: usize = 64 * 1024 * 1024;
 /// deliver, as the phone would reconnect and be handed the same pass again.
 const FRAME_LANE_STALL: Duration = Duration::from_secs(30);
 
+/// The bounds one direct-link server runs with. Production uses the numbers
+/// above; a test passes small ones, so it never opens sixty-four sockets or
+/// waits out a production timeout to see a refusal.
+#[derive(Clone, Copy)]
+struct Limits {
+    handshake: Duration,
+    hello: Duration,
+    idle: Duration,
+    max_connections: usize,
+    max_per_host: usize,
+    max_frame_bytes: usize,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            handshake: HANDSHAKE_TIMEOUT,
+            hello: HELLO_TIMEOUT,
+            idle: IDLE_TIMEOUT,
+            max_connections: MAX_CONNECTIONS,
+            max_per_host: MAX_CONNECTIONS_PER_HOST,
+            max_frame_bytes: MAX_FRAME_BYTES,
+        }
+    }
+}
+
 fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
@@ -427,6 +453,7 @@ pub async fn start(
     let npub = protocol::crypto::npub_from_hex(&bridge_pubkey).unwrap_or_else(|_| bridge_pubkey.clone());
     let web = crate::web::Web::new(npub, &config.endpoints, inputs.clone(), home, web_config);
     let hub = Hub::new(bridge_pubkey, inputs);
+    let limits = Limits::default();
     let mut tasks = Vec::new();
     let mut bound_wss = None;
     let mut cert_sha256 = None;
@@ -458,7 +485,7 @@ pub async fn start(
                     }
                     acceptor.accept(stream).await.ok()
                 }
-            })
+            }, limits)
             .await
         }));
     }
@@ -467,7 +494,7 @@ pub async fn start(
         log::info!("[Direct] Listening on ws://{addr} for an onion service");
         let hub = Rc::clone(&hub);
         tasks.push(tokio::task::spawn_local(async move {
-            accept_loop(listener, hub, None, |stream| async move { Some(stream) }).await
+            accept_loop(listener, hub, None, |stream| async move { Some(stream) }, limits).await
         }));
     }
     let endpoints = advertised_endpoints(config, bound_wss, in_container());
@@ -544,7 +571,7 @@ fn lan_ip() -> Option<IpAddr> {
     socket.local_addr().ok().map(|a| a.ip()).filter(|ip| !ip.is_unspecified() && !ip.is_loopback())
 }
 
-async fn accept_loop<S, F, Fut>(listener: TcpListener, hub: Rc<Hub>, web: Option<Rc<crate::web::Web>>, secure: F)
+async fn accept_loop<S, F, Fut>(listener: TcpListener, hub: Rc<Hub>, web: Option<Rc<crate::web::Web>>, secure: F, limits: Limits)
 where
     S: AsyncRead + AsyncWrite + Unpin + 'static,
     F: Fn(tokio::net::TcpStream) -> Fut + 'static,
@@ -559,16 +586,16 @@ where
                 continue;
             }
         };
-        if hub.open.get() >= MAX_CONNECTIONS {
-            log::warn!("[Direct] Refusing {peer}: {MAX_CONNECTIONS} connections open");
+        if hub.open.get() >= limits.max_connections {
+            log::warn!("[Direct] Refusing {peer}: {} connections open", limits.max_connections);
             continue;
         }
         let host = crate::web::rate_key(peer.ip());
         {
             let mut by_host = hub.open_by_host.borrow_mut();
             let held = by_host.entry(host).or_insert(0);
-            if *held >= MAX_CONNECTIONS_PER_HOST {
-                log::info!("[Direct] Refusing {peer}: {MAX_CONNECTIONS_PER_HOST} connections open from that host");
+            if *held >= limits.max_per_host {
+                log::info!("[Direct] Refusing {peer}: {} connections open from that host", limits.max_per_host);
                 continue;
             }
             *held += 1;
@@ -578,10 +605,10 @@ where
         let web = web.clone();
         let secured = secure(stream);
         tokio::task::spawn_local(async move {
-            if let Ok(Some(stream)) = tokio::time::timeout(HANDSHAKE_TIMEOUT, secured).await {
+            if let Ok(Some(stream)) = tokio::time::timeout(limits.handshake, secured).await {
                 match web {
-                    Some(web) => route(stream, peer.ip(), &hub, &web).await,
-                    None => serve(stream, &hub).await,
+                    Some(web) => route(stream, peer.ip(), &hub, &web, limits).await,
+                    None => serve(stream, &hub, limits).await,
                 }
             }
             hub.open.set(hub.open.get() - 1);
@@ -599,10 +626,10 @@ where
 /// A connection on the listener that also serves the web page: read the
 /// request head, then hand a WebSocket upgrade to the direct link (with the
 /// bytes already read put back in front) and anything else to the page.
-async fn route<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, peer: IpAddr, hub: &Hub, web: &crate::web::Web) {
-    let Ok(Some(head)) = tokio::time::timeout(HANDSHAKE_TIMEOUT, crate::web::read_head(&mut stream)).await else { return };
+async fn route<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, peer: IpAddr, hub: &Hub, web: &crate::web::Web, limits: Limits) {
+    let Ok(Some(head)) = tokio::time::timeout(limits.handshake, crate::web::read_head(&mut stream)).await else { return };
     if crate::web::is_websocket(&head) {
-        serve(Replay { prefix: head, at: 0, inner: stream }, hub).await;
+        serve(Replay { prefix: head, at: 0, inner: stream }, hub, limits).await;
     } else {
         crate::web::serve(&head, stream, peer, web).await;
     }
@@ -643,9 +670,13 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for Replay<S> {
 }
 
 /// One connection: the handshake, then events both ways.
-async fn serve<S: AsyncRead + AsyncWrite + Unpin>(stream: S, hub: &Hub) {
-    let config = WebSocketConfig { max_message_size: Some(MAX_FRAME_BYTES), max_frame_size: Some(MAX_FRAME_BYTES), ..Default::default() };
-    let Ok(Ok(ws)) = tokio::time::timeout(HANDSHAKE_TIMEOUT, tokio_tungstenite::accept_async_with_config(stream, Some(config))).await
+async fn serve<S: AsyncRead + AsyncWrite + Unpin>(stream: S, hub: &Hub, limits: Limits) {
+    let config = WebSocketConfig {
+        max_message_size: Some(limits.max_frame_bytes),
+        max_frame_size: Some(limits.max_frame_bytes),
+        ..Default::default()
+    };
+    let Ok(Ok(ws)) = tokio::time::timeout(limits.handshake, tokio_tungstenite::accept_async_with_config(stream, Some(config))).await
     else {
         return;
     };
@@ -656,7 +687,7 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(stream: S, hub: &Hub) {
     if sink.send(send(&DirectFrame::Challenge(challenge.clone()))).await.is_err() {
         return;
     }
-    let hello = tokio::time::timeout(HELLO_TIMEOUT, next_text(&mut source)).await.ok().flatten();
+    let hello = tokio::time::timeout(limits.hello, next_text(&mut source)).await.ok().flatten();
     let (auth, since, recipients) = match hello.as_deref().map(decode_direct_frame) {
         Some(Ok(DirectFrame::Hello { auth, since, recipients })) => (auth, since, recipients),
         _ => {
@@ -702,7 +733,7 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(stream: S, hub: &Hub) {
                     ok = sink.send(Message::Text(text)).await.is_ok();
                 }
             },
-            incoming = tokio::time::timeout(IDLE_TIMEOUT, source.next()) => match incoming {
+            incoming = tokio::time::timeout(limits.idle, source.next()) => match incoming {
                 Ok(Some(Ok(Message::Text(text)))) => match decode_direct_frame(&text) {
                     Ok(DirectFrame::Event(event)) => {
                         let id = event.id.clone();
