@@ -1,26 +1,21 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { OpenCodeClient } from '@opencode/client';
+import { afterEach, describe, expect, it } from 'vitest';
 import { OpenCodePlugins, toInstalledPlugin } from '../plugins';
+import { fakeOpenCode, type FakePlugin } from './fakeServer';
 
 /** A server over one global config file: v2's config API cannot write the
  *  plugin list, so the file is the store and `plugin.list` is what the server
  *  reports as loaded. */
-async function server(plugins: unknown[], loaded: Array<{ id: string; state: unknown }> = []) {
+async function server(plugins: unknown[], loaded?: FakePlugin[]) {
   const dir = await mkdtemp(path.join(tmpdir(), 'oc-plugins-'));
   const file = path.join(dir, 'opencode.json');
   await writeFile(file, JSON.stringify({ plugins }));
-  const client = {
-    plugin: {
-      list: vi.fn(async () => ({ location: { directory: dir }, data: loaded })),
-      update: vi.fn(async () => undefined),
-    },
-  } as unknown as OpenCodeClient;
-  const manager = new OpenCodePlugins(async () => client, () => [file]);
+  const fake = fakeOpenCode({ pluginConfig: plugins as Array<string | { package?: string }>, ...(loaded ? { plugins: loaded } : {}) });
+  const manager = new OpenCodePlugins(async () => fake.client, () => [file]);
   const written = async () => JSON.parse(await readFile(file, 'utf8')) as { plugins: unknown[] };
-  return { manager, written, client, dir, file };
+  return { manager, written, client: fake.client, server: fake, dir, file };
 }
 
 const dirs: string[] = [];
@@ -44,9 +39,10 @@ describe('OpenCode plugins', () => {
   });
 
   it('reports a plugin the server could not load as failed', async () => {
+    // 2.1.4 names a package plugin by `source.target`, not by an `id`.
     const { manager, dir } = await server(
       ['@acme/oc-plugin'],
-      [{ id: '@acme/oc-plugin', state: { status: 'failed', error: 'boom' } }],
+      [{ source: { type: 'package', target: '@acme/oc-plugin' }, state: { status: 'failed', error: 'boom', ref: 'err_1' } }],
     );
     dirs.push(dir);
     const state = await manager.list();

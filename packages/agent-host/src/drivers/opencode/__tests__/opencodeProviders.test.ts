@@ -7,13 +7,14 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { OpenCodeClient, ProviderInfo } from '@opencode/client';
+import type { ProviderInfo } from '@opencode/client';
 import { OpenCodeDriver } from '../driver';
 import { type Catalog, type CatalogModel, EMPTY_CATALOG } from '../catalog';
 import { placeProfiles, profileModelGroup, profileProviderId, providersConfig, servedBy, serverSetup } from '../providers';
 import type { StartOpenCodeServerOptions } from '../server';
 import type { ProviderBinding } from '../../../sdk/types';
 import { recordingContext } from '../../../sdk/__tests__/context';
+import { fakeOpenCode } from './fakeServer';
 
 const router = (over: Partial<ProviderBinding> = {}): ProviderBinding => ({
   id: 'router',
@@ -233,6 +234,7 @@ describe('an OpenCode driver given provider profiles', () => {
       // Any file stands in for the executable: the start is faked.
       binaryPath: process.execPath,
       log: () => {},
+      catalogWaitMs: 0,
       startServer: async (options) => {
         starts.push(options);
         const n = starts.length;
@@ -240,7 +242,7 @@ describe('an OpenCode driver given provider profiles', () => {
       },
       connect: (config) => {
         connects.push(config);
-        return {} as OpenCodeClient;
+        return fakeOpenCode({ holdStream: true }).client;
       },
     });
     return { driver, starts, closed, connects };
@@ -277,26 +279,19 @@ describe('an OpenCode driver given provider profiles', () => {
   });
 
   it('ends the sessions on the server it replaces, so the bridge resumes them on the new one', async () => {
-    // Its event stream never opens: a session stays on the server it started on.
-    const client = {
-      // The stream opens and never yields: the session stays on the server
-      // it started on until that server is replaced.
-      event: {
-        subscribe: () =>
-          (async function* () {
-            await new Promise(() => {});
-          })(),
+    // A server that cannot be asked for its catalog, whose event stream
+    // stays open: a session stays on the server it started on until that
+    // server is replaced.
+    const client = fakeOpenCode({
+      holdStream: true,
+      over: {
+        provider: { list: async () => { throw new Error('no catalog'); } },
+        model: {
+          list: async () => { throw new Error('no models'); },
+          default: async () => { throw new Error('no default'); },
+        },
       },
-      provider: { list: async () => { throw new Error('no catalog'); } },
-      model: {
-        list: async () => { throw new Error('no models'); },
-        default: async () => { throw new Error('no default'); },
-      },
-      session: {
-        get: async () => { throw new Error('that session is gone'); },
-        create: async () => ({ id: 'ses_1' }),
-      },
-    } as unknown as OpenCodeClient;
+    }).client;
     let starts = 0;
     const driver = await OpenCodeDriver.create({
       autoStart: true,
@@ -327,28 +322,31 @@ describe('an OpenCode driver given provider profiles', () => {
     let release!: () => void;
     const closing = new Promise<void>((resolve) => (release = resolve));
     let starts = 0;
-    const client = (n: number) =>
-      ({
-        provider: { list: async () => ({ location: { directory: '/tmp' }, data: [] }) },
-        model: {
-          list: async () => ({
-            location: { directory: '/tmp' },
-            data: [
-              { id: `m${n}`, modelID: `m${n}`, providerID: 'zen', name: `M${n}`, enabled: true, status: 'active', cost: [], variants: [], limit: { context: 1_000, output: 100 } },
-            ],
-          }),
-          default: async () => ({ location: { directory: '/tmp' }, data: null }),
+    const client = () =>
+      fakeOpenCode({
+        holdStream: true,
+        over: {
+          model: {
+            list: async () => ({
+              location: { directory: '/tmp' },
+              data: [
+                { id: `m${starts}`, modelID: `m${starts}`, providerID: 'zen', name: `M${starts}`, enabled: true, status: 'active', cost: [], variants: [], limit: { context: 1_000, output: 100 } },
+              ],
+            }),
+            default: async () => ({ location: { directory: '/tmp' }, data: null }),
+          },
         },
-      }) as unknown as OpenCodeClient;
+      }).client;
     const driver = await OpenCodeDriver.create({
       autoStart: true,
       binaryPath: process.execPath,
       log: () => {},
+      catalogWaitMs: 0,
       startServer: async () => {
         const n = ++starts;
         return { url: `http://127.0.0.1:${4100 + n}`, pid: n, exited: new Promise(() => {}), close: () => closing };
       },
-      connect: () => client(starts),
+      connect: () => client(),
     });
     const restart = driver.setProviders([router()]);
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -372,19 +370,12 @@ describe('an OpenCode driver given provider profiles', () => {
       },
       // The running server lists what it has, the profiles it was given too.
       connect: () =>
-        ({
-          integration: { list: async () => ({ location: { directory: '/tmp' }, data: ids.map((id) => ({ id, name: id, methods: [], connections: [] })) }) },
-          provider: {
-            list: async () => ({
-              location: { directory: '/tmp' },
-              data: ids.map((id) => ({ id, name: id, activation: 'enabled', package: '@opencode/ai/providers/openai-compatible' })),
-            }),
-          },
-          model: {
-            list: async () => ({ location: { directory: '/tmp' }, data: [] }),
-            default: async () => ({ location: { directory: '/tmp' }, data: null }),
-          },
-        }) as unknown as OpenCodeClient,
+        fakeOpenCode({
+          holdStream: true,
+          providers: ids.map((id) => ({
+            info: { id, name: id, activation: 'enabled', package: '@opencode/ai/providers/openai-compatible' } as ProviderInfo,
+          })),
+        }).client,
     });
     expect(await driver.setProviders([router({ label: 'DeepSeek' })])).toEqual([
       { id: 'router', reason: "OpenCode already has a provider called 'deepseek'. Give this profile another name." },
@@ -401,7 +392,7 @@ describe('an OpenCode driver given provider profiles', () => {
   });
 
   it('refuses them for a server it does not start', async () => {
-    const driver = await OpenCodeDriver.create({ serverUrl: 'http://127.0.0.1:4096', log: () => {}, connect: () => ({}) as OpenCodeClient });
+    const driver = await OpenCodeDriver.create({ serverUrl: 'http://127.0.0.1:4096', log: () => {}, connect: () => fakeOpenCode().client });
     expect(driver.info().supports?.providerModels).toBe(false);
     await expect(driver.setProviders([router()])).rejects.toThrow(/does not start/);
   });
@@ -409,7 +400,7 @@ describe('an OpenCode driver given provider profiles', () => {
   it('checks and lists a profile as an OpenAI-compatible endpoint', async () => {
     const post = vi.fn().mockResolvedValue({ status: 401 });
     const get = vi.fn().mockResolvedValue({ status: 200, text: JSON.stringify({ data: [{ id: 'kimi-k3' }] }) });
-    const driver = await OpenCodeDriver.create({ serverUrl: 'http://x', log: () => {}, providerHttp: { get, post }, connect: () => ({}) as OpenCodeClient });
+    const driver = await OpenCodeDriver.create({ serverUrl: 'http://x', log: () => {}, providerHttp: { get, post }, connect: () => fakeOpenCode().client });
     expect(await driver.checkProvider(router(), 'kimi-k3')).toBe(false);
     const [url, headers, body] = post.mock.calls[0]!;
     expect(url).toBe('http://192.168.1.2:3458/v1/chat/completions');

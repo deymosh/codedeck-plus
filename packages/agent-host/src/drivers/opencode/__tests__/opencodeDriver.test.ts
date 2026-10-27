@@ -16,6 +16,7 @@ import { OpenCodeDriver, openCodeContext, pickDefaultModel, reasoningLevels, toF
 import type { StartSession } from '../../../sdk/types';
 import { PARTIAL_INTERVAL_MS } from '../../../sdk/partial';
 import { recordingContext, type Handlers } from '../../../sdk/__tests__/context';
+import { fakeOpenCode } from './fakeServer';
 
 type V2 = Record<string, unknown> & { type: string; data?: Record<string, unknown> };
 
@@ -66,50 +67,12 @@ function agentApi(rows: () => AgentRow[]) {
   };
 }
 
-/** A client whose event stream yields `events`, then stays open briefly so
- *  the ask → reply chains settle before the stream ends. */
+/** A client whose event stream yields `events`, then closes (a test
+ *  convenience: 2.1.4's stream stays open, and `holdStream` is what the
+ *  lifecycle tests use to keep it open and close or fail it themselves). The
+ *  rest is the shared verified fake. */
 function clientWith(events: V2[], over: Record<string, unknown> = {}): OpenCodeClient {
-  async function* stream(): AsyncGenerator<V2> {
-    for (const e of events) yield e;
-    await new Promise((r) => setTimeout(r, 20));
-  }
-  const client = {
-    event: { subscribe: vi.fn(() => stream()) },
-    session: {
-      create: vi.fn(async () => ({ id: 'ses_1', projectID: 'p', cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: 0, updated: 0 }, location: { directory: '/tmp' } })),
-      get: vi.fn(),
-      remove: vi.fn(async () => undefined),
-      update: vi.fn(async () => undefined),
-      switchAgent: vi.fn(async () => undefined),
-      switchModel: vi.fn(async () => undefined),
-      interrupt: vi.fn(async () => undefined),
-      prompt: vi.fn(async () => ({})),
-      command: vi.fn(async () => undefined),
-      compact: vi.fn(async () => ({})),
-      diff: vi.fn(async () => []),
-      revert: { stage: vi.fn(async () => ({})), clear: vi.fn(async () => undefined), commit: vi.fn(async () => undefined) },
-      form: { reply: vi.fn(async () => undefined), cancel: vi.fn(async () => undefined) },
-    },
-    shell: {
-      list: vi.fn(async () => ({ location: { directory: '/tmp' }, data: [] })),
-      create: vi.fn(async () => ({ location: { directory: '/tmp' }, data: { id: 'sh_1' } })),
-      get: vi.fn(async () => ({ location: { directory: '/tmp' }, data: { id: 'sh_1' } })),
-      output: vi.fn(async () => ({ location: { directory: '/tmp' }, data: { output: '', cursor: 0, size: 0, truncated: false } })),
-      remove: vi.fn(async () => undefined),
-    },
-    permission: { reply: vi.fn(async () => undefined) },
-    // Each agent's rules: OpenCode's catch-all allow, then what it forbids.
-    agent: agentApi(() => ALL_AGENTS),
-    location: { get: vi.fn(async () => ({ directory: '/tmp' })) },
-    message: { list: vi.fn(async () => ({ data: [], cursor: {} })) },
-    command: { list: vi.fn(async () => ({ location: { directory: '/tmp' }, data: [] })) },
-    mcp: { list: vi.fn(async () => ({ location: { directory: '/tmp' }, data: [] })) },
-    provider: { list: vi.fn(async () => ({ location: { directory: '/tmp' }, data: [] })) },
-    model: { list: vi.fn(async () => ({ location: { directory: '/tmp' }, data: [] })), default: vi.fn(async () => ({ location: { directory: '/tmp' }, data: null })) },
-    plugin: { list: vi.fn(async () => ({ location: { directory: '/tmp' }, data: [] })) },
-    ...over,
-  } as unknown as OpenCodeClient;
-  return client;
+  return fakeOpenCode({ events: events as never, holdStream: false, over }).client;
 }
 
 function start(client: OpenCodeClient, overrides: Partial<StartSession> = {}, handlers: Handlers = {}) {
@@ -118,17 +81,21 @@ function start(client: OpenCodeClient, overrides: Partial<StartSession> = {}, ha
   return ctx;
 }
 
-/** The events v2 sends for one assistant turn: the execution starting, the
- *  model's text, and the turn ending. */
+/** The events 2.1.4 sends for one assistant turn: the execution starting, the
+ *  model's text, and the execution succeeding. (It does not send
+ *  `session.idle` for that turn; the driver handles that too, and the tests
+ *  below use it where a turn is ended without an execution result.) */
 const turn = (text: string, sessionID = 'ses_1'): V2[] => [
   { type: 'session.execution.started', data: { sessionID } },
   { type: 'session.step.started', data: { sessionID, assistantMessageID: 'm1', agent: 'build', model: { providerID: 'opencode', id: 'exo-free' }, started: 0 } },
   { type: 'session.text.ended', data: { sessionID, assistantMessageID: 'm1', ordinal: 0, text } },
-  { type: 'session.idle', data: { sessionID } },
+  { type: 'session.execution.succeeded', data: { sessionID } },
 ];
 
 describe('OpenCode session lifecycle', () => {
-  it('reports its conversation id, becomes ready, and ends normally when the stream closes', async () => {
+  it('reports its conversation id, becomes ready, and ends normally when the client aborts the stream', async () => {
+    // `clientWith` closes after its script, the clean end a client abort
+    // gives (verified: 2.1.4's iterator returns, it does not throw).
     const ctx = start(clientWith([]));
     expect(await ctx.ended()).toEqual({ type: 'ended' });
     expect(ctx.events).toContainEqual({ type: 'info', nativeSessionId: 'ses_1', mode: 'ask', persona: 'build' });
@@ -148,14 +115,40 @@ describe('OpenCode session lifecycle', () => {
     );
   });
 
-  it('ends with the error when the stream rejects before any session exists', async () => {
-    const client = clientWith([], {
-      event: { subscribe: vi.fn(() => { throw new Error('connection refused'); }) },
+  it('ends with the error when the server cannot create the session', async () => {
+    const server = fakeOpenCode({
+      holdStream: true,
+      over: { session: { create: vi.fn(async () => { throw new Error('connection refused'); }) } },
     });
-    const ctx = start(client);
-    expect(await ctx.ended()).toEqual({ type: 'ended', error: 'connection refused' });
+    const ctx = start(server.client);
+    expect(await ctx.ended()).toEqual({ type: 'ended', error: 'OpenCode session.create failed: connection refused' });
     expect(ctx.events.some((e) => e.type === 'ready')).toBe(false);
-    expect(client.session.create).not.toHaveBeenCalled();
+  });
+
+  it('keeps the stream open for the session\'s life, and closes it cleanly on an abort', async () => {
+    // 2.1.4's stream does not end after a turn; the end comes from the
+    // client's abort (or the server dying, below).
+    const server = fakeOpenCode({ holdStream: true });
+    const ctx = start(server.client);
+    await ctx.waitFor((e) => e.type === 'ready');
+    server.push({
+      type: 'session.text.ended',
+      data: { sessionID: 'ses_1', assistantMessageID: 'm1', ordinal: 0, text: 'still here' },
+    });
+    await ctx.waitFor((e) => e.type === 'entries' && e.entries.some((x) => x.entryType === 'text'));
+    expect(ctx.events.some((e) => e.type === 'ended')).toBe(false);
+    server.endStream();
+    expect(await ctx.ended()).toEqual({ type: 'ended' });
+  });
+
+  it('ends with the error when the server is killed under the stream', async () => {
+    // Verified: a server that stops makes the iterator throw (a transport
+    // ClientError), which is what the bridge resumes the session from.
+    const server = fakeOpenCode({ holdStream: true });
+    const ctx = start(server.client);
+    await ctx.waitFor((e) => e.type === 'ready');
+    server.failStream(new Error('Transport: terminated'));
+    expect(await ctx.ended()).toEqual({ type: 'ended', error: 'Transport: terminated' });
   });
 });
 
@@ -1216,22 +1209,26 @@ describe('an OpenCode server it starts', () => {
     let refreshed = false;
     const state = { asked: false };
     const model = (modelID: string) => ({ providerID: 'opencode', modelID, name: modelID, enabled: true, status: 'active' });
-    const client = {
-      event: { subscribe: vi.fn(() => events(state, () => void (refreshed = true))) },
-      model: {
-        list: async () => {
-          state.asked = true;
-          return { data: refreshed ? [model('cat-jam-free')] : [model('exo-free')] };
+    const client = fakeOpenCode({
+      holdStream: true,
+      over: {
+        event: { subscribe: vi.fn(() => events(state, () => void (refreshed = true))) },
+        model: {
+          list: async () => {
+            state.asked = true;
+            return { data: refreshed ? [model('cat-jam-free')] : [model('exo-free')] };
+          },
+          default: async () => ({ data: { providerID: 'opencode', modelID: refreshed ? 'cat-jam-free' : 'exo-free' } }),
         },
-        default: async () => ({ data: { providerID: 'opencode', modelID: refreshed ? 'cat-jam-free' : 'exo-free' } }),
       },
-    } as unknown as OpenCodeClient;
+    }).client;
     const create = (modelsRefreshWaitMs?: number) =>
       OpenCodeDriver.create({
         autoStart: true,
         // Any file stands in for the executable: the start is faked.
         binaryPath: process.execPath,
         log: () => {},
+        catalogWaitMs: 0,
         startServer: async () => ({ url: 'http://127.0.0.1:4100', pid: 1, exited: new Promise(() => {}), close: async () => {} }),
         connect: () => client,
         ...(modelsRefreshWaitMs !== undefined ? { modelsRefreshWaitMs } : {}),
@@ -1290,13 +1287,24 @@ describe('an OpenCode server started for the first time that cannot be asked', (
 
   it('is used at once, without an unhandled failure', async () => {
     vi.stubEnv('XDG_DATA_HOME', mkdtempSync(path.join(tmpdir(), 'oc-data-')));
-    // No event stream and no models at all: both throw when touched.
+    // No usable catalog and no models at all: both throw when touched.
     const driver = await OpenCodeDriver.create({
       autoStart: true,
       binaryPath: process.execPath,
       log: () => {},
+      modelsRefreshWaitMs: 0,
       startServer: async () => ({ url: 'http://127.0.0.1:4100', pid: 1, exited: new Promise(() => {}), close: async () => {} }),
-      connect: () => ({}) as OpenCodeClient,
+      connect: () =>
+        fakeOpenCode({
+          holdStream: true,
+          over: {
+            provider: { list: async () => { throw new Error('no catalog'); } },
+            model: {
+              list: async () => { throw new Error('no models'); },
+              default: async () => { throw new Error('no default'); },
+            },
+          },
+        }).client,
     });
     expect((await driver.listModels()).models).toEqual([]);
   });

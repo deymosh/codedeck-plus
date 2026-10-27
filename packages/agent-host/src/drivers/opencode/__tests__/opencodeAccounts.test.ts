@@ -2,71 +2,32 @@
  * OpenCode's provider accounts: the list a phone sees (no secret in it),
  * a key, a device sign-in watched to its end, and a sign-in finished by
  * pasting back its loopback address — only that address.
+ *
+ * The server's side is the shared fake: its `oauth.status` is stateful, as
+ * 2.1.4's is, so a sign-in completes when the fake is told it did, not by a
+ * queued answer that becomes `pending` again on the next poll.
  */
 import { describe, it, expect, vi } from 'vitest';
-import type { OpenCodeClient } from '@opencode/client';
 import { OpenCodeAccounts, loopbackCallback } from '../accounts';
 import type { SignInState } from '../../../sdk/driver';
+import { fakeOpenCode, type FakeOpenCodeServer } from './fakeServer';
 
-const integrations = [
-  {
-    id: 'nano-gpt',
-    name: 'NanoGPT',
-    methods: [{ type: 'key' }, { type: 'env', names: ['NANO_GPT_API_KEY'] }],
-    connections: [{ type: 'credential', id: 'cred_1', label: 'work', method: 'key' }],
-  },
-  {
-    id: 'github-copilot',
-    name: 'GitHub Copilot',
-    methods: [
-      { type: 'env', names: ['GITHUB_TOKEN'] },
-      {
-        id: 'device',
-        type: 'oauth',
-        label: 'Login with GitHub Copilot',
-        form: [
-          { key: 'deploymentType', title: 'Deployment', required: true, type: 'string', options: [{ value: 'github.com', label: 'GitHub.com' }] },
-          { key: 'enterpriseUrl', title: 'Enterprise URL', required: true, type: 'string', when: [{ key: 'deploymentType', op: 'eq', value: 'enterprise' }] },
-          { key: 'server', hidden: true, type: 'string', default: 'https://x' },
-        ],
-      },
-    ],
-    connections: [{ type: 'env', name: 'GITHUB_TOKEN' }],
-  },
-  { id: 'openai', name: 'OpenAI', methods: [{ type: 'key' }, { id: 'chatgpt', type: 'oauth', label: 'Sign in with ChatGPT' }], connections: [] },
-];
+const secret = { type: 'key', key: 'sk-SECRET' } as const;
 
-function fakeClient(attemptUrl = 'https://github.com/login/device?user_code=ABCD') {
-  const statuses: string[] = [];
-  const client = {
-    integration: {
-      list: vi.fn(async () => ({ data: integrations })),
-      connect: { key: vi.fn(async () => undefined) },
-      oauth: {
-        connect: vi.fn(async () => ({
-          data: { attemptID: 'con_1', url: attemptUrl, instructions: 'Enter code: ABCD', mode: 'auto', time: { created: 0, expires: 10_000 } },
-        })),
-        status: vi.fn(async () => ({ data: { status: statuses.shift() ?? 'pending', time: { created: 0, expires: 10_000 } } })),
-        cancel: vi.fn(async () => undefined),
-      },
-    },
-    credential: {
-      // The real list carries the secret: it must never reach a phone.
-      list: vi.fn(async () => [{ id: 'cred_1', integrationID: 'nano-gpt', label: 'work', active: true, value: { type: 'key', key: 'sk-SECRET' } }]),
-      activate: vi.fn(async () => undefined),
-      remove: vi.fn(async () => undefined),
-    },
-  };
-  return { client, statuses };
+function server(attemptUrl = 'https://github.com/login/device?user_code=ABCD'): FakeOpenCodeServer {
+  return fakeOpenCode({
+    credentials: [{ id: 'cred_1', integrationID: 'nano-gpt', label: 'work', active: true, value: secret }],
+    signIns: [{ attemptID: 'con_1', url: attemptUrl, instructions: 'Enter code: ABCD', status: 'pending' }],
+  });
 }
 
-const accountsOf = (client: unknown, extra: Partial<ConstructorParameters<typeof OpenCodeAccounts>[1]> = {}) =>
-  new OpenCodeAccounts(async () => client as unknown as OpenCodeClient, { pollMs: 1, now: () => 0, ...extra });
+const accountsOf = (fake: FakeOpenCodeServer, extra: Partial<ConstructorParameters<typeof OpenCodeAccounts>[1]> = {}) =>
+  new OpenCodeAccounts(async () => fake.client, { pollMs: 1, now: () => 0, ...extra });
 
 describe('OpenCode accounts', () => {
   it('lists what a phone can connect, and the connections without their secrets', async () => {
-    const { client } = fakeClient();
-    const connected = await accountsOf(client).list(false);
+    const fake = server();
+    const connected = await accountsOf(fake).list(false);
     expect(connected.map((a) => a.id)).toEqual(['github-copilot', 'nano-gpt']);
     expect(connected.find((a) => a.id === 'nano-gpt')).toEqual({
       id: 'nano-gpt',
@@ -81,27 +42,53 @@ describe('OpenCode accounts', () => {
     expect(copilot.methods?.[0]?.fields?.map((f) => f.key)).toEqual(['deploymentType', 'enterpriseUrl']);
     expect(copilot.methods?.[0]?.fields?.[1]?.when).toEqual([{ key: 'deploymentType', value: 'enterprise' }]);
     expect(JSON.stringify(connected)).not.toContain('sk-SECRET');
-    expect((await accountsOf(client).list(true)).map((a) => a.id)).toEqual(['github-copilot', 'nano-gpt', 'openai']);
+    expect((await accountsOf(fake).list(true)).map((a) => a.id)).toEqual(['github-copilot', 'nano-gpt', 'openai']);
   });
 
   it('keeps a key and answers with the connected accounts', async () => {
-    const { client } = fakeClient();
-    const result = await accountsOf(client).change('openai', { kind: 'key', method: 'key', key: 'sk-new', label: 'home' }, () => {});
-    expect(client.integration.connect.key).toHaveBeenCalledWith({ integrationID: 'openai', key: 'sk-new', label: 'home' });
+    const fake = server();
+    const result = await accountsOf(fake).change('openai', { kind: 'key', method: 'key', key: 'sk-new', label: 'home' }, () => {});
+    expect(fake.client.integration.connect.key).toHaveBeenCalledWith({ integrationID: 'openai', key: 'sk-new', label: 'home' });
     expect('accounts' in result).toBe(true);
+    const accounts = (result as { accounts: Array<{ id: string; connections?: unknown[] }> }).accounts;
+    expect(accounts.find((a) => a.id === 'openai')!.connections).toEqual([
+      { id: 'cred_2', label: 'home', kind: 'key', active: true, removable: true },
+    ]);
+  });
+
+  it("switches which of an integration's credentials is active", async () => {
+    const fake = server();
+    // A second key for the same provider leaves the first inactive.
+    await accountsOf(fake).change('openai', { kind: 'key', method: 'key', key: 'sk-one', label: 'one' }, () => {});
+    await accountsOf(fake).change('openai', { kind: 'key', method: 'key', key: 'sk-two', label: 'two' }, () => {});
+    const result = await accountsOf(fake).change('openai', { kind: 'activate', connection: 'cred_2' }, () => {});
+    const openai = (result as { accounts: Array<{ id: string; connections: Array<{ id: string; active?: boolean }> }> }).accounts.find(
+      (a) => a.id === 'openai',
+    )!;
+    expect(openai.connections.map((c) => [c.id, c.active])).toEqual([
+      ['cred_2', true],
+      ['cred_3', false],
+    ]);
+    // A removed active credential leaves the other one active (verified).
+    const removed = await accountsOf(fake).change('openai', { kind: 'remove', connection: 'cred_2' }, () => {});
+    const left = (removed as { accounts: Array<{ id: string; connections: Array<{ id: string; active?: boolean }> }> }).accounts.find(
+      (a) => a.id === 'openai',
+    )!;
+    expect(left.connections).toEqual([{ id: 'cred_3', label: 'two', kind: 'key', active: true, removable: true }]);
   });
 
   it('starts a device sign-in, lists the integrations first, and says once when it completes', async () => {
-    const { client, statuses } = fakeClient();
-    statuses.push('pending', 'complete');
+    const fake = server();
     const ended: SignInState[] = [];
-    const result = await accountsOf(client).change(
+    const result = await accountsOf(fake).change(
       'github-copilot',
       { kind: 'sign-in', method: 'device', answers: { deploymentType: 'github.com' } },
       (end) => ended.push(end),
     );
-    expect(client.integration.list.mock.invocationCallOrder[0]).toBeLessThan(client.integration.oauth.connect.mock.invocationCallOrder[0]!);
-    expect(client.integration.oauth.connect).toHaveBeenCalledWith({
+    const list = fake.client.integration.list as unknown as { mock: { invocationCallOrder: number[] } };
+    const connect = fake.client.integration.oauth.connect as unknown as { mock: { invocationCallOrder: number[] } };
+    expect(list.mock.invocationCallOrder[0]).toBeLessThan(connect.mock.invocationCallOrder[0]!);
+    expect(fake.client.integration.oauth.connect).toHaveBeenCalledWith({
       integrationID: 'github-copilot',
       methodID: 'device',
       answer: { deploymentType: 'github.com' },
@@ -113,14 +100,25 @@ describe('OpenCode accounts', () => {
         attempt: { attemptId: 'con_1', url: 'https://github.com/login/device?user_code=ABCD', instructions: 'Enter code: ABCD', expiresAt: 10_000 },
       },
     });
-    await vi.waitFor(() => expect(ended).toEqual([{ status: 'complete', attemptId: 'con_1' }]));
+    // The status stays `complete` once it is, as 2.1.4's does; the driver
+    // must report the end exactly once and then stop asking.
+    fake.setSignIn('con_1', 'complete');
+    await expect
+      .poll(() => ended)
+      .toEqual([{ status: 'complete', attemptId: 'con_1' }]);
+    const calls = (fake.client.integration.oauth.status as unknown as { mock: { calls: unknown[] } }).mock.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(ended).toHaveLength(1);
+    expect((fake.client.integration.oauth.status as unknown as { mock: { calls: unknown[] } }).mock.calls.length).toBe(calls);
   });
 
   it("finishes a paste-back sign-in only with that sign-in's own address", async () => {
     const callback = 'http://127.0.0.1:45493/auth/callback';
-    const { client } = fakeClient(`https://auth.openai.com/authorize?redirect_uri=${encodeURIComponent(callback)}&state=s`);
+    const fake = server(`https://auth.openai.com/authorize?redirect_uri=${encodeURIComponent(callback)}&state=s`);
+    // The attempt the driver started has the id the fake makes; its status
+    // does not matter to the paste path.
     const open = vi.fn(async () => undefined);
-    const accounts = accountsOf(client, { open, pollMs: 60_000 });
+    const accounts = accountsOf(fake, { open, pollMs: 60_000 });
     const started = await accounts.change('openai', { kind: 'sign-in', method: 'chatgpt' }, () => {});
     expect('signIn' in started && started.signIn.attempt?.pasteBack).toBe(true);
 

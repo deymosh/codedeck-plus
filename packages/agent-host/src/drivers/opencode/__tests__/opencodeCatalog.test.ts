@@ -8,8 +8,9 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ModelInfo, OpenCodeClient, ProviderInfo } from '@opencode/client';
+import type { ModelInfo, ProviderInfo } from '@opencode/client';
 import { OpenCodeDriver } from '../driver';
+import { fakeOpenCode, type FakeProviderConfig } from './fakeServer';
 import { readCatalogCache } from '../catalogCache';
 import { modelsDevSource, parseModelsDev } from '../modelsDev';
 import type { StartOpenCodeServerOptions } from '../server';
@@ -96,38 +97,33 @@ describe('an OpenCode driver reading its 2.x server', () => {
   /** Providers whose description fails, as a request can. */
   const failing = new Set<string>();
 
+  const zenFree = {
+    id: 'zen-free',
+    modelID: 'zen-free',
+    providerID: 'opencode',
+    name: 'Zen',
+    enabled: true,
+    status: 'active',
+    capabilities: { tools: true, input: ['text'], output: ['text'] },
+    variants: [],
+    cost: [],
+    limit: { context: 1, output: 1 },
+  } as unknown as ModelInfo;
+
   /** A server that registers its providers after `quietPolls` asks, lists
    *  the ones it can use and those its config adds, and describes the rest
    *  only when asked for one. */
   function serverFor(config: { providers?: Record<string, { name?: string; settings?: { baseURL?: string } }> }, quietPolls = 0) {
-    let polls = 0;
-    // A provider the config signs in to keeps the endpoint the catalog gives it.
-    const endpoint = (id: string) => KNOWN.find((p) => p.id === id)?.settings?.baseURL as string | undefined;
-    const added = Object.entries(config.providers ?? {}).map(([id, p]) => provider(id, p.name ?? id, p.settings?.baseURL ?? endpoint(id) ?? '', 'enabled'));
-    const all = new Map([...KNOWN, ...added].map((p) => [p.id, p]));
-    const usable = () => (polls++ < quietPolls ? [] : [...all.values()].filter((p) => p.activation === 'enabled'));
-    const at = { location: { directory: '/tmp' } };
-    return {
-      integration: { list: async () => ({ ...at, data: [...KNOWN.map((p) => p.id), 'tinyfish'].map((id) => ({ id, name: id, methods: [], connections: [] })) }) },
-      provider: {
-        list: async () => ({ ...at, data: usable() }),
-        get: async ({ providerID }: { providerID: string }) => {
-          if (failing.has(providerID)) throw new Error('fetch failed');
-          // Answers come back in any order.
-          await new Promise((resolve) => setTimeout(resolve, providerID === 'opencode-go' ? 5 : 0));
-          const found = all.get(providerID);
-          if (!found) throw Object.assign(new Error('Provider not found'), { name: 'ProviderNotFoundError' });
-          return { ...at, data: found };
-        },
-      },
-      model: {
-        list: async () => ({
-          ...at,
-          data: usable().length === 0 ? [] : [{ providerID: 'opencode', modelID: 'zen-free', name: 'Zen', enabled: true, status: 'active', capabilities: { tools: true, input: ['text'], output: ['text'] }, variants: [], cost: [], limit: { context: 1, output: 1 } }] as unknown as ModelInfo[],
-        }),
-        default: async () => ({ ...at, data: null }),
-      },
-    } as unknown as OpenCodeClient;
+    return fakeOpenCode({
+      providers: KNOWN.map((info) => ({ info, usable: info.activation === 'enabled', ...(info.id === 'opencode' ? { models: [zenFree] } : {}) })),
+      config: config as { providers?: Record<string, FakeProviderConfig> },
+      providerRegistration: quietPolls,
+      providerGetFails: failing,
+      providerGetDelayMs: { 'opencode-go': 5 },
+      // What the test's server knows: the catalog providers and the web
+      // search, not the accounts integrations the stock fake carries.
+      integrationRows: [...KNOWN.map((p) => p.id), 'tinyfish'].map((id) => ({ id, name: id, methods: [], connections: [] })),
+    }).client;
   }
 
   function managed(options: { catalogCache?: string; quietPolls?: number; get?: ReturnType<typeof vi.fn> } = {}) {

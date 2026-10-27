@@ -61,12 +61,17 @@ import type {
   PluginInfo,
   ProviderInfo,
   SessionInfo,
-  V2Event,
 } from '@opencode/client';
 
 /** An event as the client's async iterator yields it; `type` is the switch
- *  the driver reads. */
-export type FakeEvent = V2Event & { type: string; data?: Record<string, unknown>; location?: { directory?: string } };
+ *  the driver reads. The rest of a 2.1.4 event (`id`, `created`, `durable`)
+ *  is not read by the driver, so a fixture may state only what it needs. */
+export type FakeEvent = {
+  type: string;
+  data?: Record<string, unknown>;
+  location?: { directory?: string };
+  [key: string]: unknown;
+};
 
 export interface FakeAgentRow {
   id: string;
@@ -118,6 +123,10 @@ export interface FakeServerOptions {
   providerRegistration?: number;
   /** Integrations that are no model provider (web search, for one). */
   integrations?: string[];
+  /** Providers whose `provider.get` fails, as a request can. */
+  providerGetFails?: Set<string>;
+  /** Per-provider delay before `provider.get` answers, for answer order. */
+  providerGetDelayMs?: Record<string, number>;
   /** Agent rows `agent.list` answers with. A function sees the call number,
    *  for OpenCode's built-ins-then-directory-agents order. */
   agents?: FakeAgentRow[] | ((call: number) => FakeAgentRow[]);
@@ -272,14 +281,17 @@ function modelFromConfig(providerID: string, modelID: string, entry: FakeModelCo
 }
 
 /** A provider as the server describes it: config providers are usable and
- *  carry their config's endpoint. */
-function providerFromConfig(id: string, entry: FakeProviderConfig): ProviderInfo {
+ *  carry their config's endpoint. A config entry naming a provider the
+ *  server already knows keeps that provider's endpoint (and package) and
+ *  overrides only what the entry states. */
+function providerFromConfig(id: string, entry: FakeProviderConfig, base: ProviderInfo | undefined): ProviderInfo {
   return {
+    ...(base ?? {}),
     id,
-    name: entry.name ?? id,
+    name: entry.name ?? base?.name ?? id,
     activation: 'enabled',
-    package: entry.package ?? '@opencode/ai/providers/openai-compatible',
-    settings: { ...(entry.settings ?? {}) },
+    package: entry.package ?? base?.package ?? '@opencode/ai/providers/openai-compatible',
+    settings: { ...(base?.settings ?? {}), ...(entry.settings ?? {}) },
   } as ProviderInfo;
 }
 
@@ -302,7 +314,7 @@ export function fakeOpenCode(options: FakeServerOptions = {}): FakeOpenCodeServe
     for (const model of entry.models ?? []) models.set(`${model.providerID}/${model.modelID}`, model);
   }
   for (const [id, entry] of Object.entries(options.config?.providers ?? {})) {
-    const provider = providerFromConfig(id, entry);
+    const provider = providerFromConfig(id, entry, providers.get(id));
     providers.set(id, provider);
     usable.add(id);
     for (const [modelID, model] of Object.entries(entry.models ?? {})) {
@@ -312,10 +324,20 @@ export function fakeOpenCode(options: FakeServerOptions = {}): FakeOpenCodeServe
   }
 
   const pluginConfig = options.pluginConfig ?? [];
-  const plugins: FakePlugin[] = options.plugins ?? [
-    { id: 'opencode.config.mcp', source: { type: 'builtin' }, state: { status: 'active' } },
-    { id: 'opencode.plan', source: { type: 'builtin' }, state: { status: 'active' } },
-  ];
+  const pluginSpec = (entry: (typeof pluginConfig)[number]) => (typeof entry === 'string' ? entry : entry.package);
+  const plugins: FakePlugin[] =
+    options.plugins ??
+    [
+      { id: 'opencode.config.mcp', source: { type: 'builtin' }, state: { status: 'active' } },
+      { id: 'opencode.plan', source: { type: 'builtin' }, state: { status: 'active' } },
+      // A config package the server loaded is in the inventory under its
+      // source target; a `-name` entry is switched off and not loaded.
+      ...pluginConfig.flatMap((entry): FakePlugin[] => {
+        const spec = pluginSpec(entry);
+        if (!spec || spec.startsWith('-')) return [];
+        return [{ source: { type: 'package', target: spec }, state: { status: 'active' } }];
+      }),
+    ];
 
   const mcpConfig = options.mcpConfig ?? {};
   const mcp = new Map<string, FakeMcpServer>(
@@ -332,7 +354,9 @@ export function fakeOpenCode(options: FakeServerOptions = {}): FakeOpenCodeServe
   const integrations = integrationRows.map((row) => ({ ...row, methods: [...row.methods], connections: [...row.connections] }));
 
   const credentials: CredentialEntry[] = (options.credentials ?? []).map((credential) => ({ ...credential }));
-  const signIns = new Map<string, FakeSignIn>((options.signIns ?? []).map((attempt) => [attempt.attemptID, attempt]));
+  const signInTemplates = options.signIns ?? [];
+  let signInTemplate = 0;
+  const signIns = new Map<string, FakeSignIn>(signInTemplates.map((attempt) => [attempt.attemptID, { ...attempt }]));
 
   const createdSessions = new Map<string, SessionInfo>();
   if (options.session?.id) createdSessions.set(options.session.id, options.session as SessionInfo);
@@ -487,6 +511,9 @@ export function fakeOpenCode(options: FakeServerOptions = {}): FakeOpenCodeServe
         return { ...at, data: [...providers.values()].filter((provider) => usable.has(provider.id)) };
       }),
       get: vi.fn(async ({ providerID }: { providerID: string }) => {
+        if (options.providerGetFails?.has(providerID)) throw new Error(`fetch failed for ${providerID}`);
+        const delay = options.providerGetDelayMs?.[providerID];
+        if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
         const provider = providers.get(providerID);
         if (!provider) throw Object.assign(new Error(`Provider not found: ${providerID}`), { name: 'ProviderNotFoundError' });
         return { ...at, data: provider };
@@ -523,15 +550,20 @@ export function fakeOpenCode(options: FakeServerOptions = {}): FakeOpenCodeServe
       },
       oauth: {
         connect: vi.fn(async ({ integrationID, methodID }: { integrationID: string; methodID?: string }) => {
-          const id = `con_${signIns.size + 1}`;
+          // A scripted attempt (the test's own URL and id) is used first, as
+          // the server would hand back the one it started.
+          const template = signInTemplates[signInTemplate];
+          if (template) signInTemplate++;
+          const id = template?.attemptID ?? `con_${signIns.size + 1}`;
           const attempt: FakeSignIn = {
+            ...(template ?? {}),
             attemptID: id,
-            url: options.signIns?.[0]?.url ?? 'https://github.com/login/device?user_code=ABCD',
-            instructions: options.signIns?.[0]?.instructions ?? 'Enter code: ABCD',
-            mode: 'auto',
-            created: 0,
-            expires: 10_000,
-            status: 'pending',
+            url: template?.url ?? 'https://github.com/login/device?user_code=ABCD',
+            instructions: template?.instructions ?? 'Enter code: ABCD',
+            mode: template?.mode ?? 'auto',
+            created: template?.created ?? 0,
+            expires: template?.expires ?? 10_000,
+            status: template?.status ?? 'pending',
           };
           signIns.set(id, attempt);
           return { ...at, data: { attemptID: id, url: attempt.url, instructions: attempt.instructions, mode: attempt.mode, time: { created: attempt.created!, expires: attempt.expires! } } };
@@ -594,8 +626,19 @@ export function fakeOpenCode(options: FakeServerOptions = {}): FakeOpenCodeServe
     },
   } as unknown as OpenCodeClient;
 
+  // A per-method replacement, one level in: `{ session: { get } }` keeps the
+  // rest of the session methods the fake already has.
+  const withOverrides: Record<string, unknown> = { ...(client as unknown as Record<string, unknown>) };
+  for (const [group, value] of Object.entries(options.over ?? {})) {
+    const base = withOverrides[group];
+    withOverrides[group] =
+      value && typeof value === 'object' && !Array.isArray(value) && base && typeof base === 'object'
+        ? { ...(base as Record<string, unknown>), ...(value as Record<string, unknown>) }
+        : value;
+  }
+
   const server: FakeOpenCodeServer = {
-    client: { ...client, ...(options.over ?? {}) } as OpenCodeClient,
+    client: withOverrides as unknown as OpenCodeClient,
     state: { providers, models, createdSessions, plugins, mcpConfig, mcp, integrations, credentials, signIns, events },
     push: (event) => {
       events.push(event);
