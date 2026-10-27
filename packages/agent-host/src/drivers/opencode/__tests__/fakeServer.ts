@@ -194,17 +194,9 @@ export interface FakeOpenCodeServer {
   endStream(): void;
   /** Fail the stream, as a server killed under it does. */
   failStream(error: unknown): void;
-  /** Resolves once the scripted events have been consumed (each has been
-   *  handed to the driver's loop). */
-  scripted(): Promise<void>;
-  /** Resolves after the script has been consumed and the driver's
-   *  off-stream handlers have had their microtasks and one macrotask. */
-  settled(): Promise<void>;
   /** Change a sign-in's status, which `oauth.status` then keeps reporting. */
   setSignIn(attemptID: string, status: FakeSignIn['status'], message?: string): void;
 }
-
-const BUILTIN_IDS = new Set(['build', 'plan', 'general', 'explore', 'compaction', 'title', 'summary']);
 
 /** The agents a stock 2.1.4 server lists, in its own order. */
 export const OPENCODE_AGENTS: FakeAgentRow[] = [
@@ -301,8 +293,6 @@ export function fakeOpenCode(options: FakeServerOptions = {}): FakeOpenCodeServe
   let ended = false;
   let failure: unknown;
   const waiters: Array<() => void> = [];
-  let resolveScripted!: () => void;
-  const scripted = new Promise<void>((resolve) => (resolveScripted = resolve));
   const wake = () => waiters.splice(0).forEach((waiter) => waiter());
 
   const providers = new Map<string, ProviderInfo>();
@@ -653,11 +643,6 @@ export function fakeOpenCode(options: FakeServerOptions = {}): FakeOpenCodeServe
       ended = true;
       wake();
     },
-    scripted: () => scripted,
-    settled: async () => {
-      await scripted;
-      await new Promise<void>((resolve) => setImmediate(resolve));
-    },
     setSignIn: (attemptID, status, message) => {
       const attempt = signIns.get(attemptID);
       if (!attempt) throw new Error(`no sign-in ${attemptID}`);
@@ -680,7 +665,6 @@ export function fakeOpenCode(options: FakeServerOptions = {}): FakeOpenCodeServe
         if (ended) return;
         yield event;
       }
-      resolveScripted();
       if (options.holdStream === false) {
         // A test convenience: the script is over, and one macrotask lets the
         // driver's off-stream ask handlers run before the close.
@@ -702,10 +686,4 @@ export function fakeOpenCode(options: FakeServerOptions = {}): FakeOpenCodeServe
   }
 
   return server;
-}
-
-/** The agents whose ids are OpenCode's built-ins, for tests that model a
- *  directory's agents loading after them. */
-export function builtinAgentIds(): Set<string> {
-  return new Set(BUILTIN_IDS);
 }
