@@ -458,8 +458,11 @@ pub const PRESENCE_LEASE_SECS: u64 = 25 * 60;
 /// How often a running client renews its presence.
 pub const PRESENCE_RENEW_SECS: u64 = 10 * 60;
 
-/// The longest a [`SessionKeyGrant`] may run.
-pub const SESSION_KEY_MAX_LIFETIME_SECS: u64 = 90 * 24 * 3600;
+/// The longest a [`SessionKeyGrant`] may run. A key that leaks stops working
+/// within this, and a phone not opened for this long is forgotten as a
+/// client (it comes back as a new device); a running phone rotates its key
+/// well before.
+pub const SESSION_KEY_MAX_LIFETIME_SECS: u64 = 30 * 24 * 3600;
 
 /// `session-key`: grant (or rotate to) a session key. Like every command,
 /// authored by the paired identity.

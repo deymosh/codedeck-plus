@@ -711,7 +711,7 @@ on relays and image servers only ever see the identity. From the grant on:
   never earlier. Each client's copy is
   encrypted to its newest key; the first heartbeat after the grant is the
   client's confirmation;
-- `expiresAt` (seconds) is at most 90 days ahead; a client whose key lapses
+- `expiresAt` (seconds) is at most 30 days ahead; a client whose key lapses
   is dropped, and an identity left with none is encrypted to again. The
   phone grants a new key before then;
 - an event authored by a session key is not heard (only paired identities

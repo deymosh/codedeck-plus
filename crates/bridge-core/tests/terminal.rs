@@ -62,7 +62,7 @@ impl World {
             &phone,
             json!({"v":12,"type":"session-key","sessionKey":{
                 "pubkeyHex": key.pubkey_hex, "bridgePubkeyHex": bridge,
-                "expiresAt": NOW_SECS + 90 * DAY, "label": label}}),
+                "expiresAt": NOW_SECS + 30 * DAY, "label": label}}),
             Via::Direct,
         );
         self.rig.take();
@@ -110,7 +110,7 @@ impl World {
             json!({"v":12,"type":"pair-request","npub": phone.npub, "pubkeyHex": phone.pubkey_hex,
                 "label": label, "token": token,
                 "sessionKey": {"pubkeyHex": key.pubkey_hex, "bridgePubkeyHex": bridge,
-                    "expiresAt": NOW_SECS + 90 * DAY, "label": label}}),
+                    "expiresAt": NOW_SECS + 30 * DAY, "label": label}}),
             Via::Pairing,
         );
         self.rig.take();
@@ -1308,7 +1308,7 @@ fn a_device_survives_its_keys_rotation_but_a_new_client_is_a_new_device() {
         &world.key,
         json!({"v":12,"type":"session-key","sessionKey":{
             "pubkeyHex": next.pubkey_hex, "bridgePubkeyHex": bridge,
-            "expiresAt": NOW_SECS + 90 * DAY, "replaces": world.key.pubkey_hex, "label": "Pixel 8 Pro"}}),
+            "expiresAt": NOW_SECS + 30 * DAY, "replaces": world.key.pubkey_hex, "label": "Pixel 8 Pro"}}),
         Via::Direct,
     );
     world.rig.take();
@@ -1341,7 +1341,7 @@ fn a_state_file_from_before_devices_existed_still_hydrates() {
     let phones = json!([{"npub": world.rig.phone.npub, "pubkeyHex": world.rig.phone.pubkey_hex,
         "label":"Pixel", "pairedAt":"t",
         "clients":[{"key":{"pubkeyHex": world.key.pubkey_hex, "bridgePubkeyHex": world.rig.bridge.pubkey_hex,
-            "expiresAt": NOW_SECS + 90 * DAY, "label":"Pixel 8"}}]}]);
+            "expiresAt": NOW_SECS + 30 * DAY, "label":"Pixel 8"}}]}]);
     world.rig.store.put("pairedPhones", &phones.to_string());
     let mut restarted = world.rig.restart();
     restarted.take();
