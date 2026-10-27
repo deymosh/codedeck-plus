@@ -866,6 +866,9 @@ is capped at 32 MiB.
 
 - Absence from `sessions[]` NEVER deletes on the phone — it marks `stale`.
 - Removal happens only via `removedSessions[]` tombstones (or a user delete).
+  The heartbeat every present client shares carries the tombstones of the
+  last day; a heartbeat a client asked for (coming back, or
+  `refresh-sessions`) carries every one kept: the last 100, for 30 days.
 - A clean bridge shutdown publishes the full list with every session
   `state: 'offline'` and `machineOffline: true` — never an empty list.
 

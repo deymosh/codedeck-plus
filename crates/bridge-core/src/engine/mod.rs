@@ -401,6 +401,7 @@ impl Engine {
             TimerKind::Heartbeat => {
                 self.prune_session_keys();
                 self.persist_cursor();
+                self.registry_dirty |= self.tombstones.prune(self.now());
                 self.registry_dirty |= self.activity_dirty;
                 self.list_dirty = true;
                 self.arm(self.config.heartbeat_interval_ms, TimerKind::Heartbeat);
@@ -568,9 +569,15 @@ impl Engine {
             return;
         }
         if self.list_dirty {
-            self.list_wanted.clear();
             self.publish_list(false, None);
-        } else if !self.list_wanted.is_empty() {
+            // The shared heartbeat reached the clients that asked too. Their
+            // own would differ only by the older tombstones, which a client
+            // coming back from away needs: sent only when there are some.
+            if self.tombstones.all_recent(self.now()) {
+                self.list_wanted.clear();
+            }
+        }
+        if !self.list_wanted.is_empty() {
             let to = std::mem::take(&mut self.list_wanted);
             self.publish_list(false, Some(to));
         }
@@ -581,7 +588,7 @@ impl Engine {
         self.activity_dirty = false;
         let doc = RegistryDoc {
             sessions: self.sessions.values().filter(|s| s.listed).map(|s| s.rec.clone()).collect(),
-            removed_sessions: self.tombstones.ids(),
+            removed_sessions: self.tombstones.stored(),
         };
         let json = serde_json::to_string(&doc).expect("the registry serializes");
         if let Err(err) = self.store.set(store_keys::REGISTRY, &json) {
@@ -622,6 +629,12 @@ impl Engine {
     /// capabilities, folders and tombstones. To every present client, or
     /// only to `to`.
     ///
+    /// The shared heartbeat carries only the recent tombstones: a present
+    /// client applied the older ones long ago, and repeating them every
+    /// minute to every client is traffic for nothing. A heartbeat to `to` is
+    /// one a client asked for, coming back or refreshing, so it carries every
+    /// tombstone kept.
+    ///
     /// A terminal belongs to the identity that opened it, and only that
     /// identity's clients may act on it, so its `terminals` list holds the
     /// receiving identity's own terminals and no other identity ever hears of
@@ -646,7 +659,7 @@ impl Engine {
         }
         let agents = self.catalog.descriptors(|a| self.agent_credentials(a));
         let credentials = self.bridge_credentials();
-        let removed = self.tombstones.ids();
+        let removed = if to.is_some() { self.tombstones.ids() } else { self.tombstones.recent_ids(self.now()) };
         let rev = self.next_list_rev();
         // The terminal capability is the owner's decision, so unlike the rest
         // it is advertised only when this machine runs terminals: a phone that

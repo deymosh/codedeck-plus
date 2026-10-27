@@ -468,7 +468,8 @@ impl Engine {
                 });
             }
         }
-        self.tombstones.add(session_id);
+        let now = self.now();
+        self.tombstones.add(session_id, now);
         self.registry_dirty = true;
         if let Err(err) = self.transcripts.remove(session_id) {
             log::warn!("[Engine] Removing the transcript of {session_id} failed: {err}");
