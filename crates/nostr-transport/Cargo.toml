@@ -45,3 +45,6 @@ tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros", "io-
 rcgen = { version = "0.13", default-features = false, features = ["crypto", "ring"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+# Totality of the relay frame codec: arbitrary bytes and mutated frames must
+# be an `Err`/`Unknown`, never a panic in the read loop.
+proptest = "1"

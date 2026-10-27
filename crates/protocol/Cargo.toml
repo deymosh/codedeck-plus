@@ -35,3 +35,9 @@ specta = { version = "=2.0.0-rc.25", features = ["derive", "serde_json"] }
 # JSON (as opposed to a real shape like `OutputEntry`) are overridden to
 # TS `unknown` instead of being expanded.
 specta-typescript = "0.0.12"
+
+[dev-dependencies]
+# Totality: property tests feed arbitrary bytes and mutated corpus messages
+# to every public decoder, so a panic on a hostile payload fails CI instead of
+# taking down a phone or the bridge.
+proptest = "1"
