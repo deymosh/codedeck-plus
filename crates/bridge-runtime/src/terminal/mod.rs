@@ -652,7 +652,6 @@ mod tests {
     /// Tests here read and write the process environment (a pty inherits
     /// none of it, which is what is being checked), and `std::env` is not
     /// safe to mutate while another thread reads it — so they take turns.
-    #[cfg(unix)]
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -992,5 +991,31 @@ mod tests {
         terms.close("gone");
         terms.forget("gone");
         assert!(terms.replay("gone", 0).is_none());
+    }
+
+    /// The shell is handed the system variables it reads to find programs
+    /// and its own directories, and nothing else the bridge inherited: a
+    /// provider key exported for the agents must not reach a terminal.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_shell_gets_only_the_variables_built_env_names() {
+        let _guard = env_lock();
+        const LEAK: &str = "CDX_BUILT_ENV_TEST_SECRET";
+        std::env::set_var(LEAK, "must-not-leak");
+        let env = built_env("pwsh");
+        std::env::remove_var(LEAK);
+
+        const NAMED: [&str; 9] = ["PATH", "SystemRoot", "ComSpec", "PATHEXT", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP"];
+        for (name, value) in &env {
+            let name = *name;
+            assert!(NAMED.contains(&name), "the shell was given a variable built_env does not name: {name}");
+            assert!(!value.is_empty(), "{name} is empty");
+            assert_eq!(std::env::var(name).ok().as_deref(), Some(value.as_str()), "{name} is the process's own value");
+        }
+        assert!(env.iter().all(|(name, _)| *name != LEAK), "a variable the bridge holds leaked into the shell");
+        assert!(
+            env.iter().all(|(name, _)| *name != "SHELL" && *name != "TERM"),
+            "a Windows shell is not given the Unix variables"
+        );
     }
 }
