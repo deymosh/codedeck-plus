@@ -80,3 +80,38 @@ fn a_command_is_not_run_twice_when_the_bridge_restarts_after_a_heartbeat() {
     rig.input(Input::RelayEvent { event, via: Via::Relay });
     assert_eq!(pending_ids(&rig.messages()), Vec::<String>::new(), "the heartbeat's stored id dedups the replay");
 }
+
+/// A session the phone asked for is not in the registry until the agent
+/// answers (`listed` turns true at `session-ready`). A restart before that
+/// answer therefore drops it after the phone has already been shown a
+/// placeholder: no `session-failed` follows, the heartbeat neither lists the
+/// id nor tombstones it, and the phone only loses the placeholder when its
+/// own ten-minute sweep gives up. The phone should be told.
+#[test]
+#[ignore = "known bug: a create-session pending at a bridge restart is dropped without an answer to the phone"]
+fn a_create_pending_at_a_restart_is_answered_not_lost() {
+    let mut rig = Rig::new();
+    rig.host_up();
+    rig.take();
+    rig.send(json!({"v":12,"type":"create-session","agent":"alpha"}));
+    let pending = pending_ids(&rig.messages()).pop().expect("the phone saw session-pending");
+    assert!(
+        !rig.store.snapshot().get("registry").is_some_and(|registry| registry.contains(&pending)),
+        "a pending session is deliberately not in the registry"
+    );
+
+    // A crash and restart before the agent ever answered.
+    let mut rig = rig.restart();
+    rig.take();
+    rig.host_up();
+    rig.advance(60_000);
+    let msgs = rig.messages();
+    let failed = msgs.iter().any(|m| matches!(m, BridgeToPhone::SessionFailed(f) if f.pending_id == pending));
+    let heartbeat = last_heartbeat(&msgs);
+    let listed = heartbeat.sessions.iter().any(|s| s.id == pending);
+    let removed = heartbeat.removed_sessions.as_deref().unwrap_or_default().contains(&pending);
+    assert!(
+        failed || listed || removed,
+        "the phone was told nothing about pending session {pending}: it saw session-pending before the restart"
+    );
+}
