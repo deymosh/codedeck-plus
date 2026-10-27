@@ -23,6 +23,7 @@
  * In a session, a server is connected or disconnected for the session's
  * project — OpenCode has no narrower scope — so the switch is project-wide.
  */
+import { readFile } from 'node:fs/promises';
 import type { OpenCodeClient } from '@opencode/client';
 import type { McpManager, McpState, SessionMcpState } from '../../sdk/driver';
 import { mcpStatus, serverInfo, setupSecrets } from '../../sdk/mcp';
@@ -140,12 +141,19 @@ export class OpenCodeMcp implements McpManager {
     return (await readGlobalConfigs(this.configFiles())).map(configFile);
   }
 
-  /** The files holding `name`. A file that does not parse stops the change:
-   *  editing it would guess at what it means. */
+  /** The files holding `name`. A file that does not parse stops a change to
+   *  what it holds — editing it would guess at what it means — but a name it
+   *  never mentions is not its business, so it does not block the change. */
   private async holding(name: string): Promise<ConfigFile[]> {
     const out: ConfigFile[] = [];
     for (const file of this.configFiles()) {
-      const read = await readGlobalConfig(file);
+      let read;
+      try {
+        read = await readGlobalConfig(file);
+      } catch (err) {
+        if ((await readFile(file, 'utf8')).includes(`"${name}"`)) throw err;
+        continue;
+      }
       if (!read) continue;
       const parsed = configFile(read);
       if (name in parsed.servers) out.push(parsed);

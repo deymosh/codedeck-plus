@@ -20,7 +20,7 @@
 import type { OpenCodeClient } from '@opencode/client';
 import type { PluginManager, PluginState } from '../../sdk/driver';
 import type { InstalledPlugin, PluginAction } from '../../sdk/types';
-import { editGlobalConfig, openCodeGlobalConfigFiles, readGlobalConfig, readGlobalConfigs } from './globalConfig';
+import { editGlobalConfig, newEntryFile, openCodeGlobalConfigFiles, readGlobalConfig, readGlobalConfigs } from './globalConfig';
 
 type PluginEntry = string | { package?: unknown; options?: unknown };
 
@@ -93,17 +93,24 @@ export class OpenCodePlugins implements PluginManager {
     });
   }
 
-  /** The `plugins` array of the one global config file that holds it. A
-   *  file that does not parse stops the change: editing it would guess at
-   *  what it means. */
+  /** The file the `plugins` list lives in and is edited: the first that
+   *  holds one (`entries` reads the same one), else the file OpenCode's own
+   *  edits use — a later file overrides an earlier one, so writing the list
+   *  to the first file would change nothing behind a later one. A file that
+   *  does not parse stops the change: editing it would guess at what it
+   *  means. */
   private async file(): Promise<{ path: string; entries: PluginEntry[] }> {
+    let exists = false;
     for (const file of this.configFiles()) {
       const read = await readGlobalConfig(file);
       if (!read) continue;
-      const entries = Array.isArray(read.config.plugins) ? (read.config.plugins as PluginEntry[]) : [];
-      return { path: file, entries };
+      exists = true;
+      if (Array.isArray(read.config.plugins)) return { path: file, entries: read.config.plugins as PluginEntry[] };
     }
-    throw new Error('OpenCode has no global config file to write its plugins to.');
+    if (!exists) throw new Error('OpenCode has no global config file to write its plugins to.');
+    const target = newEntryFile(this.configFiles());
+    const read = await readGlobalConfig(target);
+    return { path: target, entries: read && Array.isArray(read.config.plugins) ? (read.config.plugins as PluginEntry[]) : [] };
   }
 
   private async rewrite(action: PluginAction, target: string): Promise<void> {

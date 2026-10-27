@@ -15,7 +15,7 @@
  * the file — comments, order, formatting — as OpenCode's own edits do.
  */
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
 // The ESM build: the package's default (UMD) entry loads its parts with a
@@ -35,10 +35,13 @@ export interface GlobalConfig {
   config: Record<string, unknown>;
 }
 
-/** Parse a config file's text; why not, when it is not a JSONC object. */
+/** Parse a config file's text; why not, when it is not a JSONC object. A
+ *  file with nothing in it (or only comments) is an empty config, not a
+ *  broken one: a change can still be made to it. */
 function parseConfig(file: string, text: string): Record<string, unknown> {
   const errors: ParseError[] = [];
-  const config: unknown = parse(text, errors, { allowTrailingComma: true });
+  const config: unknown = parse(text, errors, { allowTrailingComma: true, allowEmptyContent: true });
+  if (errors.length === 0 && config === undefined) return {};
   if (errors.length > 0 || !config || typeof config !== 'object' || Array.isArray(config)) {
     const why = errors.length > 0 ? printParseErrorCode(errors[0]!.error) : 'not an object';
     throw new Error(`${file} is not a valid OpenCode config (${why}); fix it by hand.`);
@@ -77,13 +80,18 @@ export interface ConfigEdit {
 }
 
 /** Apply `edits` to `file` (creating it when there is none), changing only
- *  the values they name. */
+ *  the values they name. Written to a temporary file and renamed over it, so
+ *  an interrupted write never leaves OpenCode a half (or empty) config. */
 export async function editGlobalConfig(file: string, edits: readonly ConfigEdit[]): Promise<void> {
-  let text = existsSync(file) ? await readFile(file, 'utf8') : '{}\n';
+  let text = existsSync(file) ? await readFile(file, 'utf8') : '';
   parseConfig(file, text);
+  // An empty config has no object to edit into; it starts as one.
+  if (parse(text, [], { allowEmptyContent: true }) === undefined) text = '{}\n';
   for (const edit of edits) {
     text = applyEdits(text, modify(text, edit.path, edit.value, { formattingOptions: { insertSpaces: true, tabSize: 2, eol: '\n' } }));
   }
   await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, text.endsWith('\n') ? text : `${text}\n`);
+  const staged = `${file}.codedeck-tmp`;
+  await writeFile(staged, text.endsWith('\n') ? text : `${text}\n`);
+  await rename(staged, file);
 }

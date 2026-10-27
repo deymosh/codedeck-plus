@@ -130,6 +130,28 @@ describe('OpenCode MCP servers', () => {
     expect((await restarted(config.files).list()).servers).toEqual([]);
   });
 
+  it('repairs a config file an interrupted write left empty', async () => {
+    // The file is written through a rename for this reason; an empty one is
+    // a config with nothing in it, not a broken one.
+    const config = configDir();
+    mkdirSync(path.dirname(config.file), { recursive: true });
+    writeFileSync(config.file, '');
+    const mcp = new OpenCodeMcp(async () => fakeOpenCode().client, config.files);
+    await mcp.act('add', [{ name: 'gh', setup: { type: 'http', url: 'https://x/mcp' } }], []);
+    expect(config.read()).toEqual({ mcp: { gh: { type: 'remote', url: 'https://x/mcp' } } });
+  });
+
+  it('a file that does not parse blocks only its own servers', async () => {
+    // A broken later file that never mentions the name does not stop a
+    // change to a server the readable file holds.
+    const config = configDir({ mcp: { fs: { type: 'local', command: ['x'] } } });
+    writeFileSync(path.join(path.dirname(config.file), 'opencode.jsonc'), '{ "mcp": { "gh": ');
+    const mcp = new OpenCodeMcp(async () => fakeOpenCode().client, config.files);
+    expect((await mcp.act('remove', [], ['fs'])).servers).toEqual([]);
+    // But a change to the name it does mention still stops there.
+    await expect(mcp.act('remove', [], ['gh'])).rejects.toThrow(/not a valid OpenCode config/);
+  });
+
   it('leaves a file that does not parse untouched, and the server unasked', async () => {
     const config = configDir();
     mkdirSync(path.dirname(config.file), { recursive: true });

@@ -72,6 +72,32 @@ describe('OpenCode plugins', () => {
     expect(await readFile(file, 'utf8')).toContain("// the owner's note");
   });
 
+  it('edits the file that holds the plugins list, not the first file', async () => {
+    // A later config file overrides an earlier one, so writing the list to
+    // the first file would change nothing behind the one holding it.
+    const dir = await mkdtemp(path.join(tmpdir(), 'oc-plugins-'));
+    dirs.push(dir);
+    const files = ['config.json', 'opencode.json', 'opencode.jsonc'].map((f) => path.join(dir, f));
+    await writeFile(files[0]!, JSON.stringify({ theme: 'dark' }));
+    await writeFile(files[1]!, JSON.stringify({ plugins: ['opencode-wakatime'] }));
+    const manager = new OpenCodePlugins(async () => fakeOpenCode().client, () => files);
+    const state = await manager.act('install', 'x-plugin');
+    expect(state.installed.map((p) => p.id)).toEqual(['opencode-wakatime', 'x-plugin']);
+    expect(JSON.parse(await readFile(files[1]!, 'utf8')).plugins).toEqual(['opencode-wakatime', 'x-plugin']);
+    expect(JSON.parse(await readFile(files[0]!, 'utf8'))).toEqual({ theme: 'dark' });
+
+    // No list anywhere: a new one goes where OpenCode's own edit would put
+    // it, not into the first file, which the new file then overrides.
+    const dir2 = await mkdtemp(path.join(tmpdir(), 'oc-plugins-'));
+    dirs.push(dir2);
+    const files2 = ['config.json', 'opencode.json', 'opencode.jsonc'].map((f) => path.join(dir2, f));
+    await writeFile(files2[0]!, JSON.stringify({ theme: 'dark' }));
+    const fresh = new OpenCodePlugins(async () => fakeOpenCode().client, () => files2);
+    expect((await fresh.act('install', 'y-plugin')).installed.map((p) => p.id)).toEqual(['y-plugin']);
+    expect(JSON.parse(await readFile(files2[1]!, 'utf8')).plugins).toEqual(['y-plugin']);
+    expect(JSON.parse(await readFile(files2[0]!, 'utf8'))).toEqual({ theme: 'dark' });
+  });
+
   it('switches a plugin off and on with a disabled entry', async () => {
     const { manager, written, dir } = await server(['opencode-wakatime']);
     dirs.push(dir);
