@@ -6,29 +6,29 @@
  * The config file is where a server lasts. V2's MCP API changes only the
  * running inventory (verified against 2.1.4): a server added through it is
  * gone at the next start, a removed one comes back, and a `disconnect` is
- * forgotten. So every change here is written to the global config file,
- * which 2.1.4 watches and applies to the running server within half a second
+ * forgotten. So every change here is written to the global config files
+ * (`globalConfig.ts`: JSONC, edited in place as OpenCode edits them), which
+ * 2.1.4 watches and applies to the running server within half a second
  * (verified: an added entry is listed, a removed one leaves, `enabled:
  * false` reads as disabled). An add still goes through `mcp.add` first: the
  * server checks the entry there, and an entry it refuses must never reach
  * the file, where it would spoil the config every project loads.
  *
- * In the file a server is `mcp: {name: entry}` (2.1.4 also reads `mcp:
+ * In a file a server is `mcp: {name: entry}` (2.1.4 also reads `mcp:
  * {servers: {…}}`, which is kept when a file already uses it), and the off
- * switch is `enabled: false` — a `disabled` flag in the file is ignored.
+ * switch is `enabled: false` — a `disabled` flag in the file is ignored. A
+ * later file overrides an earlier one, so a name is listed as the last file
+ * holding it says, and a change reaches every file that holds it.
  *
  * In a session, a server is connected or disconnected for the session's
  * project — OpenCode has no narrower scope — so the switch is project-wide.
  */
-import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import * as path from 'node:path';
 import type { OpenCodeClient } from '@opencode/client';
 import type { McpManager, McpState, SessionMcpState } from '../../sdk/driver';
 import { mcpStatus, serverInfo, setupSecrets } from '../../sdk/mcp';
 import { redactSecrets } from '../../sdk/redact';
 import type { McpAction, McpServerAdd, McpServerInfo } from '../../sdk/types';
-import { openCodeGlobalConfigFiles } from './plugins';
+import { type ConfigEdit, editGlobalConfig, type GlobalConfig, newEntryFile, openCodeGlobalConfigFiles, readGlobalConfig, readGlobalConfigs } from './globalConfig';
 
 /** A server as OpenCode v2's config holds it. Absent env or headers are left
  *  out entirely: an add replaces the whole entry, so nothing of an earlier
@@ -64,7 +64,6 @@ export function openCodeServers(mcp: unknown): McpServerInfo[] {
 /** One global config file and the server map in it. */
 interface ConfigFile {
   path: string;
-  config: Record<string, unknown>;
   /** The map servers live in: the `mcp` section itself, or its `servers`. */
   servers: Record<string, unknown>;
   /** Whether the file nests its servers under `servers`. */
@@ -84,8 +83,13 @@ function serverMap(mcp: unknown): { servers: Record<string, unknown>; nested: bo
   return { servers: { ...section }, nested: false };
 }
 
+const configFile = ({ path, config }: GlobalConfig): ConfigFile => ({ path, ...serverMap(config.mcp) });
+
+/** Where server `name`'s entry is in a file. */
+const entryPath = (file: ConfigFile, name: string): ConfigEdit['path'] => (file.nested ? ['mcp', 'servers', name] : ['mcp', name]);
+
 export class OpenCodeMcp implements McpManager {
-  /** One change at a time: each reads the files, then writes one. */
+  /** One change at a time: each reads the files, then edits them. */
   private queue: Promise<unknown> = Promise.resolve();
 
   constructor(
@@ -106,28 +110,25 @@ export class OpenCodeMcp implements McpManager {
         const client = await this.client();
         for (const add of servers) {
           const config = openCodeServerConfig(add);
-          // The file is settled first: one that cannot be written (comments)
-          // must stop the add before the running server has taken it. A name
-          // another file already holds is replaced there, so the machine
-          // never has two entries for it.
-          const file = (await this.holding(add.name)) ?? (await this.writable());
+          // The files are settled first: one that cannot be edited (it does
+          // not parse) must stop the add before the running server has taken
+          // it. A name a file already holds is replaced there, every copy of
+          // it, so no older entry can show through.
+          const holding = await this.holding(add.name);
+          const target = holding.length > 0 ? holding : [await this.newEntry()];
           await this.call(`add ${add.name}`, () => client.mcp.add({ server: add.name, config: config as never }), secrets);
-          file.servers[add.name] = config;
-          await this.write(file);
+          for (const file of target) await editGlobalConfig(file.path, [{ path: entryPath(file, add.name), value: config }]);
         }
       } else {
         for (const name of names) {
-          const file = await this.holding(name);
-          if (!file) throw new Error(`OpenCode has no MCP server '${name}'.`);
-          if (action === 'remove') {
-            delete file.servers[name];
-          } else {
-            const entry = { ...(file.servers[name] as Record<string, unknown>) };
-            if (action === 'disable') entry.enabled = false;
-            else delete entry.enabled;
-            file.servers[name] = entry;
+          const holding = await this.holding(name);
+          if (holding.length === 0) throw new Error(`OpenCode has no MCP server '${name}'.`);
+          for (const file of holding) {
+            const at = entryPath(file, name);
+            const edit: ConfigEdit =
+              action === 'remove' ? { path: at, value: undefined } : { path: [...at, 'enabled'], value: action === 'disable' ? false : undefined };
+            await editGlobalConfig(file.path, [edit]);
           }
-          await this.write(file);
         }
       }
       return this.state(await this.readable());
@@ -136,64 +137,29 @@ export class OpenCodeMcp implements McpManager {
 
   /** Every global config file that exists and parses, in OpenCode's order. */
   private async readable(): Promise<ConfigFile[]> {
+    return (await readGlobalConfigs(this.configFiles())).map(configFile);
+  }
+
+  /** The files holding `name`. A file that does not parse stops the change:
+   *  editing it would guess at what it means. */
+  private async holding(name: string): Promise<ConfigFile[]> {
     const out: ConfigFile[] = [];
-    for (const file of this.configFiles().filter((f) => existsSync(f))) {
-      try {
-        const config = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>;
-        out.push({ path: file, config, ...serverMap(config.mcp) });
-      } catch {
-        // A file with comments is the user's own; it is read by OpenCode,
-        // but not here (see `holding`).
-        continue;
-      }
+    for (const file of this.configFiles()) {
+      const read = await readGlobalConfig(file);
+      if (!read) continue;
+      const parsed = configFile(read);
+      if (name in parsed.servers) out.push(parsed);
     }
     return out;
   }
 
-  /** The file holding `name`, ready to be written. A file that is not plain
-   *  JSON stops the change: rewriting it would lose the user's comments. */
-  private async holding(name: string): Promise<ConfigFile | undefined> {
-    for (const file of this.configFiles().filter((f) => existsSync(f))) {
-      const text = await readFile(file, 'utf8');
-      let config: Record<string, unknown>;
-      try {
-        config = JSON.parse(text) as Record<string, unknown>;
-      } catch {
-        if (text.includes(`"${name}"`)) {
-          throw new Error(`${file} has comments, so it is not edited from here. Edit its "mcp" section by hand.`);
-        }
-        continue;
-      }
-      const map = serverMap(config.mcp);
-      if (name in map.servers) return { path: file, config, ...map };
-    }
-    return undefined;
-  }
-
-  /** The file a new server goes to: the first one that exists, or a new
-   *  `opencode.json` in OpenCode's global config directory, which it reads
-   *  at the next start and watches from then on. */
-  private async writable(): Promise<ConfigFile> {
-    const files = this.configFiles();
-    const existing = files.find((f) => existsSync(f));
-    if (!existing) {
-      const fresh = files.find((f) => path.basename(f) === 'opencode.json') ?? files[0]!;
-      return { path: fresh, config: {}, servers: {}, nested: false };
-    }
-    let config: Record<string, unknown>;
-    try {
-      config = JSON.parse(await readFile(existing, 'utf8')) as Record<string, unknown>;
-    } catch {
-      throw new Error(`${existing} has comments, so it is not edited from here. Add the server to its "mcp" section by hand.`);
-    }
-    return { path: existing, config, ...serverMap(config.mcp) };
-  }
-
-  private async write(file: ConfigFile): Promise<void> {
-    const section = file.config.mcp && typeof file.config.mcp === 'object' ? (file.config.mcp as Record<string, unknown>) : {};
-    const mcp = file.nested ? { ...section, servers: file.servers } : file.servers;
-    await mkdir(path.dirname(file.path), { recursive: true });
-    await writeFile(file.path, `${JSON.stringify({ ...file.config, mcp }, null, 2)}\n`);
+  /** The file a new server goes to, as OpenCode's own `mcp add --global`
+   *  picks it. A new file is read at OpenCode's next start and watched from
+   *  then on. */
+  private async newEntry(): Promise<ConfigFile> {
+    const file = newEntryFile(this.configFiles());
+    const read = await readGlobalConfig(file);
+    return read ? configFile(read) : { path: file, servers: {}, nested: false };
   }
 
   private async call(what: string, work: () => Promise<unknown>, secrets: readonly string[] = []): Promise<void> {
@@ -210,11 +176,11 @@ export class OpenCodeMcp implements McpManager {
     return next;
   }
 
-  /** What the files hold. A name in more than one file is shown as the first
-   *  file has it: that is the entry a change here edits. */
+  /** What the files hold. A later file overrides an earlier one, as OpenCode
+   *  reads them. */
   private state(files: ConfigFile[]): McpState {
     const merged: Record<string, unknown> = {};
-    for (const file of [...files].reverse()) Object.assign(merged, file.servers);
+    for (const file of files) Object.assign(merged, file.servers);
     return { servers: openCodeServers(merged), toggles: true };
   }
 }

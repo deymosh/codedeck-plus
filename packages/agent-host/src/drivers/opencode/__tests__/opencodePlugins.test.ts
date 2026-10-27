@@ -59,6 +59,19 @@ describe('OpenCode plugins', () => {
     expect((await written()).plugins).toEqual(['opencode-wakatime@latest']);
   });
 
+  it('installs into an opencode.jsonc in place, keeping its comments', async () => {
+    // OpenCode's own tools may leave the global config as JSONC; it is
+    // edited as OpenCode edits it, not refused and not rewritten.
+    const dir = await mkdtemp(path.join(tmpdir(), 'oc-plugins-'));
+    dirs.push(dir);
+    const file = path.join(dir, 'opencode.jsonc');
+    await writeFile(file, '{\n  // the owner\'s note\n  "plugins": ["opencode-wakatime",],\n}\n');
+    const manager = new OpenCodePlugins(async () => fakeOpenCode().client, () => [file]);
+    const state = await manager.act('install', 'x-plugin');
+    expect(state.installed.map((p) => p.id)).toEqual(['opencode-wakatime', 'x-plugin']);
+    expect(await readFile(file, 'utf8')).toContain("// the owner's note");
+  });
+
   it('switches a plugin off and on with a disabled entry', async () => {
     const { manager, written, dir } = await server(['opencode-wakatime']);
     dirs.push(dir);

@@ -5,7 +5,8 @@
  * V2 reports what it has loaded over its API (`plugin.list`), but takes the
  * list itself only from config — its config API writes the shell and nothing
  * else — so install, uninstall and the disable switch all edit the global
- * config file, and the API is what reads the result back. An entry is a
+ * config file (`globalConfig.ts`: JSONC, edited in place), and the API is
+ * what reads the result back. An entry is a
  * package spec, or an object naming one with its options. A `-<id>` entry
  * switches a listed plugin off without removing it; a later plain entry
  * switches it back on.
@@ -16,13 +17,10 @@
  * a package plugin by `source.target` (a package entry has no `id`; verified
  * against 2.1.4), which is the spec this file's `plugins` list holds.
  */
-import { existsSync } from 'node:fs';
-import { readFile, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import * as path from 'node:path';
 import type { OpenCodeClient } from '@opencode/client';
 import type { PluginManager, PluginState } from '../../sdk/driver';
 import type { InstalledPlugin, PluginAction } from '../../sdk/types';
+import { editGlobalConfig, openCodeGlobalConfigFiles, readGlobalConfig, readGlobalConfigs } from './globalConfig';
 
 type PluginEntry = string | { package?: unknown; options?: unknown };
 
@@ -47,12 +45,6 @@ export function toInstalledPlugin(entry: PluginEntry): InstalledPlugin | undefin
     ...(pinned ? { version: spec.slice(at + 1) } : {}),
     enabled: !isDisabled(specOf(entry)),
   };
-}
-
-/** The files OpenCode reads its global config from. */
-export function openCodeGlobalConfigFiles(env: NodeJS.ProcessEnv = process.env): string[] {
-  const base = env.XDG_CONFIG_HOME?.trim() || path.join(homedir(), '.config');
-  return ['config.json', 'opencode.json', 'opencode.jsonc'].map((f) => path.join(base, 'opencode', f));
 }
 
 export class OpenCodePlugins implements PluginManager {
@@ -101,26 +93,21 @@ export class OpenCodePlugins implements PluginManager {
     });
   }
 
-  /** The `plugins` array of the one global config file that holds it. */
-  private async file(): Promise<{ path: string; config: Record<string, unknown>; entries: PluginEntry[] }> {
-    for (const file of this.configFiles().filter((f) => existsSync(f))) {
-      const text = await readFile(file, 'utf8');
-      let config: Record<string, unknown>;
-      try {
-        config = JSON.parse(text) as Record<string, unknown>;
-      } catch {
-        // A file OpenCode itself wrote is plain JSON; one with comments is
-        // the user's own, and rewriting it would lose them.
-        throw new Error(`${file} has comments, so it is not edited from here. Edit its "plugins" list by hand.`);
-      }
-      const entries = Array.isArray(config.plugins) ? (config.plugins as PluginEntry[]) : [];
-      return { path: file, config, entries };
+  /** The `plugins` array of the one global config file that holds it. A
+   *  file that does not parse stops the change: editing it would guess at
+   *  what it means. */
+  private async file(): Promise<{ path: string; entries: PluginEntry[] }> {
+    for (const file of this.configFiles()) {
+      const read = await readGlobalConfig(file);
+      if (!read) continue;
+      const entries = Array.isArray(read.config.plugins) ? (read.config.plugins as PluginEntry[]) : [];
+      return { path: file, entries };
     }
     throw new Error('OpenCode has no global config file to write its plugins to.');
   }
 
   private async rewrite(action: PluginAction, target: string): Promise<void> {
-    const { path: file, config, entries } = await this.file();
+    const { path: file, entries } = await this.file();
     const spec = (e: PluginEntry) => bareSpec(specOf(e));
     const listed = entries.some((e) => spec(e) === target);
     // Nothing to remove or switch: said plainly, rather than rewriting the
@@ -136,17 +123,12 @@ export class OpenCodePlugins implements PluginManager {
       // The switch is an entry of its own: `-<id>` off, plain back on.
       next = action === 'disable' ? [...without, `-${target}`] : [...without, target];
     }
-    await writeFile(file, `${JSON.stringify({ ...config, plugins: next }, null, 2)}\n`);
+    await editGlobalConfig(file, [{ path: ['plugins'], value: next }]);
   }
 
   private async entries(): Promise<PluginEntry[]> {
-    for (const file of this.configFiles().filter((f) => existsSync(f))) {
-      try {
-        const config = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>;
-        if (Array.isArray(config.plugins)) return config.plugins as PluginEntry[];
-      } catch {
-        continue;
-      }
+    for (const { config } of await readGlobalConfigs(this.configFiles())) {
+      if (Array.isArray(config.plugins)) return config.plugins as PluginEntry[];
     }
     return [];
   }
