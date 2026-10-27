@@ -27,18 +27,12 @@
  *   CODEDECK_NPM_REGISTRY         an npm mirror to install them from
  */
 import * as readline from 'node:readline';
-import pkg from '../../package.json';
-import { agentCacheDir, registryUrl, withoutAgentBin } from '../install/agentInstall';
-import { Agents } from './agents';
 import { runCommand } from './commands';
-import { AgentHost, type HostIo } from './host';
-import { selectModules } from './modules';
+import { driverEnv, startHost, wire } from './serve';
 
-// stdout carries protocol frames only; a stray console.log from any library
-// would corrupt the stream, so every console method writes to stderr.
-for (const method of ['log', 'info', 'debug', 'warn'] as const) {
-  console[method] = (...args: unknown[]) => console.error(...args);
-}
+// Built before any driver is, so a library that logs during its load cannot
+// reach stdout: `wire` sends every console method to stderr.
+const io = wire();
 
 const log = (message: string): void => {
   process.stderr.write(`${message}
@@ -48,27 +42,14 @@ const log = (message: string): void => {
 process.on('uncaughtException', (err) => log(`[agent-host] uncaught exception: ${err instanceof Error ? err.stack : String(err)}`));
 process.on('unhandledRejection', (err) => log(`[agent-host] unhandled rejection: ${err instanceof Error ? err.stack : String(err)}`));
 
-/** What every module is handed, from the host's environment. */
-function driverEnv(env: NodeJS.ProcessEnv) {
-  const cacheDir = agentCacheDir(env);
-  return { env, lookupEnv: withoutAgentBin(env, cacheDir), cacheDir, registry: registryUrl(env), log };
-}
-
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args.length > 0) {
     // One command, then exit without ever reading stdin.
-    process.exitCode = await runCommand(args, driverEnv(process.env), (line) => process.stdout.write(`${line}\n`));
+    process.exitCode = await runCommand(args, driverEnv(process.env, io.log), (line) => process.stdout.write(`${line}\n`));
     return;
   }
-  const io: HostIo = {
-    write: (line) => {
-      process.stdout.write(`${line}\n`);
-    },
-    log,
-  };
-  const agents = await Agents.load(selectModules(process.env, log), driverEnv(process.env));
-  const host = new AgentHost(agents, io, pkg.version);
+  const host = await startHost(io, process.env);
   const lines = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
   // Lines are handled concurrently: a slow request (a model list, a mode
   // switch) must not hold up the replies that unblock a waiting agent.
