@@ -24,9 +24,10 @@ fn pending_ids(msgs: &[BridgeToPhone]) -> Vec<String> {
         .collect()
 }
 
-/// The engine persists the ingest cursor on its heartbeat, not per command,
-/// so a crash between a command and the next heartbeat must still leave the
-/// id durable: the relay's `since` replay would otherwise run it again.
+/// The relay replays from the cursor minus a five-second grace after a
+/// reconnect, so a command the bridge already ran reaches it again once it
+/// is back. A restart before the next heartbeat must not lose the id it was
+/// remembered under: the replay would create a second session.
 #[test]
 fn a_command_is_not_run_twice_when_the_bridge_restarts_before_a_heartbeat() {
     let mut rig = Rig::with(RigOptions {
@@ -54,8 +55,8 @@ fn a_command_is_not_run_twice_when_the_bridge_restarts_before_a_heartbeat() {
     );
 }
 
-/// The same replay after a heartbeat, whose cursor flush is what makes the
-/// id durable today; the two paths must agree.
+/// The same replay when a heartbeat also ran before the restart and stored
+/// the cursor; the two paths must agree.
 #[test]
 fn a_command_is_not_run_twice_when_the_bridge_restarts_after_a_heartbeat() {
     let mut rig = Rig::with(RigOptions {
