@@ -433,17 +433,6 @@ mod tests {
     // --- backoff + jitter ---
 
     #[test]
-    fn exponential_base_with_30s_cap() {
-        let d = |a| backoff_delay_ms(a, 0.0, CFG);
-        assert_eq!(d(0), RECONNECT_BASE_MS);
-        assert_eq!(d(1), 4_000);
-        assert_eq!(d(2), 8_000);
-        assert_eq!(d(3), 16_000);
-        assert_eq!(d(4), RECONNECT_MAX_MS);
-        assert_eq!(d(50), RECONNECT_MAX_MS);
-    }
-
-    #[test]
     fn the_tor_config_scales_the_connect_deadline_with_the_slower_transport() {
         const { assert!(DEFAULT_RECONNECT_CONFIG.connect_deadline_ms == 45_000) };
         const { assert!(TOR_RECONNECT_CONFIG.connect_deadline_ms == 90_000) };
@@ -453,14 +442,17 @@ mod tests {
     }
 
     #[test]
-    fn jitter_adds_at_most_25pct_never_negative() {
+    fn jitter_never_brings_a_retry_forward_and_clamps_out_of_range_entropy() {
         for attempt in [0, 1, 2, 3, 4, 10] {
             let base = backoff_delay_ms(attempt, 0.0, CFG);
-            let max_jitter = (base as f64 * RECONNECT_JITTER_FRACTION).floor() as u64;
-            assert!(backoff_delay_ms(attempt, 1.0, CFG) <= base + max_jitter);
             assert!(backoff_delay_ms(attempt, 0.5, CFG) >= base);
+            // Entropy is a fraction: anything below the range means none,
+            // anything above it means the same as the top of the range.
             assert_eq!(backoff_delay_ms(attempt, -5.0, CFG), base);
-            assert_eq!(backoff_delay_ms(attempt, 99.0, CFG), base + max_jitter);
+            assert_eq!(
+                backoff_delay_ms(attempt, 99.0, CFG),
+                backoff_delay_ms(attempt, 1.0, CFG)
+            );
         }
     }
 

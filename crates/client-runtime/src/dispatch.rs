@@ -1080,12 +1080,8 @@ mod tests {
     }
 
     async fn stores() -> (CoreStores, MemoryTranscriptStore, PhoneKeys) {
-        let kv = MemoryKv::new();
-        let ts = MemoryTranscriptStore::new();
-        let h = hydrate(&kv, &ts, &StoresConfig::default()).await;
-        let identity = protocol::crypto::generate_keypair();
-        let (ring, _) = client_core::stores::session_key::SessionKeyRing::load(None, 1_000);
-        (h.stores, ts, PhoneKeys::new(&identity.pubkey_hex, &ring.current, None))
+        let (stores, ts) = crate::test_support::stores_with_transcript().await;
+        (stores, ts, crate::test_support::phone_keys())
     }
 
     fn text_entry(content: &str) -> OutputEntry {

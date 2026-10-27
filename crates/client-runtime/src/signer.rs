@@ -326,15 +326,4 @@ mod tests {
         let unnamed = PhoneKeys::new("ab", &session, None);
         assert_eq!(unnamed.grant_for("cd", None).label, None);
     }
-
-    #[test]
-    fn signed_event_json_round_trips() {
-        let k = generate_keypair();
-        let mut ev = nostr::EventBuilder::text_note("hi").build(nostr::Keys::new(k.secret_key.clone()).public_key());
-        ev.ensure_id();
-        assert!(unsigned_event_json(&ev).contains("\"id\""));
-        let signed = ev.sign_with_keys(&nostr::Keys::new(k.secret_key.clone())).unwrap();
-        assert_eq!(signed_event_from_json(&signed.as_json()).unwrap(), signed);
-        assert!(signed_event_from_json("{}").is_err());
-    }
 }

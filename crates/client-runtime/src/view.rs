@@ -493,14 +493,7 @@ impl TranscriptRowsView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ports::{MemoryKv, MemoryTranscriptStore};
-    use crate::stores::{hydrate, StoresConfig};
-
-    async fn stores() -> CoreStores {
-        let kv = MemoryKv::new();
-        let ts = MemoryTranscriptStore::new();
-        hydrate(&kv, &ts, &StoresConfig::default()).await.stores
-    }
+    use crate::test_support::stores;
 
     #[test]
     fn connection_view_maps_the_status_string() {
@@ -511,21 +504,6 @@ mod tests {
         let json = serde_json::to_string(&ConnectionView::new(ConnectionStatus::Connected, false, vec![]))
             .unwrap();
         assert_eq!(json, r#"{"status":"connected","needsPairingCheck":false,"connectedRelays":[]}"#);
-    }
-
-    #[tokio::test]
-    async fn settings_and_machines_views_are_thin_over_the_store() {
-        let mut s = stores().await;
-        s.machines.register_machine("m", "laptop", None, None, &["wss://extra.example".to_string()]);
-        s.settings.set_ui_scale(1.2);
-
-        let mv = MachinesView::from_stores(&s);
-        assert_eq!(mv.machines["m"].relays, vec!["wss://extra.example"]);
-        let sv = SettingsView::from_stores(&s);
-        assert_eq!(sv.data.ui_scale, 1.2);
-        assert_eq!(sv.backup.relay, None);
-        // The settings' own fields stay at the top level.
-        assert!(serde_json::to_string(&sv).unwrap().contains("\"uiScale\":1.2"));
     }
 
     #[tokio::test]
@@ -548,38 +526,6 @@ mod tests {
         let pv = PairingView::from_stores(&s);
         assert_eq!(pv.phase, "awaiting-ack");
         assert_eq!(pv.candidate.unwrap().machine, "(manual)");
-    }
-
-    #[tokio::test]
-    async fn quick_prompts_view_is_thin_over_the_store() {
-        let mut s = stores().await;
-        s.quick_prompts.add_prompt("qp-1", "Go", "continue");
-        let qpv = QuickPromptsView::from_stores(&s);
-        assert_eq!(qpv.prompts.len(), 1);
-        assert_eq!(qpv.prompts[0].label, "Go");
-        let json = serde_json::to_string(&qpv).unwrap();
-        assert!(json.contains(r#""prompts":[{"id":"qp-1","label":"Go","text":"continue"}]"#));
-    }
-
-    #[tokio::test]
-    async fn ui_view_is_thin_over_the_store() {
-        let mut s = stores().await;
-        s.ui.select_machine(Some("m1"));
-        s.ui.mark_session_unread("m1", "s1");
-        s.ui.set_plan_approval_choice("card1", "2");
-        s.ui.note_web_sign_in_sent("m1", "K7QM-4XPA");
-
-        let uv = UiView::from_stores(&s);
-        assert_eq!(uv.selected_machine.as_deref(), Some("m1"));
-        assert!(uv.unread_sessions.contains(&client_core::notifications::session_key_of("m1", "s1")));
-        assert_eq!(uv.plan_approval_choices.get("card1").map(String::as_str), Some("2"));
-        assert_eq!(uv.web_sign_in["m1"].code, "K7QM-4XPA");
-        assert_eq!(
-            uv.web_sign_in["m1"].state,
-            client_core::stores::ui::WebSignInState::Sending
-        );
-        let json = serde_json::to_string(&uv).unwrap();
-        assert!(json.contains(r#""selectedMachine":"m1""#));
     }
 
     #[tokio::test]

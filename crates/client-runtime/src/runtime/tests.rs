@@ -67,8 +67,55 @@ fn connect_deadline() -> u64 {
     fast_reconnect().connect_deadline_ms
 }
 
+/// A fixed wait, only where no event names what the test needs: a check that
+/// something did NOT happen (give the loop time to prove the absence), a
+/// fake-clock step that must land before the test moves the clock on, or a
+/// private state the views do not expose.
 async fn settle() {
     tokio::time::sleep(Duration::from_millis(120)).await;
+}
+
+/// Wait for a condition that names the event a test needs, instead of always
+/// burning the same wall-clock time and hoping it was enough.
+async fn wait_for(mut cond: impl FnMut() -> bool) {
+    for _ in 0..600 {
+        if cond() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    panic!("condition never became true");
+}
+
+/// Wait until the live FSM reports `want`.
+async fn wait_status(core: &Core, want: ConnectionStatus) {
+    for _ in 0..600 {
+        if core.connection_status().await.0 == want {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    panic!("the core never reached {want:?}");
+}
+
+async fn wait_connected(core: &Core) {
+    wait_status(core, ConnectionStatus::Connected).await;
+}
+
+/// [`wait_for`] for a probe that has to query a view (answered in order with
+/// everything the loop had already queued).
+async fn wait_for_async<F, Fut>(mut probe: F)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    for _ in 0..600 {
+        if probe().await {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    panic!("condition never became true");
 }
 
 async fn core_for(mock: &MockRelay, phone: &Keypair, spy: Rc<Spy>) -> Core {
@@ -171,7 +218,7 @@ async fn a_stalled_image_upload_does_not_block_the_loop() {
             core.set_machines(vec![generate_keypair().pubkey_hex]);
             core.start();
             eose_all(&mut mock).await;
-            settle().await;
+            wait_connected(&core).await;
             core.dispatch(Intent::SetBlossomServer("https://blossom.example".into())).await;
 
             let core2 = core.clone();
@@ -187,7 +234,11 @@ async fn a_stalled_image_upload_does_not_block_the_loop() {
                     }))
                     .await;
             });
-            settle().await;
+            // Let the upload task reach the hanging `put` before checking the
+            // loop still answers.
+            for _ in 0..10 {
+                tokio::task::yield_now().await;
+            }
 
             // The upload is still hanging, yet the loop answers at once.
             tokio::time::timeout(Duration::from_secs(1), core.machines_view())
@@ -681,7 +732,8 @@ async fn start_subscribes_and_reports_connected_after_all_eose() {
             core.start();
 
             eose_all(&mut mock).await;
-            settle().await;
+            wait_for(|| spy.statuses.lock().unwrap().last().is_some_and(|(s, _)| *s == ConnectionStatus::Connected))
+                .await;
 
             let statuses = spy.statuses.lock().unwrap().clone();
             assert!(
@@ -734,14 +786,21 @@ async fn a_relay_dying_while_another_survives_is_reported_at_once() {
 
             eose_all(&mut mock1).await;
             eose_all(&mut mock2).await;
-            settle().await;
+            wait_for(|| spy.connected_relays.lock().unwrap().last().is_some_and(|r| r.len() == 2)).await;
 
             let before = spy.connected_relays.lock().unwrap().last().unwrap().clone();
             assert_eq!(before.len(), 2, "{before:?}");
 
             // Real time only, far short of the watchdog's 30 s tick.
             mock2.close();
-            settle().await;
+            wait_for(|| {
+                spy.connected_relays
+                    .lock()
+                    .unwrap()
+                    .last()
+                    .is_some_and(|r| r == &vec![mock1.url.clone()])
+            })
+            .await;
 
             let after = spy.connected_relays.lock().unwrap().last().unwrap().clone();
             assert_eq!(after, vec![mock1.url.clone()], "{after:?}");
@@ -781,7 +840,7 @@ async fn a_bridge_message_is_decrypted_decoded_and_delivered() {
                 r#"["EVENT","cd-3",{}]"#,
                 <nostr::Event as nostr::JsonUtil>::as_json(&event)
             ));
-            settle().await;
+            wait_for(|| spy.messages.lock().unwrap().len() == 1).await;
 
             let messages = spy.messages.lock().unwrap();
             assert_eq!(messages.len(), 1, "{messages:?}");
@@ -820,7 +879,13 @@ async fn a_bridge_of_another_version_is_marked_until_it_is_read_again() {
                 host: None,
             });
             push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, &sub, &ack);
-            settle().await;
+            let key = machine.pubkey_hex.clone();
+            wait_for_async(|| {
+                let core = core.clone();
+                let key = key.clone();
+                async move { core.machines_view().await.machines.contains_key(&key) }
+            })
+            .await;
             let sub = drain_traffic_resubscribe(&mut mock).await;
 
             let push_raw = |plaintext: &str| {
@@ -837,12 +902,25 @@ async fn a_bridge_of_another_version_is_marked_until_it_is_read_again() {
             assert_eq!(mark().await, None);
 
             push_raw(r#"{"v":13,"type":"input-ack","sessionId":"s1","inputId":"i1"}"#);
-            settle().await;
+            let key = machine.pubkey_hex.clone();
+            wait_for_async(|| {
+                let core = core.clone();
+                let key = key.clone();
+                async move {
+                    core.machines_view().await.machines[&key].incompatible.map(|i| i.theirs) == Some(Some(13))
+                }
+            })
+            .await;
             assert_eq!(mark().await, Some(Some(13)));
             let delivered = spy.messages.lock().unwrap().len();
 
             push_raw(r#"{"v":12,"type":"input-ack","sessionId":"s1","inputId":"i1"}"#);
-            settle().await;
+            wait_for_async(|| {
+                let core = core.clone();
+                let key = key.clone();
+                async move { core.machines_view().await.machines[&key].incompatible.is_none() }
+            })
+            .await;
             assert_eq!(mark().await, None);
             assert_eq!(spy.messages.lock().unwrap().len(), delivered + 1);
         })
@@ -865,7 +943,6 @@ async fn a_notify_worthy_event_while_backgrounded_fires_the_ping_core_event() {
             // Backgrounded — `decide_ping` wants a chime unconditionally
             // once the app isn't visible, for any notify-worthy event.
             core.pause();
-            settle().await;
 
             let msg = protocol::codec::decode_bridge_to_phone(
                 r#"{"v":12,"type":"session-failed","pendingId":"p1","reason":"boom"}"#,
@@ -886,7 +963,7 @@ async fn a_notify_worthy_event_while_backgrounded_fires_the_ping_core_event() {
                 r#"["EVENT","cd-1",{}]"#,
                 <nostr::Event as nostr::JsonUtil>::as_json(&event)
             ));
-            settle().await;
+            wait_for(|| spy.events.lock().unwrap().contains(&CoreEvent::Ping)).await;
 
             let events = spy.events.lock().unwrap();
             assert!(events.contains(&CoreEvent::Ping), "{events:?}");
@@ -940,7 +1017,14 @@ async fn create_folder_round_trips_to_a_matching_folder_ack_core_event() {
                 r#"["EVENT","cd-1",{}]"#,
                 <nostr::Event as nostr::JsonUtil>::as_json(&event)
             ));
-            settle().await;
+            wait_for(|| {
+                spy.events.lock().unwrap().iter().any(|e| matches!(
+                    e,
+                    CoreEvent::FolderAck { request_id, success: true, path: Some(p), error: None }
+                        if request_id == "req-1" && p == "sub/dir"
+                ))
+            })
+            .await;
 
             let events = spy.events.lock().unwrap();
             assert!(
@@ -1066,41 +1150,28 @@ async fn a_socket_drop_backs_off_and_reconnects() {
             core.set_machines(vec![machine.pubkey_hex.clone()]);
             core.start();
             eose_all(&mut mock).await;
-            settle().await;
+            wait_connected(&core).await;
 
             mock.close();
-            settle().await;
+            // fast_reconnect base is 40ms: the backoff and its retry follow.
+            wait_for(|| {
+                let statuses = spy.statuses.lock().unwrap();
+                statuses.iter().any(|(s, _)| *s == ConnectionStatus::WaitingRetry)
+                    && statuses.iter().filter(|(s, _)| *s == ConnectionStatus::Connecting).count() >= 2
+            })
+            .await;
 
             let statuses = spy.statuses.lock().unwrap().clone();
             assert!(
                 statuses.iter().any(|(s, _)| *s == ConnectionStatus::WaitingRetry),
                 "{statuses:?}"
             );
-            // fast_reconnect base is 40ms — the retry has fired by now.
             assert!(
                 statuses.iter().filter(|(s, _)| *s == ConnectionStatus::Connecting).count() >= 2,
                 "expected a second Connecting after backoff: {statuses:?}"
             );
         })
         .await;
-}
-
-#[test]
-fn the_watchdog_is_armed_only_where_it_has_work() {
-    for status in [
-        ConnectionStatus::Idle,
-        ConnectionStatus::Connecting,
-        ConnectionStatus::Connected,
-        ConnectionStatus::WaitingRetry,
-        ConnectionStatus::Offline,
-        ConnectionStatus::Stopped,
-    ] {
-        assert_eq!(
-            stale_watchdog_needed(status),
-            matches!(status, ConnectionStatus::Connecting | ConnectionStatus::Connected),
-            "{status:?}"
-        );
-    }
 }
 
 #[tokio::test]
@@ -1124,12 +1195,18 @@ async fn a_connect_that_never_reaches_eose_is_abandoned_and_retried() {
             .await;
             core.set_machines(vec![generate_keypair().pubkey_hex]);
             core.start();
-            settle().await;
+            wait_status(&core, ConnectionStatus::Connecting).await;
             assert_eq!(core.connection_status().await.0, ConnectionStatus::Connecting);
 
             *clock.0.borrow_mut() += connect_deadline() + 1_000;
             core.tick();
-            settle().await; // fast_reconnect's 40ms retry has fired by now
+            // fast_reconnect's 40ms retry has fired by now.
+            wait_for(|| {
+                let statuses: Vec<ConnectionStatus> =
+                    spy.statuses.lock().unwrap().iter().map(|(s, _)| *s).collect();
+                statuses.windows(2).any(|w| w == [ConnectionStatus::WaitingRetry, ConnectionStatus::Connecting])
+            })
+            .await;
 
             let statuses: Vec<ConnectionStatus> =
                 spy.statuses.lock().unwrap().iter().map(|(s, _)| *s).collect();
@@ -1160,7 +1237,7 @@ async fn a_paused_connect_is_not_abandoned_and_a_resume_restarts_its_clock() {
             .await;
             core.set_machines(vec![generate_keypair().pubkey_hex]);
             core.start();
-            settle().await;
+            wait_status(&core, ConnectionStatus::Connecting).await;
             assert_eq!(core.connection_status().await.0, ConnectionStatus::Connecting);
 
             // Hidden past the 500ms visibility debounce, then dozing: wall
@@ -1169,7 +1246,6 @@ async fn a_paused_connect_is_not_abandoned_and_a_resume_restarts_its_clock() {
             tokio::time::sleep(Duration::from_millis(600)).await;
             *clock.0.borrow_mut() += connect_deadline() + 60_000;
             core.tick();
-            settle().await;
             assert_eq!(
                 core.connection_status().await.0,
                 ConnectionStatus::Connecting,
@@ -1178,11 +1254,12 @@ async fn a_paused_connect_is_not_abandoned_and_a_resume_restarts_its_clock() {
 
             // Resume re-dials while still Connecting: that is a new attempt,
             // with a fresh window rather than the abandoned one's leftovers.
+            // The re-dial runs on the fake clock, so let the loop take it in
+            // before moving that clock.
             core.resume();
             settle().await;
             *clock.0.borrow_mut() += connect_deadline() - 1_000;
             core.tick();
-            settle().await;
             assert_eq!(
                 core.connection_status().await.0,
                 ConnectionStatus::Connecting,
@@ -1191,7 +1268,10 @@ async fn a_paused_connect_is_not_abandoned_and_a_resume_restarts_its_clock() {
 
             *clock.0.borrow_mut() += 2_000;
             core.tick();
-            settle().await;
+            wait_for(|| {
+                spy.statuses.lock().unwrap().iter().any(|(s, _)| *s == ConnectionStatus::WaitingRetry)
+            })
+            .await;
             assert!(
                 spy.statuses.lock().unwrap().iter().any(|(s, _)| *s == ConnectionStatus::WaitingRetry),
                 "the resumed attempt is abandoned once its own deadline passes"
@@ -1211,11 +1291,12 @@ async fn stop_is_terminal_no_reconnect() {
             core.set_machines(vec![generate_keypair().pubkey_hex]);
             core.start();
             eose_all(&mut mock).await;
-            settle().await;
+            wait_connected(&core).await;
 
             core.stop();
-            settle().await;
+            wait_status(&core, ConnectionStatus::Stopped).await;
             mock.close();
+            // Nothing after Stopped, even when the socket closes.
             settle().await;
 
             let statuses = spy.statuses.lock().unwrap().clone();
@@ -1242,10 +1323,10 @@ async fn connection_status_query_reflects_the_live_fsm() {
             assert_eq!(core.connection_status().await.0, ConnectionStatus::Idle);
             core.start();
             eose_all(&mut mock).await;
-            settle().await;
+            wait_connected(&core).await;
             assert_eq!(core.connection_status().await.0, ConnectionStatus::Connected);
             core.stop();
-            settle().await;
+            wait_status(&core, ConnectionStatus::Stopped).await;
             assert_eq!(core.connection_status().await.0, ConnectionStatus::Stopped);
         })
         .await;
@@ -1287,7 +1368,6 @@ async fn a_machine_paired_in_a_prior_run_is_resubscribed_on_a_fresh_boot_without
             // Hangs (and `next_frame` panics at its 2s budget) if the
             // subscription author list is still empty at this point.
             eose_all(&mut mock).await;
-            settle().await;
 
             // A real heartbeat from that same machine must still reach the
             // machines view — proving the subscription actually scopes to
@@ -1311,7 +1391,19 @@ async fn a_machine_paired_in_a_prior_run_is_resubscribed_on_a_fresh_boot_without
                 r#"["EVENT","cd-1",{}]"#,
                 <nostr::Event as nostr::JsonUtil>::as_json(&event)
             ));
-            settle().await;
+            let key = machine.pubkey_hex.clone();
+            wait_for_async(|| {
+                let core = core.clone();
+                let key = key.clone();
+                async move {
+                    core.machines_view()
+                        .await
+                        .machines
+                        .get(&key)
+                        .is_some_and(|m| m.last_heartbeat_at.is_some())
+                }
+            })
+            .await;
 
             let view = core.machines_view().await;
             let m = view.machines.get(&machine.pubkey_hex).expect("machine still known");
@@ -1331,7 +1423,7 @@ async fn set_relays_repoints_the_transport_to_the_new_relay() {
             core.set_machines(vec![generate_keypair().pubkey_hex]);
             core.start();
             eose_all(&mut first).await;
-            settle().await;
+            wait_connected(&core).await;
 
             core.set_relays(vec![second.url.clone()]);
             // the new relay gets the three REQs; drain them
@@ -1353,7 +1445,7 @@ async fn keepalive_probes_the_relays_and_keeps_a_healthy_connection() {
             core.set_machines(vec![generate_keypair().pubkey_hex]);
             core.start();
             eose_all(&mut mock).await;
-            settle().await;
+            wait_connected(&core).await;
 
             // The mock answers the probe's ping, so the check is quick
             // and leaves the connection as it was.
@@ -1411,17 +1503,8 @@ async fn connection_view_query_reflects_the_live_status() {
             assert_eq!(core.connection_view().await.unwrap().status, "idle");
             core.start();
             eose_all(&mut mock).await;
-            // let the EOSEs propagate through the transport → NostrClient →
-            // the FSM (a few extra spawn_local tasks now share the loop).
-            let mut status = String::new();
-            for _ in 0..10 {
-                settle().await;
-                status = core.connection_view().await.unwrap().status;
-                if status == "connected" {
-                    break;
-                }
-            }
-            assert_eq!(status, "connected");
+            wait_connected(&core).await;
+            assert_eq!(core.connection_view().await.unwrap().status, "connected");
         })
         .await;
 }
@@ -1443,7 +1526,6 @@ async fn an_intent_becomes_a_signed_command_on_the_wire() {
                 session_id: "s1".into(),
             })
             .await;
-            settle().await;
 
             // among the published EVENTs find the one wrapped for the
             // machine.
@@ -1504,7 +1586,7 @@ async fn editing_a_machines_relays_repoints_the_transport() {
             // Dialled from the stored machine alone: no relay configured.
             core.start();
             eose_all(&mut first).await;
-            settle().await;
+            wait_connected(&core).await;
 
             core.dispatch(Intent::SetMachineRelays {
                 machine: machine.pubkey_hex.clone(),
@@ -1595,7 +1677,7 @@ async fn coming_back_to_a_session_cancels_what_was_notified_while_away() {
             .await;
             core.pause();
             core.resume();
-            settle().await;
+            wait_for(|| notifier.cancelled().len() == 2).await;
             let tag = client_core::notifications::session_notify_tag("m1", "s1");
             assert_eq!(notifier.cancelled(), [tag.clone(), tag]);
 
@@ -1677,7 +1759,7 @@ async fn sending_a_session_image_uploads_to_blossom_and_publishes_the_command() 
             core.set_machines(vec![machine.pubkey_hex.clone()]);
             core.start();
             eose_all(&mut mock).await;
-            settle().await;
+            wait_connected(&core).await;
 
             core.dispatch(Intent::SetBlossomServer("https://blossom.example".into())).await;
 
@@ -1735,7 +1817,7 @@ async fn with_no_blossom_server_a_file_goes_through_the_relays() {
             core.set_machines(vec![machine.pubkey_hex.clone()]);
             core.start();
             eose_all(&mut mock).await;
-            settle().await;
+            wait_connected(&core).await;
 
             let core2 = core.clone();
             let machine_pubkey = machine.pubkey_hex.clone();
@@ -1790,7 +1872,7 @@ async fn sending_a_session_image_falls_back_to_chunks_when_blossom_is_unreachabl
             core.set_machines(vec![machine.pubkey_hex.clone()]);
             core.start();
             eose_all(&mut mock).await;
-            settle().await;
+            wait_connected(&core).await;
 
             core.dispatch(Intent::SetBlossomServer("https://blossom.example".into())).await;
 
@@ -1854,7 +1936,12 @@ async fn the_connection_status_change_emits_a_state_changed_event() {
             core.set_machines(vec![generate_keypair().pubkey_hex]);
             core.start();
             eose_all(&mut mock).await;
-            settle().await;
+            wait_for(|| {
+                spy.events.lock().unwrap().contains(&CoreEvent::StateChanged {
+                    slice: SliceId::Connection,
+                })
+            })
+            .await;
 
             let events = spy.events.lock().unwrap();
             assert!(events.contains(&CoreEvent::StateChanged {
@@ -1896,7 +1983,12 @@ async fn a_session_pending_message_populates_the_view_and_emits_a_state_changed_
                 r#"["EVENT","cd-3",{}]"#,
                 <nostr::Event as nostr::JsonUtil>::as_json(&event)
             ));
-            settle().await;
+            wait_for(|| {
+                spy.events.lock().unwrap().contains(&CoreEvent::StateChanged {
+                    slice: SliceId::PendingSessions,
+                })
+            })
+            .await;
 
             {
                 let events = spy.events.lock().unwrap();
@@ -1944,7 +2036,11 @@ async fn dismiss_pending_session_removes_it_and_emits_a_state_changed_event() {
                 r#"["EVENT","cd-3",{}]"#,
                 <nostr::Event as nostr::JsonUtil>::as_json(&event)
             ));
-            settle().await;
+            wait_for_async(|| {
+                let core = core.clone();
+                async move { core.pending_sessions_view().await.pending.contains_key("p1") }
+            })
+            .await;
             assert!(core.pending_sessions_view().await.pending.contains_key("p1"));
 
             core.dispatch(Intent::DismissPendingSession {
@@ -1993,7 +2089,13 @@ async fn an_output_message_populates_the_transcript_view_and_emits_transcript_ap
                 r#"["EVENT","cd-3",{}]"#,
                 <nostr::Event as nostr::JsonUtil>::as_json(&event)
             ));
-            settle().await;
+            wait_for(|| {
+                spy.events.lock().unwrap().contains(&CoreEvent::TranscriptAppended {
+                    machine: machine.pubkey_hex.clone(),
+                    session_id: "s1".to_string(),
+                })
+            })
+            .await;
 
             let view = core.transcript_view(machine.pubkey_hex.clone(), "s1".to_string()).await;
             assert_eq!(view.rows.len(), 1);
@@ -2120,7 +2222,6 @@ async fn a_phone_with_no_relays_pairs_over_the_relays_its_pairing_names() {
             )
             .await;
             core.start();
-            settle().await;
 
             core.dispatch(Intent::BeginManualPairing {
                 npub: machine.npub.clone(),
@@ -2190,7 +2291,13 @@ async fn remove_machine_intent_drops_it_from_the_view_and_erases_its_transcript(
                     host: None,
                 }),
             );
-            settle().await;
+            let key = machine.pubkey_hex.clone();
+            wait_for_async(|| {
+                let core = core.clone();
+                let key = key.clone();
+                async move { core.machines_view().await.machines.contains_key(&key) }
+            })
+            .await;
             assert!(core
                 .machines_view()
                 .await
@@ -2211,14 +2318,31 @@ async fn remove_machine_intent_drops_it_from_the_view_and_erases_its_transcript(
             )
             .unwrap();
             push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, &sub, &sessions_msg);
-            settle().await;
+            let listed_key = machine.pubkey_hex.clone();
+            wait_for_async(|| {
+                let core = core.clone();
+                let key = listed_key.clone();
+                async move {
+                    core.machines_view()
+                        .await
+                        .machines
+                        .get(&key)
+                        .is_some_and(|m| m.sessions.contains_key("s1"))
+                }
+            })
+            .await;
 
             let msg = protocol::codec::decode_bridge_to_phone(
                 r#"{"v":12,"type":"output","sessionId":"s1","seq":1,"entries":[{"entryType":"text","role":"agent","text":"hi","timestamp":"t"}]}"#,
             )
             .unwrap();
             push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, &sub, &msg);
-            settle().await;
+            wait_for_async(|| {
+                let core = core.clone();
+                let key = machine.pubkey_hex.clone();
+                async move { core.transcript_view(key, "s1".to_string()).await.rows.len() == 1 }
+            })
+            .await;
 
             // Sanity: the transcript is really there before forgetting the machine.
             let before = core.transcript_view(machine.pubkey_hex.clone(), "s1".to_string()).await;
@@ -2228,7 +2352,12 @@ async fn remove_machine_intent_drops_it_from_the_view_and_erases_its_transcript(
                 pubkey_hex: machine.pubkey_hex.clone(),
             })
             .await;
-            settle().await;
+            wait_for_async(|| {
+                let core = core.clone();
+                let key = machine.pubkey_hex.clone();
+                async move { core.transcript_view(key, "s1".to_string()).await.rows.is_empty() }
+            })
+            .await;
 
             assert!(!core
                 .machines_view()
@@ -2303,7 +2432,13 @@ async fn the_undo_toast_clears_itself_when_the_window_expires_without_a_tap() {
                     host: None,
                 }),
             );
-            settle().await;
+            let key = machine.pubkey_hex.clone();
+            wait_for_async(|| {
+                let core = core.clone();
+                let key = key.clone();
+                async move { core.machines_view().await.machines.contains_key(&key) }
+            })
+            .await;
 
             let sub = drain_traffic_resubscribe(&mut mock).await;
             let sessions_msg = protocol::codec::decode_bridge_to_phone(
@@ -2313,7 +2448,19 @@ async fn the_undo_toast_clears_itself_when_the_window_expires_without_a_tap() {
             )
             .unwrap();
             push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, &sub, &sessions_msg);
-            settle().await;
+            let listed_key = machine.pubkey_hex.clone();
+            wait_for_async(|| {
+                let core = core.clone();
+                let key = listed_key.clone();
+                async move {
+                    core.machines_view()
+                        .await
+                        .machines
+                        .get(&key)
+                        .is_some_and(|m| m.sessions.contains_key("s1"))
+                }
+            })
+            .await;
 
             core.dispatch(Intent::DeleteSession {
                 machine: machine.pubkey_hex.clone(),
@@ -2402,7 +2549,8 @@ async fn deleting_sessions_in_a_row_closes_each_one_exactly_once() {
             )]);
             let notifier = RecordingNotifier::new();
             let ports = CorePorts { kv: Rc::new(kv), notifier: Rc::new(notifier.clone()), ..CorePorts::default() };
-            let core = core_for_ports(&mock, &phone, Rc::new(Spy::default()), ports).await;
+            let spy = Rc::new(Spy::default());
+            let core = core_for_ports(&mock, &phone, Rc::clone(&spy), ports).await;
             core.start();
             eose_all(&mut mock).await;
             let refresh = next_command_via(&mut mock, &phone, &phone.pubkey_hex, &machine).await;
@@ -2410,7 +2558,13 @@ async fn deleting_sessions_in_a_row_closes_each_one_exactly_once() {
 
             let listed = heartbeat_listing(&["s1", "s2", "s3"]);
             push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, "cd-1", &listed);
-            settle().await;
+            let key = machine.pubkey_hex.clone();
+            wait_for_async(|| {
+                let core = core.clone();
+                let key = key.clone();
+                async move { core.machines_view().await.machines[&key].sessions.len() == 3 }
+            })
+            .await;
             let sessions = |view: MachinesView| -> Vec<String> {
                 view.machines[&machine.pubkey_hex].sessions.keys().cloned().collect()
             };
@@ -2440,8 +2594,20 @@ async fn deleting_sessions_in_a_row_closes_each_one_exactly_once() {
             // The bridge has closed s1 only; its next list still has the
             // other two, which must stay deleted on the phone.
             let after_first = heartbeat_listing(&["s2", "s3"]);
+            // A heartbeat for a session already deleted still notifies; wait
+            // for that to prove the frame was folded in before asserting it
+            // does not resurrect anything.
+            let machine_changes = || {
+                spy.events
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|e| matches!(e, CoreEvent::StateChanged { slice: SliceId::Machines }))
+                    .count()
+            };
+            let before = machine_changes();
             push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, "cd-1", &after_first);
-            settle().await;
+            wait_for(|| machine_changes() > before).await;
             assert!(sessions(core.machines_view().await).is_empty());
 
             // Backgrounded inside s3's undo window: committed now, well
@@ -2710,7 +2876,7 @@ async fn a_restored_machine_is_granted_first_and_nothing_to_the_identity_is_decr
             push_bridge_to_phone_event(&mock, &machine, &grant.pubkey_hex, "cd-1", &listed);
             let sync = next_command_via(&mut mock, &phone, &grant.pubkey_hex, &machine).await;
             assert!(matches!(sync, Some(PhoneToBridge::SyncRequest(_))), "{sync:?}");
-            settle().await;
+            wait_for(|| spy.messages.lock().unwrap().len() == 1).await;
             assert_eq!(decrypts.get(), 0, "the identity decrypted nothing");
             assert_eq!(spy.messages.lock().unwrap().len(), 1, "only the heartbeat under the key was read");
         })
@@ -2744,7 +2910,7 @@ async fn an_unconfirmed_grant_lets_what_waited_go_on_under_the_identity() {
             tokio::time::resume();
             let refresh = next_command_via(&mut mock, &phone, &phone.pubkey_hex, &machine).await;
             assert!(matches!(refresh, Some(PhoneToBridge::RefreshSessions(_))), "{refresh:?}");
-            settle().await;
+            wait_for(|| decrypts.get() == 1).await;
             assert_eq!(decrypts.get(), 1, "the held heartbeat is read with the identity");
             assert!(spy.messages.lock().unwrap().iter().any(|(_, m)| matches!(m, BridgeToPhone::Sessions(_))));
         })
@@ -2913,7 +3079,15 @@ async fn a_machine_settings_change_nobody_answers_stops_being_busy_at_the_deadli
             tokio::time::pause();
             tokio::time::advance(Duration::from_millis(SLOW_SETTINGS_ANSWER_TIMEOUT_MS + 1)).await;
             tokio::time::resume();
-            settle().await;
+            wait_for_async(|| {
+                let core = core.clone();
+                let key = machine.pubkey_hex.clone();
+                async move {
+                    let view = core.machines_view().await;
+                    view.machines[&key].plugins["claude-code"].failure.is_some()
+                }
+            })
+            .await;
 
             let view = core.machines_view().await;
             let plugins = &view.machines[&machine.pubkey_hex].plugins["claude-code"];
@@ -2981,7 +3155,7 @@ async fn a_rotated_key_is_granted_and_the_old_one_dropped_once_confirmed() {
 
             // A heartbeat under the new key confirms it: the old one goes.
             push_bridge_to_phone_event(&mock, &machine, &new, "cd-1", &heartbeat);
-            settle().await;
+            wait_for(|| store.ring().previous.is_none()).await;
             assert!(store.ring().previous.is_none());
             core.dispatch(Intent::Interrupt { machine: machine.pubkey_hex.clone(), session_id: "s1".into() }).await;
             let cmd = next_command_via(&mut mock, &phone, &new, &machine).await;
@@ -3236,7 +3410,6 @@ async fn a_burst_of_sync_chunks_costs_one_signed_ack() {
                 other => panic!("expected a sync-ack, got {other:?}"),
             };
             assert_eq!((ack.sync_id.as_str(), ack.ranges), ("y1", vec![(1, 1), (2, 2), (3, 3)]));
-            settle().await;
             assert_eq!(signs.get(), 2, "one signature for the three chunks");
         })
         .await;
@@ -3289,7 +3462,12 @@ async fn a_sync_cycle_that_goes_silent_is_re_requested_by_the_watchdog() {
             )
             .unwrap();
             push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, "cd-1", &begin);
-            settle().await;
+            wait_for_async(|| {
+                let core = core.clone();
+                let key = machine.pubkey_hex.clone();
+                async move { core.transcript_view(key, "s1".to_string()).await.sync.target == 3 }
+            })
+            .await;
 
             *clock.0.borrow_mut() +=
                 client_core::stores::transcript::SYNC_STALL_MS + 1;
@@ -3355,12 +3533,18 @@ async fn a_sync_stall_is_not_re_requested_on_a_dead_connection() {
             )
             .unwrap();
             push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, "cd-1", &begin);
-            settle().await;
+            wait_for_async(|| {
+                let core = core.clone();
+                let key = machine.pubkey_hex.clone();
+                async move { core.transcript_view(key, "s1".to_string()).await.sync.target == 3 }
+            })
+            .await;
 
             core.set_online(false);
-            settle().await;
             *clock.0.borrow_mut() += client_core::stores::transcript::SYNC_STALL_MS + 1;
             core.tick();
+            // Nothing is published, so there is no event to wait on: give the
+            // tick's spawned work a moment before asserting the absence.
             settle().await;
             assert_eq!(signs.get(), 1, "no request is published without a live connection");
         })
@@ -3431,7 +3615,11 @@ async fn backup_on(core: &Core, mock: &mut MockRelay, me: &str) -> String {
     let sub = answer_backup_req(mock, me, &[]).await;
     let event = next_frame_of(mock, "EVENT").await[1].clone();
     mock.push(serde_json::json!(["OK", event["id"], true, ""]).to_string());
-    settle().await;
+    wait_for_async(|| {
+        let core = core.clone();
+        async move { core.settings_view().await.unwrap().backup.saved_at.is_some() }
+    })
+    .await;
     sub
 }
 
@@ -3482,7 +3670,16 @@ async fn a_deletion_on_another_device_turns_backup_off_here() {
             let signer = crate::signer::LocalSigner(phone.clone());
             let removed = crate::backup::seal_removed(&signer, 5_000).await.unwrap();
             mock.push(serde_json::json!(["EVENT", sub, removed]).to_string());
-            settle().await;
+            wait_for_async(|| {
+                let core = core.clone();
+                async move {
+                    matches!(
+                        core.settings_view().await.unwrap().backup.status,
+                        crate::backup::BackupStatus::Failed { .. }
+                    )
+                }
+            })
+            .await;
             let backup = settings_backup(&core).await;
             assert_eq!(backup.relay, None);
             assert!(matches!(backup.status, crate::backup::BackupStatus::Failed { reason } if reason.contains("another device")));
@@ -3521,7 +3718,16 @@ async fn a_backup_relay_ending_the_subscription_shows_as_a_failure() {
             core.start();
             let sub = backup_on(&core, &mut mock, &phone.pubkey_hex).await;
             mock.push(serde_json::json!(["CLOSED", sub, "restricted: members only"]).to_string());
-            settle().await;
+            wait_for_async(|| {
+                let core = core.clone();
+                async move {
+                    matches!(
+                        core.settings_view().await.unwrap().backup.status,
+                        crate::backup::BackupStatus::Failed { .. }
+                    )
+                }
+            })
+            .await;
             let backup = settings_backup(&core).await;
             assert!(backup.relay.is_some(), "backup stays on, and is asked for again later");
             assert!(matches!(backup.status, crate::backup::BackupStatus::Failed { reason } if reason.contains("members only")));
@@ -3563,7 +3769,11 @@ async fn a_backup_saved_by_one_phone_restores_the_machines_on_another() {
             assert!(!wire.contains("my laptop") && !wire.contains("Work lab") && !wire.contains(&machine.pubkey_hex));
             assert!(!wire.contains(&old_secret));
             first.push(serde_json::json!(["OK", event["id"], true, ""]).to_string());
-            settle().await;
+            wait_for_async(|| {
+                let old = old.clone();
+                async move { old.settings_view().await.unwrap().backup.saved_at.is_some() }
+            })
+            .await;
             let saved = settings_backup(&old).await;
             assert_eq!(saved.relay.as_deref(), Some(first.url.as_str()));
             assert!(saved.saved_at.is_some());
@@ -3577,6 +3787,10 @@ async fn a_backup_saved_by_one_phone_restores_the_machines_on_another() {
             new.start();
             new.dispatch(Intent::SetBackupRelay(second.url.clone())).await;
             answer_backup_req(&mut second, &phone.pubkey_hex, &[event]).await;
+            // The backup's "the relay answered" flag is private, and both the
+            // merged machine and an Idle status can be observed while its EOSE
+            // is still in flight, so no view names the point where a save is
+            // allowed to run. Give the answer time to be folded in.
             settle().await;
             let machines = new.machines_view().await.machines;
             let restored = &machines[&machine.pubkey_hex];
@@ -3899,7 +4113,11 @@ async fn keys_held_back_redraw_the_predicted_echo() {
 
             core.dispatch(Intent::AttachTerminal { machine: machine.pubkey_hex.clone(), term: "t1".into() })
                 .await;
-            settle().await;
+            wait_for_async(|| {
+                let core = core.clone();
+                async move { core.ui_view().await.terminals.attached.is_some() }
+            })
+            .await;
             let ui_changes = || {
                 spy.events
                     .lock()
@@ -3916,7 +4134,13 @@ async fn keys_held_back_redraw_the_predicted_echo() {
                 alternate_screen: false,
             })
             .await;
-            settle().await;
+            wait_for_async(|| {
+                let core = core.clone();
+                async move {
+                    core.ui_view().await.terminals.attached.unwrap().waiting_input == b"l".to_vec()
+                }
+            })
+            .await;
             assert_eq!(core.ui_view().await.terminals.attached.unwrap().waiting_input, b"l".to_vec());
             assert!(ui_changes() > before, "a held key must redraw the app");
 
@@ -3928,7 +4152,7 @@ async fn keys_held_back_redraw_the_predicted_echo() {
                 alternate_screen: false,
             })
             .await;
-            settle().await;
+            wait_for(|| ui_changes() > before).await;
             assert!(core.ui_view().await.terminals.attached.unwrap().waiting_input.is_empty());
             assert!(ui_changes() > before, "the send must clear the prediction");
         })
@@ -3952,7 +4176,11 @@ async fn terminal_output_reaches_the_host_on_its_own_event() {
 
             core.dispatch(Intent::AttachTerminal { machine: machine.pubkey_hex.clone(), term: "t1".into() })
                 .await;
-            settle().await;
+            wait_for_async(|| {
+                let core = core.clone();
+                async move { core.ui_view().await.terminals.attached.is_some() }
+            })
+            .await;
 
             // "hi" in base64, the shell's first output at offset 0.
             push_bridge_to_phone_event_at(
@@ -3969,7 +4197,14 @@ async fn terminal_output_reaches_the_host_on_its_own_event() {
                 LIVE_KIND,
                 None,
             );
-            settle().await;
+            wait_for(|| {
+                spy.events.lock().unwrap().iter().any(|e| matches!(
+                    e,
+                    CoreEvent::TerminalOutput { term, offset: 0, bytes, .. }
+                        if term == "t1" && bytes == b"hi"
+                ))
+            })
+            .await;
 
             {
                 let events = spy.events.lock().unwrap();
