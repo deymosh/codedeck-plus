@@ -11,6 +11,19 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 
+/// Poll a condition until it holds, yielding between checks. The alternative,
+/// a flat sleep, is both slower than needed and a race with however long the
+/// event it stands for takes on a loaded machine.
+pub(crate) async fn wait_until(mut cond: impl FnMut() -> bool) {
+    for _ in 0..300 {
+        if cond() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("condition never became true");
+}
+
 /// What a SOCKS5 client asked the proxy to CONNECT to.
 pub(crate) struct Socks5Request {
     /// The SOCKS5 address type: 1 IPv4, 3 domain name, 4 IPv6.

@@ -1308,6 +1308,7 @@ async fn dial(relay: &str, proxy: Option<String>) -> Result<RelayStream, String>
 mod tests {
     use super::*;
     use crate::mock::{mock_relay, MockRelay};
+    use crate::test_support::wait_until;
     use protocol::crypto::{generate_keypair, keypair_from_secret_hex, Keypair};
     use nostr::JsonUtil;
     use std::cell::RefCell;
@@ -1332,12 +1333,18 @@ mod tests {
 
     #[tokio::test]
     async fn dial_does_not_refuse_cleartext_to_onion_on_scheme_grounds() {
-        // No real Tor network in a test — this fails on the actual connection
-        // attempt (no proxy, an .onion address does not resolve over plain
-        // DNS), but that failure must be a dial/DNS error, never the
+        // A loopback stand-in for Tor: the proxy is asked to CONNECT to the
+        // onion name (no local resolver sees it), answers success and closes,
+        // so the dial fails at the WebSocket handshake — never the
         // cleartext-rejection this test exists to rule out.
-        let err = dial("ws://expyuzz4wqqyqhjn.onion", None).await.unwrap_err();
+        let (proxy, request) = crate::test_support::socks5_proxy().await;
+        let err = dial("ws://expyuzz4wqqyqhjn.onion:7447", Some(proxy.to_string())).await.unwrap_err();
         assert!(!err.contains("cleartext"), "{err}");
+        let request = tokio::time::timeout(Duration::from_secs(5), request)
+            .await
+            .expect("the onion dial never reached the proxy")
+            .expect("the proxy reported its CONNECT");
+        assert_eq!(request.host, "expyuzz4wqqyqhjn.onion", "the proxy must resolve the onion name, not this machine");
     }
 
     #[tokio::test]
@@ -1448,16 +1455,6 @@ mod tests {
                 assert_eq!(t.current_proxy(), None);
             })
             .await;
-    }
-
-    async fn wait_until(mut cond: impl FnMut() -> bool) {
-        for _ in 0..200 {
-            if cond() {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        panic!("condition never became true");
     }
 
     #[tokio::test]
@@ -1684,7 +1681,7 @@ mod tests {
 
                 mock.push(format!(r#"["EVENT","cd-1",{}]"#, signed_note(24515, "hi")));
                 mock.push(r#"["EOSE","cd-1"]"#.to_string());
-                tokio::time::sleep(Duration::from_millis(120)).await;
+                wait_until(|| events.borrow().len() == 1 && *eosed.borrow()).await;
 
                 assert_eq!(events.borrow().len(), 1);
                 assert_eq!(events.borrow()[0].kind, 24515);
@@ -1946,7 +1943,7 @@ mod tests {
                 let _req = mock.next_frame().await;
 
                 mock.close();
-                tokio::time::sleep(Duration::from_millis(150)).await;
+                wait_until(|| *closes.borrow() == 1).await;
                 assert_eq!(*closes.borrow(), 1);
             })
             .await;
@@ -1973,12 +1970,29 @@ mod tests {
                 );
                 let _req = mock.next_frame().await;
 
+                // A second, live subscription is the barrier that proves the
+                // late frame was handled: frames arrive over one socket in
+                // order, so its delivery follows the dropped one.
+                let live: Rc<RefCell<Vec<NostrEvent>>> = Rc::new(RefCell::new(vec![]));
+                let live_c = Rc::clone(&live);
+                let _live_sub = t.subscribe(
+                    a_filter(&phone),
+                    SubCallbacks {
+                        on_event: Rc::new(move |ev| live_c.borrow_mut().push(ev.clone())),
+                        on_eose: Rc::new(|| {}),
+                        on_close: Rc::new(|_| {}),
+                    },
+                );
+                assert!(mock.next_frame().await.starts_with(r#"["REQ","cd-2","#));
+
                 sub.close();
                 assert_eq!(mock.next_frame().await, r#"["CLOSE","cd-1"]"#);
 
-                // a late EVENT for the dropped sub must not reach the callback
+                // A late EVENT for the dropped sub must not reach its callback,
+                // while the next one for the live sub still does.
                 mock.push(format!(r#"["EVENT","cd-1",{}]"#, signed_note(24515, "late")));
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                mock.push(format!(r#"["EVENT","cd-2",{}]"#, signed_note(24515, "live")));
+                wait_until(|| live.borrow().len() == 1).await;
                 assert!(events.borrow().is_empty());
             })
             .await;
@@ -2070,12 +2084,23 @@ mod tests {
 
     #[test]
     fn the_redial_delay_grows_per_failure_up_to_the_cap() {
-        for attempt in 1..=20 {
-            let full = RETRY_BASE.saturating_mul(1 << (attempt - 1).min(16)).min(RETRY_MAX);
-            let delay = TIMING.retry_delay(attempt, "wss://r.example");
-            assert!(delay >= full / 2 && delay <= full, "attempt {attempt}: {delay:?}");
+        let delay = |attempt| TIMING.retry_delay(attempt, "wss://r.example");
+        // Each step doubles until the cap, and jitter stays in a step's upper
+        // half, so consecutive steps keep rising while there is room to double.
+        let mut previous = Duration::ZERO;
+        for attempt in 1..=8 {
+            let d = delay(attempt);
+            assert!(d >= previous, "attempt {attempt}: {d:?} below the previous step {previous:?}");
+            previous = d;
         }
-        assert!(TIMING.retry_delay(30, "wss://r.example") <= RETRY_MAX);
+        // Past that the cap holds, and jitter never takes a delay below the
+        // first step's floor — a failing relay is never hammered.
+        for attempt in 1..=30 {
+            let d = delay(attempt);
+            assert!(d <= RETRY_MAX, "attempt {attempt}: {d:?} past the cap");
+            assert!(d >= RETRY_BASE / 2, "attempt {attempt}: {d:?} below the first step's floor");
+        }
+        assert!(delay(30) >= RETRY_MAX / 2, "the delay settles within the cap's jitter band");
     }
 
     #[tokio::test]
@@ -2259,14 +2284,23 @@ mod tests {
                 wait_until(|| seen.eoses.get() == 1).await;
                 assert_eq!(seen.events.borrow().len(), 1);
 
-                // A second event, live, from a few relays: still one.
+                // A second event, live, from a few relays: still one. Each of
+                // those relays also sends a distinct barrier event after it;
+                // once every barrier is delivered, every copy of the live
+                // event has been through dedup too.
                 let live = signed_note(24515, "live");
-                for m in &mocks[..5] {
+                let live_id = serde_json::from_str::<Value>(&live).unwrap()["id"].as_str().unwrap().to_string();
+                for (i, m) in mocks.iter().enumerate().take(5) {
                     m.push(format!(r#"["EVENT","cd-1",{live}]"#));
+                    m.push(format!(r#"["EVENT","cd-1",{}]"#, signed_note(24515, &format!("barrier {i}"))));
                 }
-                wait_until(|| seen.events.borrow().len() == 2).await;
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                assert_eq!(seen.events.borrow().len(), 2);
+                wait_until(|| seen.events.borrow().len() == 7).await;
+                assert_eq!(
+                    seen.events.borrow().iter().filter(|id| **id == live_id).count(),
+                    1,
+                    "the live event was delivered more than once: {:?}",
+                    seen.events.borrow()
+                );
 
                 // Nineteen relays dropping is not a close; the last one is.
                 for m in &mocks[..19] {

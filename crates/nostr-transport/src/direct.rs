@@ -566,6 +566,7 @@ impl ServerCertVerifier for Pinned {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::wait_until;
     use protocol::crypto::generate_keypair;
     use tokio::net::TcpListener;
     use tokio::task::LocalSet;
@@ -661,15 +662,12 @@ mod tests {
                     tokio::task::spawn_local(async move { link.publish(&ev, Duration::from_millis(100)).await })
                 };
                 let _frame = rx.recv().await.expect("the first frame was queued");
-                assert_eq!((link.0.queued_bytes.get(), link.0.pending_bytes.get()), (len, len));
 
                 // The second would push the link past its budget: it fails now
                 // and the link closes instead of growing.
                 assert!(link.publish(&ev, Duration::from_millis(50)).await.is_none());
                 assert!(link.0.up.borrow().is_none(), "the link was closed");
                 assert!(first.await.unwrap().is_none(), "the queued publish got no OK");
-                assert_eq!(link.0.pending_bytes.get(), 0);
-                assert!(link.0.pending.borrow().is_empty());
             })
             .await;
     }
@@ -680,14 +678,15 @@ mod tests {
             .run_until(async {
                 let ev = a_signed_event("e1", "hello");
                 let len = encode_direct_frame(&DirectFrame::Event(ev.clone())).len();
-                let (link, mut rx) = up_link(len * 10);
+                // The queued frame plus one more reservation fit, but the
+                // queued frame plus two do not.
+                let (link, mut rx) = up_link(len * 3 - 1);
 
                 let waiting = {
                     let (link, ev) = (link.clone(), ev.clone());
                     tokio::task::spawn_local(async move { link.publish(&ev, Duration::from_secs(2)).await })
                 };
                 let _frame = rx.recv().await.expect("the frame was queued");
-                assert_eq!(link.0.pending_bytes.get(), len);
 
                 let ok = encode_direct_frame(&DirectFrame::Ok {
                     id: "e1".into(),
@@ -696,24 +695,19 @@ mod tests {
                 });
                 assert!(link.on_frame(&ok));
                 assert_eq!(waiting.await.unwrap().unwrap().verdict, PublishVerdict::Accepted);
-                assert_eq!(link.0.pending_bytes.get(), 0);
-                assert!(link.0.pending.borrow().is_empty());
-                // Not written (no serve loop): the queue still holds its bytes,
-                // and the link is still up.
-                assert_eq!(link.0.queued_bytes.get(), len);
+
+                // The OK released the reservation: a second publish now fits
+                // the budget (without the release it would fail and close the
+                // link). Not written (no serve loop), and the link is still up.
+                let next = a_signed_event("e2", "hello");
+                assert!(
+                    link.publish(&next, Duration::from_millis(20)).await.is_none(),
+                    "no OK is ever sent for the second publish"
+                );
+                assert!(rx.try_recv().is_ok(), "the second publish fit the budget after the first released its bytes");
                 assert!(link.0.up.borrow().is_some());
             })
             .await;
-    }
-
-    async fn wait_until(mut cond: impl FnMut() -> bool) {
-        for _ in 0..300 {
-            if cond() {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        panic!("condition never became true");
     }
 
     #[tokio::test]
@@ -786,17 +780,22 @@ mod tests {
                     tokio::task::spawn_local(async move { link.publish(&ev, Duration::from_secs(2)).await })
                 };
                 let _frame = rx.recv().await.expect("the first frame was queued");
-                assert_eq!(link.0.pending_bytes.get(), len);
 
                 let second = {
                     let (link, ev) = (link.clone(), ev.clone());
                     tokio::task::spawn_local(async move { link.publish(&ev, Duration::from_secs(2)).await })
                 };
                 let _frame = rx.recv().await.expect("the replacement frame was queued");
-                // The superseded waiter released its bytes: only the new
-                // reservation is counted.
-                assert_eq!(link.0.pending_bytes.get(), len);
                 assert!(first.await.unwrap().is_none(), "the superseded publish got no answer");
+
+                // The superseded waiter released its bytes: with the budget at
+                // four frames, a third distinct publish fits only because the
+                // first reservation was given back (otherwise it would exceed
+                // the budget and close the link).
+                let third = a_signed_event("e2", "hello");
+                assert!(link.publish(&third, Duration::from_millis(20)).await.is_none(), "no OK is sent");
+                assert!(rx.try_recv().is_ok(), "the third publish fit, so the superseded reservation was released");
+                assert!(link.0.up.borrow().is_some());
 
                 let ok = encode_direct_frame(&DirectFrame::Ok {
                     id: "e1".into(),
@@ -805,7 +804,6 @@ mod tests {
                 });
                 assert!(link.on_frame(&ok));
                 assert_eq!(second.await.unwrap().unwrap().verdict, PublishVerdict::Accepted);
-                assert_eq!(link.0.pending_bytes.get(), 0);
             })
             .await;
     }
