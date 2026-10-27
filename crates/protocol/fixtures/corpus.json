@@ -286,6 +286,10 @@
   "forwardCompatible": [
     { "dir": "b2p", "msg": { "v": 12, "type": "agent-style", "agent": "x", "style": { "userMessage": { "shape": "card", "corner": 3 }, "futureKnob": 1 } } },
     { "dir": "p2b", "msg": { "v": 12, "type": "input", "sessionId": "s", "text": "hi", "unknownFutureField": 1 } },
+    { "dir": "p2b", "msg": { "v": 12, "type": "create-session", "agent": "opencode", "futureOption": { "a": 1 }, "anotherNewField": true } },
+    { "dir": "p2b", "msg": { "v": 12, "type": "set-option", "sessionId": "s", "option": "mode", "value": "plan", "appliedAt": 1 } },
+    { "dir": "p2b", "msg": { "v": 12, "type": "permission-response", "sessionId": "s", "requestId": "r", "optionId": "allow_once", "decidedBy": "me" } },
+    { "dir": "p2b", "msg": { "v": 12, "type": "upload-file", "sessionId": "s", "hash": "h", "url": "u", "key": "k", "iv": "iv", "filename": "f.png", "mimeType": "image/png", "text": "", "sizeBytes": 12345, "futureField": "x" } },
     { "dir": "b2p", "msg": { "v": 12, "type": "input-ack", "sessionId": "s", "inputId": "i", "somethingNew": { "a": 1 } } },
     { "dir": "b2p", "msg": { "v": 12, "type": "sessions", "machine": "m", "sessions": [], "agents": [{ "id": "pi", "displayName": "Pi", "futureField": true }], "capabilities": ["files", "future-cap"] } },
     { "dir": "b2p", "msg": { "v": 12, "type": "output", "sessionId": "s", "seq": 1, "entries": [{ "timestamp": "t", "entryType": "status", "text": "x", "futureEnvelopeField": 1 }] } },
