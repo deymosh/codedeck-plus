@@ -360,7 +360,7 @@ impl Web {
         }
     }
 
-    /// Sign out the browser whose id (the first [`ID_LEN`] hex characters of
+    /// Sign out the browser whose id (the first `ID_LEN` hex characters of
     /// its key) is `id`; false when no signed-in browser has it. Any
     /// signed-in browser may sign out any other: they are all the owner's.
     /// The engine asks for this on `web-browser-sign-out`, and the page's own
