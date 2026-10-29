@@ -342,7 +342,11 @@ impl Hub {
     /// copy now, and to the outbox for one that resumes later. `terminal` says
     /// the copy is terminal output, which rides the connection's low-priority
     /// lane instead of its normal one.
-    pub fn deliver(&self, identity: &str, event: &SignedEvent, terminal: bool) {
+    ///
+    /// Whether at least one open connection read the event and took the
+    /// frame. A connection that had to be closed for being full took
+    /// nothing, so it does not count.
+    pub fn deliver(&self, identity: &str, event: &SignedEvent, terminal: bool) -> bool {
         let now = now_secs();
         {
             let mut outbox = self.outbox.borrow_mut();
@@ -353,12 +357,16 @@ impl Hub {
         }
         let frame = encode_direct_frame(&DirectFrame::Event(event.clone()));
         let mut full = Vec::new();
+        let mut took = false;
         {
             let conns = self.conns.borrow();
             for (id, conn) in conns.iter().filter(|(_, c)| c.reads(identity, event)) {
                 if terminal {
                     conn.term.push(frame.clone());
-                } else if !conn.frames.push(frame.clone()) {
+                    took = true;
+                } else if conn.frames.push(frame.clone()) {
+                    took = true;
+                } else {
                     // The phone has stopped taking frames: close the
                     // connection so it reconnects and resyncs, rather than
                     // growing the queue without limit.
@@ -366,14 +374,14 @@ impl Hub {
                 }
             }
         }
-        if full.is_empty() {
-            return;
+        if !full.is_empty() {
+            let mut conns = self.conns.borrow_mut();
+            for id in &full {
+                conns.remove(id);
+            }
+            log::warn!("[Direct] Closed {} connection(s) that stopped reading", full.len());
         }
-        let mut conns = self.conns.borrow_mut();
-        for id in &full {
-            conns.remove(id);
-        }
-        log::warn!("[Direct] Closed {} connection(s) that stopped reading", full.len());
+        took
     }
 
     /// What was published for connection `id` from `since` (seconds) on.

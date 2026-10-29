@@ -53,10 +53,15 @@ const MINE: &str = "mine";
 /// Connect as `phone` and say HELLO, reading [`MINE`]; returns the socket
 /// and the answer.
 async fn hello(endpoint: &str, pin: &str, phone: &Keypair, since: u64) -> (Ws, DirectFrame) {
+    hello_reading(endpoint, pin, phone, &[MINE.into()], since).await
+}
+
+/// Connect as `phone`, telling the bridge which copy recipient tags it reads.
+async fn hello_reading(endpoint: &str, pin: &str, phone: &Keypair, recipients: &[String], since: u64) -> (Ws, DirectFrame) {
     let mut ws = connect(endpoint, pin).await.unwrap();
     let DirectFrame::Challenge(challenge) = next_frame(&mut ws).await else { panic!("expected a challenge") };
     let auth = build_auth_event(phone, endpoint, &challenge, now_secs() * 1000).unwrap();
-    send(&mut ws, DirectFrame::Hello { auth, since, recipients: vec![MINE.into()] }).await;
+    send(&mut ws, DirectFrame::Hello { auth, since, recipients: recipients.to_vec() }).await;
     let answer = next_frame(&mut ws).await;
     (ws, answer)
 }
@@ -249,6 +254,68 @@ async fn the_phone_link_talks_to_the_bridge() {
             assert_eq!(states.borrow().last(), Some(&None));
             assert!(link.publish(&command, Duration::from_secs(1)).await.is_none(), "down: the caller uses the relays");
             link.stop();
+            server.shutdown();
+        })
+        .await;
+}
+
+/// A message the direct link carried goes to the phone at once even while a
+/// configured relay is down: publishing is not the direct link's turn to
+/// wait, since the phone already has the event.
+#[tokio::test]
+async fn a_phone_on_the_direct_link_gets_every_message_while_its_relay_is_down() {
+    use bridge_core::Addressee;
+    use bridge_runtime::relay::Relays;
+    use protocol::events::{BridgeToPhone, InputAckMsg};
+
+    LocalSet::new()
+        .run_until(async {
+            let home = tempfile::tempdir().unwrap();
+            let (bridge, phone) = (generate_keypair(), generate_keypair());
+            let (inputs, _engine) = mpsc::unbounded_channel();
+            let config = DirectConfig { listen: Some("127.0.0.1:0".parse().unwrap()), ..Default::default() };
+            let mut server =
+                direct::start(&config, home.path(), bridge.pubkey_hex.clone(), inputs.clone(), Default::default()).await.unwrap().unwrap();
+            server.hub.set_paired(std::slice::from_ref(&phone.pubkey_hex));
+            let endpoint = server.info.endpoints[0].clone();
+            let pin = server.info.cert_sha256.clone().expect("a wss listener advertises its pin");
+
+            // A relay configured on a port nothing listens on: it is on the
+            // list, but no relay will ever answer.
+            let dead = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let relay = format!("ws://{}", dead.local_addr().unwrap());
+            drop(dead);
+            let mut relays = Relays::start(vec![relay], bridge.clone(), None, inputs, Some(Rc::clone(&server.hub)));
+
+            // The phone reads its own copy tag, which is the one the bridge
+            // tags a copy to its identity with.
+            let recipient = protocol::recipients::recipient_tag(&bridge.pubkey_hex, &phone.pubkey_hex);
+            let (mut ws, answer) = hello_reading(&endpoint, &pin, &phone, std::slice::from_ref(&recipient), now_secs()).await;
+            assert_eq!(answer, DirectFrame::Ready);
+
+            // Responses have no lane, so each publish is awaited before the
+            // next one starts: a publish that waits on the dead relay is a
+            // dead relay in front of every message after it.
+            let addressee = Addressee { phone: phone.pubkey_hex.clone(), key: phone.pubkey_hex.clone() };
+            let acks: Vec<BridgeToPhone> = (0..4)
+                .map(|i| BridgeToPhone::InputAck(InputAckMsg { session_id: "s".into(), input_id: format!("i{i}") }))
+                .collect();
+            for ack in &acks {
+                relays.publish(vec![addressee.clone()], ack.clone());
+            }
+
+            // Well under the 12 s a publish waits for a relay coming up.
+            tokio::time::timeout(Duration::from_secs(2), async {
+                for ack in &acks {
+                    let DirectFrame::Event(event) = next_frame(&mut ws).await else { panic!("expected the event") };
+                    let plain = protocol::crypto::decrypt_from(&phone.secret_key, &bridge.pubkey_hex, &event.content).unwrap();
+                    assert_eq!(protocol::decode_bridge_to_phone(&plain).unwrap(), *ack);
+                }
+            })
+            .await
+            .expect("the direct link got every message without waiting on the dead relay");
+
+            relays.shutdown();
             server.shutdown();
         })
         .await;
