@@ -72,7 +72,11 @@ services:
       - agents:/data/agents
 
   codedeck-tor:
-    image: lncm/tor:0.4.7.13@sha256:5a3cfb478d978feb1426ce6dca8e10906bbdd72cff94d7c0c589339f717b2503
+    # Tor from the Tor Project's own Debian repository, rebuilt weekly. The
+    # network drops clients whose Tor lacks a protocol its consensus requires,
+    # so an unmaintained image stops working outright: bump this pin when Tor
+    # logs "not supported by this version of Tor".
+    image: ghcr.io/deymosh/tor:0.4.9.15@sha256:ecdfd26d17cfb06c614f87e00c09e5185f66e8ff4a0b9d7bbde901b61e0ffd41
     container_name: codedeck-tor
     restart: unless-stopped
     profiles:
@@ -80,8 +84,11 @@ services:
     networks:
       - codedeck-net
     volumes:
-      - ./data/tor:/var/lib/tor
-    command: ["--SocksPort", "0.0.0.0:9050", "--Log", "notice stdout"]
+      - ./data/tor:/data/.tor
+    command: ["--DataDirectory", "/data/.tor", "--SocksPort", "0.0.0.0:9050", "--Log", "notice stdout"]
+    healthcheck:
+      test: ["CMD", "timeout", "5", "bash", "-c", "cat < /dev/null > /dev/tcp/127.0.0.1/9050"]
+      interval: 30s
 
 secrets:
   claude_code_oauth_token:

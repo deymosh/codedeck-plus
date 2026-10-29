@@ -191,7 +191,8 @@ logs or source control.
 docker compose up -d --build
 ```
 
-2. **Optional** — also run the bundled Tor daemon (`lncm/tor`), instead of
+2. **Optional** — also run the bundled Tor daemon (`ghcr.io/deymosh/tor`, Tor from the
+   Tor Project's own Debian repository), instead of
    pointing `torProxyUrl` at a Tor daemon you already run elsewhere:
 ```bash
 docker compose --profile tor up -d --build
