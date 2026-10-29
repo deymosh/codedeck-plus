@@ -1331,7 +1331,13 @@ impl Loop {
                     };
                     if changed {
                         self.state_changed(SliceId::Machines);
-                        self.sync_stale_watchdog();
+                        // Only arm a watchdog that is not ticking yet: a link
+                        // flapping faster than its period must not keep
+                        // pushing the next tick, and the presence it renews,
+                        // out of reach.
+                        if self.stale_timer.as_ref().is_none_or(|t| t.is_finished()) {
+                            self.sync_stale_watchdog();
+                        }
                     }
                 }
             }
