@@ -1331,6 +1331,13 @@ impl Loop {
                     };
                     if changed {
                         self.state_changed(SliceId::Machines);
+                        // Only arm a watchdog that is not ticking yet: a link
+                        // flapping faster than its period must not keep
+                        // pushing the next tick, and the presence it renews,
+                        // out of reach.
+                        if self.stale_timer.as_ref().is_none_or(|t| t.is_finished()) {
+                            self.sync_stale_watchdog();
+                        }
                     }
                 }
             }
@@ -1541,9 +1548,11 @@ impl Loop {
     /// pausing must NOT disarm it: a dead subscription detected while the
     /// user is not looking is what keeps notifications arriving. Offline,
     /// WaitingRetry, Idle and Stopped have no socket and no cycle in flight;
-    /// their own online/retry/start events re-arm it.
+    /// their own online/retry/start events re-arm it. A direct link that is
+    /// up keeps it armed whatever the relays do: presence renews over the
+    /// link, and every other check is gated on the relay status itself.
     fn sync_stale_watchdog(&mut self) {
-        if stale_watchdog_needed(self.conn.status) {
+        if stale_watchdog_needed(self.conn.status) || !self.links_up.is_empty() {
             self.arm_stale_watchdog();
         } else {
             abort(&mut self.stale_timer);
@@ -2436,17 +2445,18 @@ impl Loop {
     /// The bridges that know this client by its session key and have heard
     /// nothing from it for [`PRESENCE_RENEW_SECS`]: they get a `presence`,
     /// so they keep sending it the shared updates. Quiet: a renewal that
-    /// does not get through is retried on the next check.
+    /// does not get through is retried on the next check. A machine whose
+    /// direct link is up is renewed over it even with every relay down: the
+    /// link alone must keep the bridge sending.
     fn renew_presence(&mut self) {
-        if self.conn.status != ConnectionStatus::Connected {
-            return;
-        }
+        let relays_up = self.conn.status == ConnectionStatus::Connected;
         let now = self.clock.now_ms();
         let due: Vec<String> = self
             .stores
             .machines
             .machine_pubkeys()
             .into_iter()
+            .filter(|m| relays_up || self.links_up.contains_key(m))
             .filter(|m| matches!(self.cipher_for(m), Cipher::SessionKey(_)))
             .filter(|m| self.last_command_ms.get(m).is_none_or(|at| now.saturating_sub(*at) >= PRESENCE_RENEW_SECS * 1000))
             .collect();

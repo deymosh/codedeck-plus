@@ -167,7 +167,18 @@ fn rate_limited(result: &nostr_transport::PublishResult) -> bool {
 /// Publish `event` and wait for a relay's word; whether one took it. When
 /// every relay refused it as too many, every publish holds off for a while
 /// (longer each time) and this one is sent again after.
-async fn publish(transport: &WsTransport, event: &SignedEvent, quiet: &Quiet) -> bool {
+///
+/// `direct_carried` says the direct link took every copy of it already. With
+/// no relay up, such an event is not published at all: waiting out the
+/// publish budget for a relay that may not come back holds up everything
+/// queued behind it, and the phone has the event anyway. The direct link
+/// never waits on a relay that is down. Once any relay is up, the publish
+/// goes ahead, so a phone reached only over the relays still gets it.
+async fn publish(transport: &WsTransport, event: &SignedEvent, quiet: &Quiet, direct_carried: bool) -> bool {
+    if direct_carried && transport.connected_relays().is_empty() {
+        log::debug!("[Relays] No relay up; the direct link carried kind {}", event.kind);
+        return false;
+    }
     let mut wait = RATE_LIMIT_WAIT;
     for attempt in 0..=RATE_LIMIT_RETRIES {
         quiet.wait().await;
@@ -293,7 +304,9 @@ struct Sent {
     delivered: bool,
 }
 
-/// Publish `events` in order and report how it went.
+/// Publish `events` in order and report how it went. `direct_carried` says
+/// the direct link took every one of them, which frees them from waiting on
+/// a relay that is down (see [`publish`]).
 fn send(
     transport: WsTransport,
     quiet: Quiet,
@@ -301,11 +314,12 @@ fn send(
     phone: String,
     beat: Option<u64>,
     events: Vec<SignedEvent>,
+    direct_carried: bool,
 ) -> LocalBoxFuture<'static, Sent> {
     Box::pin(async move {
         let mut delivered = true;
         for event in &events {
-            delivered &= publish(&transport, event, &quiet).await;
+            delivered &= publish(&transport, event, &quiet, direct_carried).await;
         }
         Sent { lane, phone, beat, events, delivered }
     })
@@ -527,6 +541,9 @@ async fn flush_terminals(
 /// Build the events for one message to `to`, hand each copy to the direct link
 /// and start its relay publish. The caller has already waited for the lane to
 /// be free.
+///
+/// A copy the direct link took whole is published without waiting on a relay
+/// that is down (see [`publish`]); every other copy waits for one as usual.
 async fn send_message(
     factory: &mut EventFactory,
     flight: &mut Flight,
@@ -549,13 +566,14 @@ async fn send_message(
                 continue;
             }
         };
+        let mut direct_carried = direct.is_some();
         if let Some(direct) = direct {
             for event in &events {
-                direct.deliver(&addressee.phone, event, is_terminal);
+                direct_carried &= direct.deliver(&addressee.phone, event, is_terminal);
             }
         }
         let beat = beat.then(|| flight.next_beat(&addressee.phone));
-        let sending = send(publisher.clone(), flight.quiet.clone(), lane.clone(), addressee.phone, beat, events);
+        let sending = send(publisher.clone(), flight.quiet.clone(), lane.clone(), addressee.phone, beat, events, direct_carried);
         match &lane {
             Some(lane) => flight.start(lane, sending),
             // Out of any lane: nothing overlaps it.
@@ -686,7 +704,9 @@ impl Relays {
                         for (phone, events) in std::mem::take(&mut flight.unsent_beats) {
                             let mut delivered = true;
                             for event in &events {
-                                delivered &= publish(&publisher, event, &flight.quiet).await;
+                                // A relay is up here (checked above), so the
+                                // direct link does not shorten this wait.
+                                delivered &= publish(&publisher, event, &flight.quiet, false).await;
                             }
                             if !delivered {
                                 flight.unsent_beats.insert(phone, events);
