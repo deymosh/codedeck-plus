@@ -269,6 +269,7 @@ function writesLostText(msg: Record<string, unknown>): string {
   const what = [
     ...(lost.includes('transcript') ? ['this conversation, so resuming it may miss part of it'] : []),
     ...(lost.includes('global_config') ? ["Claude Code's own settings changes"] : []),
+    ...(lost.some((kind) => kind !== 'transcript' && kind !== 'global_config') ? ['other data'] : []),
   ];
   return `Claude Code could not save to disk (${why}): ${what.length > 0 ? what.join(', and ') : 'some changes were lost'}.`;
 }
