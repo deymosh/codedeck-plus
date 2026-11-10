@@ -75,6 +75,8 @@ directory, since the CLI prints its list as text only.
   says (for example that it is already up to date).
 - A Qwen Code process loads its extensions as it starts, the same way it loads
   MCP servers: a change applies to sessions started after it.
+- The MCP servers an extension brings run in its sessions but are not on the
+  MCP screen, which shows the servers of `settings.json`.
 
 Qwen Code's marketplace `sources` (Claude-format marketplaces) are not on the
 phone: the CLI has no way to list what a source offers.

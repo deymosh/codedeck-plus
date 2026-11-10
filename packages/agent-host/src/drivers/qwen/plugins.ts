@@ -70,6 +70,9 @@ export function qwenCli(entry: () => Promise<string>, home: string, baseEnv: Nod
       ...baseEnv,
       ...QWEN_OFF_ENV,
       QWEN_HOME: home,
+      // Its messages in English whatever the machine's locale: an update's
+      // outcome is told from its words (see QwenPlugins.act).
+      QWEN_CODE_LANG: 'en',
       ...(rootHome ? { HOME: root, USERPROFILE: root } : {}),
     };
     return new Promise((resolve) => {
@@ -221,13 +224,18 @@ export class QwenPlugins implements PluginManager {
         // An install that asked for something and got no answer exits 0 too.
         throw new Error(`${QWEN_LABEL} installed nothing from ${target}: ${failureMessage(result)}`);
       }
+      // `update` exits 0 whatever happened — an extension it cannot find, or
+      // one it failed to update, included — so its outcome is its words:
+      // updated, already current, or anything else, which is a refusal.
+      const message = action === 'update' ? lastLine(result.stdout) : undefined;
+      const current = /already up to date/i.test(message ?? '');
+      if (action === 'update' && !current && !/successfully updated/i.test(message ?? '')) {
+        throw new Error(failureMessage(result));
+      }
       // A change that changes nothing — switching on what is on, an update
       // that found nothing new — must not retire the warm process the next
       // session would have used.
-      const message = action === 'update' ? lastLine(result.stdout) : undefined;
-      const unchanged = toggle
-        ? (await this.enablementText()) === rulesBefore
-        : action === 'update' && /already up to date/i.test(message ?? '');
+      const unchanged = toggle ? (await this.enablementText()) === rulesBefore : current;
       if (!unchanged) this.config.bump();
       return { ...state, ...(message ? { message } : {}) };
     });

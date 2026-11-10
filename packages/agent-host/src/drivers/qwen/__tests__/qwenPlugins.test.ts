@@ -7,9 +7,9 @@
  * `qwen-extension.json` and `.qwen-extension-install.json`, a linked one's
  * manifest at its `source`, the enablement rules in
  * `extensions/extension-enablement.json`, a disable under the home directory
- * (`!$HOME/*`) leaving the extension loaded in a session outside it, and an
+ * (`!$HOME/*`) leaving the extension loaded in a session outside it, an
  * install without `--consent` and without stdin exiting 0 having installed
- * nothing.
+ * nothing, and `update` of an extension it cannot find exiting 0 too.
  */
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -91,6 +91,8 @@ describe.skipIf(entry === null)('Qwen Code extensions through the real CLI', () 
     const config = new QwenConfigVersion();
     await expect(plugins(config).act('install', path.join(work, 'missing'))).rejects.toThrow(/Install source not found/);
     await expect(plugins(config).act('disable', 'nope')).rejects.toThrow(/does not exist/);
+    // Its update says so on stdout and exits 0.
+    await expect(plugins(config).act('update', 'nope')).rejects.toThrow(/not found/);
     expect(config.current).toBe(0);
   }, 60_000);
 });
