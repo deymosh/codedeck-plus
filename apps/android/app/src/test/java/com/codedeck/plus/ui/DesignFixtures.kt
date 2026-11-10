@@ -210,6 +210,8 @@ internal object DesignFixtures {
             UniffiPluginMarketplace("deymosh-skills", "https://github.com/deymosh/claude-skills.git"),
         ),
         toggles = true,
+        installHint = null,
+        installNote = null,
         available = listOf(
             UniffiAvailablePlugin("code-review@$OFFICIAL", "code-review", OFFICIAL, "Automated code review for pull requests using multiple specialized agents", 9120uL),
             UniffiAvailablePlugin("frontend-design@$OFFICIAL", "frontend-design", OFFICIAL, "Distinctive, intentional visual design for new UI", 5874uL),
@@ -225,7 +227,8 @@ internal object DesignFixtures {
     val opencodePlugins = UniffiAgentPlugins(
         agent = "opencode",
         installed = listOf(UniffiInstalledPlugin("opencode-wakatime", "opencode-wakatime", null, null, null, enabled = true)),
-        marketplaces = null, toggles = false, available = null, error = null, busy = emptyList(), notice = null, failure = null,
+        marketplaces = null, toggles = false, installHint = null, installNote = null,
+        available = null, error = null, busy = emptyList(), notice = null, failure = null,
     )
 
     /** GitHub Copilot's sign-in as OpenCode offers it: a choice, then an

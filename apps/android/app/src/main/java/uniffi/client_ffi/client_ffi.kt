@@ -5250,6 +5250,18 @@ data class UniffiAgentPlugins (
     var `toggles`: kotlin.Boolean
     , 
     /**
+     * What the install field takes, as its placeholder, for an agent without
+     * marketplaces; the agent's own wording.
+     */
+    var `installHint`: kotlin.String?
+    , 
+    /**
+     * One sentence on where an install comes from and how a change reaches
+     * sessions, for an agent without marketplaces.
+     */
+    var `installNote`: kotlin.String?
+    , 
+    /**
      * What the marketplaces offer, once asked for with `available`.
      */
     var `available`: List<UniffiAvailablePlugin>?
@@ -5292,6 +5304,8 @@ public object FfiConverterTypeUniffiAgentPlugins: FfiConverterRustBuffer<UniffiA
             FfiConverterSequenceTypeUniffiInstalledPlugin.read(buf),
             FfiConverterOptionalSequenceTypeUniffiPluginMarketplace.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
             FfiConverterOptionalSequenceTypeUniffiAvailablePlugin.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterSequenceString.read(buf),
@@ -5305,6 +5319,8 @@ public object FfiConverterTypeUniffiAgentPlugins: FfiConverterRustBuffer<UniffiA
             FfiConverterSequenceTypeUniffiInstalledPlugin.allocationSize(value.`installed`) +
             FfiConverterOptionalSequenceTypeUniffiPluginMarketplace.allocationSize(value.`marketplaces`) +
             FfiConverterBoolean.allocationSize(value.`toggles`) +
+            FfiConverterOptionalString.allocationSize(value.`installHint`) +
+            FfiConverterOptionalString.allocationSize(value.`installNote`) +
             FfiConverterOptionalSequenceTypeUniffiAvailablePlugin.allocationSize(value.`available`) +
             FfiConverterOptionalString.allocationSize(value.`error`) +
             FfiConverterSequenceString.allocationSize(value.`busy`) +
@@ -5317,6 +5333,8 @@ public object FfiConverterTypeUniffiAgentPlugins: FfiConverterRustBuffer<UniffiA
             FfiConverterSequenceTypeUniffiInstalledPlugin.write(value.`installed`, buf)
             FfiConverterOptionalSequenceTypeUniffiPluginMarketplace.write(value.`marketplaces`, buf)
             FfiConverterBoolean.write(value.`toggles`, buf)
+            FfiConverterOptionalString.write(value.`installHint`, buf)
+            FfiConverterOptionalString.write(value.`installNote`, buf)
             FfiConverterOptionalSequenceTypeUniffiAvailablePlugin.write(value.`available`, buf)
             FfiConverterOptionalString.write(value.`error`, buf)
             FfiConverterSequenceString.write(value.`busy`, buf)
