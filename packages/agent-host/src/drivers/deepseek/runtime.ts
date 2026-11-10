@@ -14,11 +14,11 @@
  */
 import { randomBytes } from 'node:crypto';
 import { rmSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { AcpRuntime, type AcpProcess, type AcpProcessEvents, type AcpProcessSpec, type SpawnFn } from '../../acp/runtime';
 import { agentCacheDir } from '../../install/agentInstall';
 import { isFile } from '../../sdk/executable';
+import { packageVersionOf } from '../../sdk/packageVersion';
 import { bridgeSocketPath } from './bridge';
 import { DSH_LABEL } from './install';
 import { BRIDGE_SOCKET_ENV, QUESTION_MARKER } from './plugin';
@@ -198,22 +198,18 @@ export class DeepSeekRuntime extends AcpRuntime<DeepSeekChannel, DeepSeekProcess
   /**
    * The harness's own version, from its package's manifest: what `initialize`
    * reports as `agentInfo` is a fixed placeholder (`0.0.1`), not the release.
-   * Undefined when the runtime is not one the tree describes (an operator's
-   * own entry point outside any `node_modules`).
+   * An operator's own CLI counts too: its entry is followed through symlinks
+   * to the package it belongs to. Undefined when no harness manifest is above
+   * it.
    */
   async version(): Promise<string | undefined> {
     if (this.knownVersion !== undefined) return this.knownVersion;
     try {
-      const root = await this.packagesRoot();
-      if (root === undefined) return undefined;
-      const manifest = JSON.parse(await readFile(path.join(root, '@deepseek-ai', 'dsh', 'package.json'), 'utf8')) as {
-        version?: unknown;
-      };
       // Only a found version is kept: one the tree cannot tell yet may be
       // readable once an install finishes.
-      if (typeof manifest.version === 'string') this.knownVersion = manifest.version;
+      this.knownVersion = await packageVersionOf(await this.entryPoint(), '@deepseek-ai/dsh');
     } catch {
-      // No runtime yet, or a tree without the manifest: the line goes without.
+      // No runtime yet: the line goes without.
     }
     return this.knownVersion;
   }

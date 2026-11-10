@@ -12,11 +12,11 @@
  * provider settings there (settings.ts); this module only points the process
  * at the directory.
  */
-import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { AcpRuntime, type AcpProcessEvents, type AcpProcessSpec, type SpawnFn } from '../../acp/runtime';
 import { agentCacheDir } from '../../install/agentInstall';
 import { isFile } from '../../sdk/executable';
+import { packageVersionOf } from '../../sdk/packageVersion';
 import { QWEN_LABEL } from './install';
 
 export type { SpawnFn } from '../../acp/runtime';
@@ -133,36 +133,22 @@ export class QwenRuntime extends AcpRuntime<undefined, AcpProcessEvents> {
   /**
    * Qwen Code's own version, from its package's manifest. `initialize`
    * reports the real release as `agentInfo.version` (the session reads that
-   * directly); this is for a reader that has no process — and undefined for an
-   * operator's own entry point outside any package directory.
+   * directly); this is for a reader that has no process. An operator's own
+   * CLI counts too: its entry is followed through symlinks to the package it
+   * belongs to. Undefined when no Qwen Code manifest is above it.
    */
   async version(): Promise<string | undefined> {
     if (this.knownVersion !== undefined) return this.knownVersion;
     try {
-      const root = await this.packagesRoot();
-      if (root === undefined) return undefined;
-      const manifest = JSON.parse(await readFile(path.join(root, '@qwen-code', 'qwen-code', 'package.json'), 'utf8')) as {
-        version?: unknown;
-      };
-      if (typeof manifest.version === 'string') this.knownVersion = manifest.version;
+      // Only a found version is kept: one the tree cannot tell yet may be
+      // readable once an install finishes.
+      this.knownVersion = await packageVersionOf(await this.entryPoint(), '@qwen-code/qwen-code');
     } catch {
-      // No runtime yet, or a tree without the manifest: the line goes without.
+      // No runtime yet: the line goes without.
     }
     return this.knownVersion;
   }
 
-  /** The `node_modules` the installed tree sits in, or undefined for an
-   *  operator's own entry point. */
-  private async packagesRoot(): Promise<string | undefined> {
-    let file = await this.entryPoint();
-    for (let depth = 0; depth < 8; depth++) {
-      const dir = path.dirname(file);
-      if (dir === file) break;
-      if (path.basename(dir) === 'node_modules') return dir;
-      file = dir;
-    }
-    return undefined;
-  }
 
   /** Close every process, and forget the resolved entry point. Called on host
    *  shutdown. */

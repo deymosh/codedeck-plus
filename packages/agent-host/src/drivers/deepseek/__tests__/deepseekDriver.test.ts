@@ -180,6 +180,16 @@ describe('DeepSeekSession startup', () => {
     expect(await ready.driver.version()).toBe('0.2.0-rc.2');
   });
 
+  it("reports the version of an operator's own harness that sits in no node_modules", async () => {
+    // A source checkout: the package directory is the checkout itself.
+    const checkout = mkdtempSync(path.join(tmpdir(), 'dsh-checkout-'));
+    mkdirSync(path.join(checkout, 'lib'), { recursive: true });
+    writeFileSync(path.join(checkout, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.3.0-dev' }));
+    writeFileSync(path.join(checkout, 'lib', 'bin.js'), '');
+    const ready = withDriver({ dshPath: path.join(checkout, 'lib', 'bin.js') });
+    expect(await ready.driver.version()).toBe('0.3.0-dev');
+  });
+
   it('accepts a model named by its plain id, as a provider profile names one', async () => {
     const ready = withDriver();
     await started(ready, { model: 'deepseek-v4-pro' });

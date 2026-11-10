@@ -784,6 +784,20 @@ describe('the Qwen Code runtime', () => {
     }
   });
 
+  it("reports the version of an operator's own CLI that sits in no node_modules", async () => {
+    // A source checkout: the package directory is the checkout itself.
+    const checkout = mkdtempSync(path.join(tmpdir(), 'codedeck-qwen-checkout-'));
+    try {
+      mkdirSync(path.join(checkout, 'dist'), { recursive: true });
+      writeFileSync(path.join(checkout, 'package.json'), JSON.stringify({ name: '@qwen-code/qwen-code', version: '0.28.0-dev' }));
+      writeFileSync(path.join(checkout, 'dist', 'cli.js'), '');
+      const ready = withDriver({ qwenPath: path.join(checkout, 'dist', 'cli.js') });
+      expect(await ready.driver.version()).toBe('0.28.0-dev');
+    } finally {
+      rmSync(checkout, { recursive: true, force: true });
+    }
+  });
+
   it('reports a path that is not a file', () => {
     const ready = withDriver({ qwenPath: '/nope/missing.js' });
     ready.driver.setUnavailable('CODEDECK_QWEN_PATH points at /nope/missing.js, which is not a file.');
