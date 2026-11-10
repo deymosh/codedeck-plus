@@ -36,6 +36,14 @@ upstream did not design for:
   mapping) lives in `packages/agent-host/src/drivers/<agent>/`; the bridge and
   the phone work from the catalog the host reports. See `docs/PROTOCOL.md`,
   "Adding an agent".
+- **Scope is a remote for coding agents, nothing else.** Removed on purpose,
+  never reintroduce: NIP-17 DMs, Marmot/MLS chat, device-test sessions,
+  bridge output coalescing, GSD. OpenCode is the default agent.
+- **Every phone event is signed by the identity key** (commands, grants,
+  NIP-42 AUTH, Blossom auth). Session keys only key NIP-44 payloads; they
+  never sign.
+- **No migrations.** A breaking change to persisted or wire data is reshaped
+  directly, old data skipped tolerantly on load, and the PR says so.
 
 ## Commands
 
@@ -116,6 +124,15 @@ model's session resumed across a restart):
 changing a driver-protocol type, regenerate the host's types with
 `./codedeck dev cargo test -p agent-protocol --test gen_ts_bindings -- --ignored`.
 
+Edits made inside the dev container are discarded by the next sync, so a
+generated file is regenerated there and copied back (`docker cp
+codedeck-dev:/repo/<path> <path>`): `Cargo.lock` after any `Cargo.toml`
+change (CI runs `--locked`), the host's TS types, the install pins. Every
+dev container shares one cargo target volume and cargo judges freshness by
+mtime, so while another checkout builds, an error naming the other
+branch's types means stale artifacts — touch the crate and rebuild. Never
+pass `--offline` to the Android build (AGP downloads its platform).
+
 ### Asking an agent a question — three tiers, cheapest first
 
 A run costs what its model costs, so pick the tier by what needs proving.
@@ -163,6 +180,29 @@ Narrowest run per area: `dev cargo test -p <crate> [name]`, `dev vitest run
 <file> [-t name]`, `android test --tests <Class>`, and the corpora
 (`crates/protocol/fixtures/corpus.json`, the display corpus) for wire and
 transcript shape.
+
+### Efficiency
+
+Every event is signed, NIP-44 encrypted and often a Tor round trip, to a
+phone on battery or a small VPS bridge — so cost is decided in the design:
+deltas, not whole state (offsets + appended text); bursts coalesced on a
+timer; nothing sent that nobody watches (only the session on screen);
+ephemeral kinds for anything recoverable; the direct link when there is one.
+A PR that changes traffic states its cost.
+
+### Bumping an agent
+
+One commit per package. Bump `packages/agent-host/package.json`, install,
+then `pnpm --filter @codedeck/agent-host run gen:platform-packages`
+(regenerates the install pins; copy `pnpm-lock.yaml` and
+`src/generated/*` back). The DeepSeek Harness subtree is re-resolved from
+scratch (remove the dependency, install, add it back): an in-place update
+keeps the previous release's lock entries and mixes two releases. Then
+`./codedeck live <agent> --fake-model --prompt hello --prompt /tool
+--prompt /question`, read the release notes for what the driver relies on,
+account for new tools in the driver's tool table (its drift test), and
+update the fake's "verified against" header only for what was re-checked.
+`.github/workflows/agent-updates.yml` reports new releases weekly.
 
 ### CI and releases
 
@@ -282,7 +322,10 @@ crates/protocol          the phone wire: messages, total codec, kinds, ranges,
 - Secrets — API keys, GitHub PATs, custom-provider tokens, Android keystore
   material — are never logged, never echoed back over the wire, and are wiped
   from component state immediately after send. In Rust they travel as
-  `agent_protocol::Secret`, whose `Debug` is redacted.
+  `agent_protocol::Secret`, whose `Debug` is redacted. Never read the
+  bridge's runtime state or config (`data/`, `state.json`, `config.json`,
+  `opencode.json(c)`, `.mcp.json`) or `/proc/*/environ`; live tests use
+  throwaway homes and no credentials.
 - Do not downgrade Node / TypeScript / Rust / NDK versions to work around a build
   failure; fix the root cause.
 - The image (`docker/Dockerfile`) and the release archives lay the bridge out as
