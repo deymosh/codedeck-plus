@@ -48,8 +48,10 @@ servers you added there show up on the phone. Switching one off adds it to
 A Qwen Code process loads its servers as it starts: a change applies to the
 sessions started after it, while a running session keeps the set it began
 with. A server's env and header values are stored in the file, as every
-agent stores them in its own configuration; the driver writes the file
-readable by its owner only.
+agent stores them in its own configuration; on Linux and macOS the driver
+writes the file readable by its owner only (Windows keeps the folder's own
+permissions). A session's MCP panel shows a server added after its process
+started as pending: the next session loads it.
 
 ## What this does not have
 

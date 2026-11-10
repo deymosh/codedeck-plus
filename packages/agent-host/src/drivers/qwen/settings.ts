@@ -184,8 +184,11 @@ export async function readQwenSettings(home: string, log: (message: string) => v
   try {
     return record(JSON.parse(await readFile(file, 'utf8')));
   } catch (error) {
-    if ((error as { code?: string }).code !== 'ENOENT') {
-      log(`[qwen] ${file} could not be read (${error instanceof Error ? error.message : String(error)}) — treating it as empty`);
+    // Only the kind of failure: a JSON error quotes the text around it, and
+    // the file holds MCP servers' env and header values.
+    const code = (error as { code?: string }).code;
+    if (code !== 'ENOENT') {
+      log(`[qwen] ${file} could not be read (${code ?? (error instanceof SyntaxError ? 'not valid JSON' : 'unreadable')}) — treating it as empty`);
     }
     return {};
   }

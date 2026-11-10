@@ -75,13 +75,13 @@ export function applyQwenMcp(
   let excluded = excludedOf(settings);
   if (action === 'add') {
     for (const server of servers) {
-      if (server.name.trim() === '') throw new Error('An MCP server needs a name.');
+      if (server.name.trim() === '' || server.name === '__proto__') throw new Error(`An MCP server cannot be named '${server.name}'.`);
       // Added again replaces it, and an added server is on.
       map[server.name] = qwenServerJson(server);
       excluded = excluded.filter((name) => name !== server.name);
     }
   } else {
-    const missing = names.filter((name) => !(name in map));
+    const missing = names.filter((name) => !Object.hasOwn(map, name));
     if (missing.length > 0) throw new Error(`Qwen Code has no MCP server named ${missing.join(', ')}.`);
     for (const name of names) {
       excluded = excluded.filter((n) => n !== name);
@@ -104,7 +104,7 @@ export class QwenMcp implements McpManager {
    *  has not loaded. */
   private versions = 0;
 
-  constructor(private readonly settings: QwenSettingsFile) {}
+  constructor(readonly settings: QwenSettingsFile) {}
 
   get version(): number {
     return this.versions;
@@ -115,8 +115,15 @@ export class QwenMcp implements McpManager {
   }
 
   async act(action: McpAction, servers: McpServerAdd[], names: string[]): Promise<McpState> {
-    const next = await this.settings.edit((existing) => applyQwenMcp(existing, action, servers, names));
-    this.versions++;
+    let changed = false;
+    const next = await this.settings.edit((existing) => {
+      const edited = applyQwenMcp(existing, action, servers, names);
+      changed = JSON.stringify(edited) !== JSON.stringify(existing);
+      return edited;
+    });
+    // A change that changes nothing (switching on a server that is on) must
+    // not retire the warm process the next session would have used.
+    if (changed) this.versions++;
     return { servers: qwenServers(next), toggles: true };
   }
 }

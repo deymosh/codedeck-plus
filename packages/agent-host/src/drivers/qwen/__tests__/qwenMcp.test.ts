@@ -91,6 +91,31 @@ describe('Qwen Code MCP servers', () => {
     expect(readFileSync(path.join(home, 'settings.json'), 'utf8')).toBe(before);
   });
 
+  it('does not count a change that changes nothing', async () => {
+    // The process pool starts a fresh process whenever the version moves.
+    await mcp.act('add', [{ name: 'files', setup: { type: 'stdio', command: 'srv' } }], []);
+    const version = mcp.version;
+    await mcp.act('enable', [], ['files']);
+    await mcp.act('add', [{ name: 'files', setup: { type: 'stdio', command: 'srv' } }], []);
+    expect(mcp.version).toBe(version);
+    await mcp.act('disable', [], ['files']);
+    expect(mcp.version).toBe(version + 1);
+  });
+
+  it('refuses to switch a name that is only an object property, not a server', async () => {
+    await expect(mcp.act('remove', [], ['constructor'])).rejects.toThrow(/no MCP server named constructor/);
+  });
+
+  it('never logs the text of a settings file it cannot parse', async () => {
+    // A hand edit that broke the JSON right beside a server's key.
+    writeFileSync(path.join(home, 'settings.json'), '{"mcpServers":{"a":{"command":"x","env":{"API_KEY":sk-supersecret}}}}');
+    const logs: string[] = [];
+    await new QwenMcp(new QwenSettingsFile(home, (line) => logs.push(line))).list();
+    const logged = logs.join(' ');
+    expect(logged).toMatch(/not valid JSON/);
+    expect(logged).not.toContain('sk-super');
+  });
+
   it('keeps the servers when the driver rewrites its provider entries, even at the same moment', async () => {
     // Both edit one file: the provider write must not put back a copy read
     // before the server was added.

@@ -41,7 +41,6 @@ export const qwenModule: DriverModule = {
         log: ctx.log,
       }),
       home,
-      settings,
       mcp,
       baseEnv: ctx.ownEnv,
       providerHttp,
