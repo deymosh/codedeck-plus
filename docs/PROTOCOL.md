@@ -516,9 +516,10 @@ plugins on the bridge's machine (all its sessions share them):
   `remove-marketplace`, `update-marketplace` (target: its name). The bridge
   refuses a target that is empty, starts with `-` or holds control
   characters. `message` is what was done, in the agent's words, when it says
-  (e.g. an update's from/to versions). A change reaches running sessions:
-  Claude Code reloads its plugins in place; OpenCode reloads, restarting its
-  running sessions.
+  (e.g. an update's from/to versions). How a change reaches sessions is the
+  agent's: Claude Code reloads its plugins in place; OpenCode reloads,
+  restarting its running sessions; Qwen Code loads its extensions as a
+  process starts, so sessions started after the change have it.
 
 ### `mcp`
 
