@@ -283,6 +283,18 @@ describe('sdkMessageToEntries', () => {
       expect(entries).toEqual([{ entryType: 'turn_complete', timestamp: expect.any(String) }]);
     });
 
+    it('tells the user when the CLI could not save the conversation to disk', () => {
+      const entries = translate({
+        type: 'system', subtype: 'session_writes_lost', error_code: 'ENOSPC', lost: ['transcript'],
+        transcript_session_ids: [SESSION_ID], uuid: MSG_UUID, session_id: SESSION_ID,
+      } as unknown as SdkMessage);
+      expect(entries).toEqual([{
+        entryType: 'error',
+        text: 'Claude Code could not save to disk (the disk is full): this conversation, so resuming it may miss part of it.',
+        timestamp: expect.any(String),
+      }]);
+    });
+
     it('ignores session_state_changed running', () => {
       expect(translate({
         type: 'system', subtype: 'session_state_changed', state: 'running', uuid: MSG_UUID, session_id: SESSION_ID,
