@@ -65,6 +65,9 @@ export interface QwenRuntimeOptions {
   spawnFn?: SpawnFn;
   /** How long a process outlives its last session (0 to close at once). */
   idleCloseMs?: number;
+  /** The MCP servers' version: a session asking after a change gets a
+   *  process started since, which has loaded them. */
+  configVersion?: () => number;
 }
 
 export class QwenRuntime extends AcpRuntime<undefined, AcpProcessEvents> {
@@ -78,6 +81,7 @@ export class QwenRuntime extends AcpRuntime<undefined, AcpProcessEvents> {
       label: QWEN_LABEL,
       spawnFn: qwen.spawnFn,
       idleCloseMs: qwen.idleCloseMs,
+      configVersion: qwen.configVersion,
     });
   }
 

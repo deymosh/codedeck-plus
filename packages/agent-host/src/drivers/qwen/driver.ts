@@ -22,7 +22,7 @@
  *    result, and its completed call carries text only.
  */
 import type { RequestPermissionRequest, RequestPermissionResponse, SessionConfigOption, SessionUpdate } from '@agentclientprotocol/sdk';
-import type { Driver, DriverSession, SessionContext } from '../../sdk/driver';
+import type { Driver, DriverSession, SessionContext, SessionMcpState } from '../../sdk/driver';
 import type { ProviderHttp } from '../../sdk/net';
 import { checkToken, listModels, OPENAI_API } from '../../sdk/providerApi';
 import type { EndpointModel } from '../../sdk/providerModels';
@@ -49,7 +49,8 @@ import type { ToolCallMemory } from '../../acp/adapter';
 import { MAX_DIFF_LINES, toDiffLines } from '../../sdk/transcript';
 import { qwenUpdateToEntries } from './adapter';
 import { deleteQwenConversation } from './conversations';
-import { qwenProviderEnv, qwenSettingsKey, writeQwenSettings } from './settings';
+import { QwenMcp } from './mcp';
+import { mergeQwenSettings, qwenProviderEnv, qwenSettingsKey, QwenSettingsFile } from './settings';
 import { qwenTool } from './tools';
 import { QWEN_LABEL } from './install';
 import { QwenRuntime } from './runtime';
@@ -109,9 +110,38 @@ interface QwenSessionDeps extends AcpSessionDeps<undefined, AcpProcessEvents> {
   /** The provider profiles the driver currently holds — read at spawn, so a
    *  session's process gets the tokens the settings file names. */
   providers: () => ProviderBinding[];
+  /** The machine's MCP servers, for this session's own view of them. */
+  mcp: QwenMcp;
 }
 
 export class QwenSession extends AcpSession<undefined, AcpProcessEvents, QwenSessionDeps> {
+  /**
+   * The session's MCP servers. Qwen Code loads them as its process starts,
+   * so this reports what the running process has: a server switched off is
+   * off, and any change made after the process started is one it has not
+   * loaded yet (pending until the next session's fresh process).
+   */
+  async mcpStatus(): Promise<SessionMcpState> {
+    const state = await this.deps.mcp.list();
+    const process_ = this.process;
+    const loaded = process_?.configVersion ?? Number.POSITIVE_INFINITY;
+    const stale = process_?.alive !== true || this.deps.mcp.version > loaded;
+    const servers = state.servers.map((server) => ({
+      name: server.name,
+      status: !server.enabled ? ('disabled' as const) : stale ? ('pending' as const) : ('connected' as const),
+    }));
+    return { servers, toggles: false, projectWide: false };
+  }
+
+  async toggleMcp(name: string, enabled: boolean): Promise<SessionMcpState> {
+    void name;
+    void enabled;
+    throw new Error(
+      `${QWEN_LABEL} attaches its MCP servers when it starts, so a running session cannot switch one. ` +
+        'Change it in the MCP list: the next session uses the new set.',
+    );
+  }
+
   /** Qwen Code's own mode id (`default`, `plan`, `yolo`, …). */
   private sessionMode: string;
   /** The slash commands the agent last listed, by name. */
@@ -460,6 +490,9 @@ export interface QwenDriverOptions {
   baseEnv?: NodeJS.ProcessEnv;
   /** Outbound HTTP to provider profiles' endpoints. */
   providerHttp?: ProviderHttp;
+  /** The machine's MCP servers. Its settings file is the one the driver
+   *  writes its providers to as well, so the two never rewrite it at once. */
+  mcp?: QwenMcp;
   log: (message: string) => void;
 }
 
@@ -475,6 +508,8 @@ export class QwenDriver implements Driver {
    *  Code with no readable settings has no provider to run on, so this is a
    *  session's failure rather than a log line. */
   private settingsError: string | undefined;
+  private readonly settingsFile: QwenSettingsFile;
+  readonly mcp: QwenMcp;
   private readonly sessions = new Map<string, AcpSession<undefined, AcpProcessEvents>>();
   private readonly live: AcpSessionRegistry<undefined, AcpProcessEvents> = {
     events: (): AcpProcessEvents => ({
@@ -491,6 +526,8 @@ export class QwenDriver implements Driver {
   };
 
   private constructor(private readonly options: QwenDriverOptions) {
+    this.mcp = options.mcp ?? new QwenMcp(new QwenSettingsFile(options.home, options.log));
+    this.settingsFile = this.mcp.settings;
     // The settings file has to exist before any process boots: Qwen Code
     // reads its provider list and its auth type as it starts. A failure is
     // kept, not swallowed — a session has to refuse rather than start an
@@ -513,7 +550,7 @@ export class QwenDriver implements Driver {
   /** One write of the settings, remembering whether it worked. */
   private async writeSettingsNow(providers: ProviderBinding[]): Promise<void> {
     try {
-      await writeQwenSettings(this.options.home, providers, this.options.log);
+      await this.settingsFile.edit((existing) => mergeQwenSettings(existing, providers));
       this.settingsError = undefined;
     } catch (error) {
       this.settingsError = reason(error);
@@ -547,9 +584,10 @@ export class QwenDriver implements Driver {
       efforts: QWEN_EFFORTS,
       defaultMode: DEFAULT_MODE,
       // What Qwen Code's ACP surface carries, and what it does not: no
-      // subscription usage, no plugin or MCP management (both are its own
-      // configuration files). Its provider profiles add their models rather
-      // than binding a session, so `providers` is not advertised.
+      // subscription usage and no plugin management. Its MCP servers live in
+      // the settings file this driver writes (mcp.ts). Its provider profiles
+      // add their models rather than binding a session, so `providers` is
+      // not advertised.
       supports: {
         models: true,
         usage: false,
@@ -558,7 +596,7 @@ export class QwenDriver implements Driver {
         interrupt: true,
         commands: true,
         plugins: false,
-        mcp: false,
+        mcp: true,
         tasks: false,
       },
       credentials: [],
@@ -586,6 +624,7 @@ export class QwenDriver implements Driver {
       runtime: this.options.runtime,
       baseEnv: this.options.baseEnv ?? process.env,
       providers: () => this.providers,
+      mcp: this.mcp,
       live: this.live,
       prepared: this.prepared,
       tag: 'qwen',

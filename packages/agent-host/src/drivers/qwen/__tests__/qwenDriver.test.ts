@@ -143,7 +143,7 @@ describe('QwenDriver.info', () => {
       interrupt: true,
       commands: true,
       plugins: false,
-      mcp: false,
+      mcp: true,
       tasks: false,
     });
     expect(info.credentials).toEqual([]);

@@ -10,7 +10,9 @@ import { providerHttp } from '../../sdk/net';
 import { removePackageTree } from '../../install/agentInstall';
 import { QwenDriver } from './driver';
 import { QWEN_PACKAGE, installQwenTree, installedQwenTree } from './install';
+import { QwenMcp } from './mcp';
 import { QwenRuntime, qwenHomeDir } from './runtime';
+import { QwenSettingsFile } from './settings';
 
 const explicitPath = (ctx: DriverEnv): string | undefined => ctx.env.CODEDECK_QWEN_PATH?.trim() || undefined;
 
@@ -20,6 +22,11 @@ export const qwenModule: DriverModule = {
   create(ctx) {
     const home = qwenHomeDir(ctx.lookupEnv);
     const qwenPath = explicitPath(ctx);
+    // The MCP servers live in the settings file, which a Qwen Code process
+    // reads as it starts: the pool is told the servers' version, so a change
+    // after a process started is configuration it has not loaded.
+    const settings = new QwenSettingsFile(home, ctx.log);
+    const mcp = new QwenMcp(settings);
     const driver = QwenDriver.create({
       runtime: new QwenRuntime({
         // An explicit path is the operator's own CLI; without one the pinned
@@ -30,9 +37,11 @@ export const qwenModule: DriverModule = {
         cacheDir: ctx.cacheDir,
         registry: ctx.registry,
         installQwen: installQwenTree,
+        configVersion: () => mcp.version,
         log: ctx.log,
       }),
       home,
+      mcp,
       baseEnv: ctx.ownEnv,
       providerHttp,
       log: ctx.log,

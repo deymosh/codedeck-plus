@@ -174,29 +174,76 @@ export async function writeQwenSettings(
   providers: ProviderBinding[],
   log: (message: string) => void,
 ): Promise<void> {
+  await editQwenSettings(home, log, (existing) => mergeQwenSettings(existing, providers));
+}
+
+/** Read `settings.json` under `home`: a missing or unreadable file is an
+ *  empty settings object. */
+export async function readQwenSettings(home: string, log: (message: string) => void): Promise<Record<string, unknown>> {
+  const file = path.join(home, 'settings.json');
+  try {
+    return record(JSON.parse(await readFile(file, 'utf8')));
+  } catch (error) {
+    // Only the kind of failure: a JSON error quotes the text around it, and
+    // the file holds MCP servers' env and header values.
+    const code = (error as { code?: string }).code;
+    if (code !== 'ENOENT') {
+      log(`[qwen] ${file} could not be read (${code ?? (error instanceof SyntaxError ? 'not valid JSON' : 'unreadable')}) — treating it as empty`);
+    }
+    return {};
+  }
+}
+
+/** Rewrite `settings.json` under `home` as `edit` says, from what is there. */
+export async function editQwenSettings(
+  home: string,
+  log: (message: string) => void,
+  edit: (existing: Record<string, unknown>) => Record<string, unknown>,
+): Promise<Record<string, unknown>> {
   // The home is CodeDeck's own directory: a fresh machine has none yet, and
   // Qwen Code reads settings.json as it boots rather than creating it.
   await mkdir(home, { recursive: true });
   const file = path.join(home, 'settings.json');
-  let existing: Record<string, unknown> = {};
-  try {
-    const parsed: unknown = JSON.parse(await readFile(file, 'utf8'));
-    existing = record(parsed);
-  } catch (error) {
-    if ((error as { code?: string }).code !== 'ENOENT') {
-      log(`[qwen] ${file} could not be read (${error instanceof Error ? error.message : String(error)}) — writing a fresh one`);
-    }
-  }
+  const next = edit(await readQwenSettings(home, log));
   // Written beside the file and renamed over it: a Qwen Code process that
   // boots meanwhile reads the old settings or the new ones, never half of
-  // either.
+  // either. Owner-only, since an MCP server's env and headers are kept here.
   const staged = `${file}.${process.pid}.tmp`;
   try {
-    await writeFile(staged, `${JSON.stringify(mergeQwenSettings(existing, providers), null, 2)}\n`, 'utf8');
+    await writeFile(staged, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
     await rename(staged, file);
   } catch (error) {
     await rm(staged, { force: true });
     throw error;
+  }
+  return next;
+}
+
+/**
+ * The one way this host changes `settings.json`: every edit — the driver's
+ * provider entries, the MCP servers — waits for the one before it, since two
+ * overlapping rewrites of one file would leave whichever finished last.
+ */
+export class QwenSettingsFile {
+  private queue: Promise<unknown> = Promise.resolve();
+
+  constructor(
+    readonly home: string,
+    private readonly log: (message: string) => void,
+  ) {}
+
+  read(): Promise<Record<string, unknown>> {
+    return this.serial(() => readQwenSettings(this.home, this.log));
+  }
+
+  edit(edit: (existing: Record<string, unknown>) => Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.serial(() => editQwenSettings(this.home, this.log, edit));
+  }
+
+  private serial<T>(work: () => Promise<T>): Promise<T> {
+    const next = this.queue.then(work, work);
+    this.queue = next.catch(() => {});
+    return next;
   }
 }
 
