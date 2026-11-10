@@ -314,6 +314,14 @@ pub struct PersonasMsg {
 /// installs plugins by package name and has no marketplaces (nor anything
 /// `available`), and `toggles` says whether a plugin can be switched off
 /// without uninstalling it.
+///
+/// For an agent without marketplaces the driver also writes `install_hint`
+/// and `install_note`, so the phone can word its install form without
+/// knowing which agent this is: `install_hint` is what `install` takes,
+/// shown as the form's placeholder (e.g. "npm package name"), and
+/// `install_note` is one sentence on where an install comes from and how a
+/// change reaches sessions. Both are driver text carried unchanged and are
+/// meaningful only when `marketplaces` is absent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginsMsg {
@@ -323,6 +331,10 @@ pub struct PluginsMsg {
     pub marketplaces: Option<Vec<PluginMarketplace>>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub toggles: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_hint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_note: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub available: Option<Vec<AvailablePlugin>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
