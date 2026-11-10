@@ -49,7 +49,8 @@ import type { ToolCallMemory } from '../../acp/adapter';
 import { MAX_DIFF_LINES, toDiffLines } from '../../sdk/transcript';
 import { qwenUpdateToEntries } from './adapter';
 import { deleteQwenConversation } from './conversations';
-import { qwenProviderEnv, qwenSettingsKey, writeQwenSettings } from './settings';
+import { QwenMcp } from './mcp';
+import { mergeQwenSettings, qwenProviderEnv, qwenSettingsKey, QwenSettingsFile } from './settings';
 import { qwenTool } from './tools';
 import { QWEN_LABEL } from './install';
 import { QwenRuntime } from './runtime';
@@ -460,6 +461,11 @@ export interface QwenDriverOptions {
   baseEnv?: NodeJS.ProcessEnv;
   /** Outbound HTTP to provider profiles' endpoints. */
   providerHttp?: ProviderHttp;
+  /** The settings file under `home`, shared with the MCP servers' manager
+   *  so the two never rewrite it at once. */
+  settings?: QwenSettingsFile;
+  /** The machine's MCP servers, kept in that file. */
+  mcp?: QwenMcp;
   log: (message: string) => void;
 }
 
@@ -475,6 +481,8 @@ export class QwenDriver implements Driver {
    *  Code with no readable settings has no provider to run on, so this is a
    *  session's failure rather than a log line. */
   private settingsError: string | undefined;
+  private readonly settingsFile: QwenSettingsFile;
+  readonly mcp: QwenMcp;
   private readonly sessions = new Map<string, AcpSession<undefined, AcpProcessEvents>>();
   private readonly live: AcpSessionRegistry<undefined, AcpProcessEvents> = {
     events: (): AcpProcessEvents => ({
@@ -491,6 +499,8 @@ export class QwenDriver implements Driver {
   };
 
   private constructor(private readonly options: QwenDriverOptions) {
+    this.settingsFile = options.settings ?? new QwenSettingsFile(options.home, options.log);
+    this.mcp = options.mcp ?? new QwenMcp(this.settingsFile);
     // The settings file has to exist before any process boots: Qwen Code
     // reads its provider list and its auth type as it starts. A failure is
     // kept, not swallowed — a session has to refuse rather than start an
@@ -513,7 +523,7 @@ export class QwenDriver implements Driver {
   /** One write of the settings, remembering whether it worked. */
   private async writeSettingsNow(providers: ProviderBinding[]): Promise<void> {
     try {
-      await writeQwenSettings(this.options.home, providers, this.options.log);
+      await this.settingsFile.edit((existing) => mergeQwenSettings(existing, providers));
       this.settingsError = undefined;
     } catch (error) {
       this.settingsError = reason(error);
@@ -547,9 +557,10 @@ export class QwenDriver implements Driver {
       efforts: QWEN_EFFORTS,
       defaultMode: DEFAULT_MODE,
       // What Qwen Code's ACP surface carries, and what it does not: no
-      // subscription usage, no plugin or MCP management (both are its own
-      // configuration files). Its provider profiles add their models rather
-      // than binding a session, so `providers` is not advertised.
+      // subscription usage and no plugin management. Its MCP servers live in
+      // the settings file this driver writes (mcp.ts). Its provider profiles
+      // add their models rather than binding a session, so `providers` is
+      // not advertised.
       supports: {
         models: true,
         usage: false,
@@ -558,7 +569,7 @@ export class QwenDriver implements Driver {
         interrupt: true,
         commands: true,
         plugins: false,
-        mcp: false,
+        mcp: true,
         tasks: false,
       },
       credentials: [],

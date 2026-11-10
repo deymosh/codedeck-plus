@@ -39,11 +39,23 @@ Qwen Code's own approval modes: Ask (`default`), Auto edit, Plan, Auto (an
 LLM classifier approves what it judges safe) and YOLO. Reasoning: Off, Low,
 Medium, High, Extra high, Max.
 
+## MCP servers
+
+The MCP screen manages the `mcpServers` of that same `settings.json`, so a
+server added from the phone is also there for `qwen` in a terminal, and the
+servers you added there show up on the phone. Switching one off adds it to
+`mcp.excluded` (what Qwen Code's own disable does) rather than removing it.
+A Qwen Code process loads its servers as it starts: a change applies to the
+sessions started after it, while a running session keeps the set it began
+with. A server's env and header values are stored in the file, as every
+agent stores them in its own configuration; the driver writes the file
+readable by its owner only.
+
 ## What this does not have
 
 - **No subscription usage** to ask for (the context meter still works).
-- **No plugin or MCP management** from the phone: both are Qwen Code's own
-  configuration files.
+- **No plugin management** from the phone: Qwen Code's extensions are its
+  own.
 - **No background tasks.**
 
 ## Offline and container notes
