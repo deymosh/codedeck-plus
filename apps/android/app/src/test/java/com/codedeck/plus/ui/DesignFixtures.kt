@@ -227,7 +227,8 @@ internal object DesignFixtures {
     val opencodePlugins = UniffiAgentPlugins(
         agent = "opencode",
         installed = listOf(UniffiInstalledPlugin("opencode-wakatime", "opencode-wakatime", null, null, null, enabled = true)),
-        marketplaces = null, toggles = false, installHint = null, installNote = null,
+        marketplaces = null, toggles = false, installHint = "npm package name",
+        installNote = "It is installed from npm the next time OpenCode loads. Changing its plugins reloads OpenCode, which restarts its running sessions.",
         available = null, error = null, busy = emptyList(), notice = null, failure = null,
     )
 
