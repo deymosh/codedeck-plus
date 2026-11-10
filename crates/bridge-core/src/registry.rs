@@ -119,6 +119,12 @@ pub struct Tombstone {
 pub struct RegistryDoc {
     pub sessions: Vec<SessionRecord>,
     pub removed_sessions: Vec<Tombstone>,
+    /// Sessions the phone was shown as pending (`session-pending`) whose
+    /// creation has not been answered. Stored so a restart in between still
+    /// answers them (`session-failed`) instead of leaving the phone's
+    /// placeholder to its own timeout.
+    #[serde(default)]
+    pub pending_creates: Vec<String>,
 }
 
 impl RegistryDoc {
@@ -133,6 +139,8 @@ impl RegistryDoc {
             sessions: Vec<serde_json::Value>,
             #[serde(default)]
             removed_sessions: Vec<serde_json::Value>,
+            #[serde(default)]
+            pending_creates: Vec<serde_json::Value>,
         }
         let raw: Raw = match serde_json::from_str(json) {
             Ok(raw) => raw,
@@ -162,7 +170,9 @@ impl RegistryDoc {
             raw.removed_sessions.into_iter().filter_map(|v| serde_json::from_value(v).ok()).collect();
         let excess = removed.len().saturating_sub(TOMBSTONE_CAP);
         removed.drain(..excess);
-        Self { sessions, removed_sessions: removed }
+        // An id that is not a string is skipped like an unreadable record.
+        let pending_creates = raw.pending_creates.into_iter().filter_map(|v| v.as_str().map(str::to_owned)).collect();
+        Self { sessions, removed_sessions: removed, pending_creates }
     }
 }
 
@@ -260,7 +270,7 @@ mod tests {
     #[test]
     fn a_registry_round_trips_through_its_stored_form() {
         let stone = Tombstone { id: "x".into(), removed_at: 7 };
-        let doc = RegistryDoc { sessions: vec![record("a"), record("b")], removed_sessions: vec![stone.clone()] };
+        let doc = RegistryDoc { sessions: vec![record("a"), record("b")], removed_sessions: vec![stone.clone()], pending_creates: vec![] };
         let back = RegistryDoc::load(&serde_json::to_string(&doc).unwrap());
         assert_eq!(back.sessions, doc.sessions);
         assert_eq!(back.removed_sessions, [stone]);

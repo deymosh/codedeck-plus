@@ -915,6 +915,7 @@ impl Engine {
         });
         self.append(session_id, vec![entry]);
         self.sessions.remove(session_id);
+        self.registry_dirty = true;
         self.publish_all(BridgeToPhone::SessionFailed(SessionFailedMsg {
             pending_id: session_id.to_string(),
             reason: reason.to_string(),
