@@ -23,8 +23,12 @@ it on demand, exactly like the other agents' binaries: at the version and
 sha512 this build pins in `pnpm-lock.yaml`, into `<home>/agents/`, from the
 npm registry (or `CODEDECK_NPM_REGISTRY`). It is downloaded when someone
 installs it — Install on the phone, or `codedeck-bridge agents install
-deepseek-harness` — and a session waiting on it starts once it is in. An
-operator who already has a harness can point the bridge at it instead:
+deepseek-harness` — and a session waiting on it starts once it is in. It
+runs on the agent host's Node, and the harness asks for Node 24.9 or later:
+the image and the release archives bring 24.20, but a bridge pointed at an
+older `node` (`CODEDECK_NODE_PATH`) runs it on a version it was not built
+for. An operator who already has a harness can point the bridge at it
+instead:
 
 ```bash
 codedeck-bridge run --deepseek-path /usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js

@@ -204,8 +204,12 @@ function readContent(content) {
       } else if (typeof block?.text === 'string') texts.push(block.text);
     }
   }
+  // Qwen Code's memory catalog puts its lead-in line ("Current memory
+  // catalog …:") outside the delimiters; that line is part of the reminder,
+  // not the user's words. Only that line: a prompt of the user's own that
+  // ends in a colon before a reminder stays.
   const stripped = texts
-    .map((text) => text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim())
+    .map((text) => text.replace(/(?:^Current memory catalog\b[^\n]*:\n)?<system-reminder>[\s\S]*?<\/system-reminder>/gm, '').trim())
     .filter((text) => text !== '');
   return { text: stripped.join('\n'), own: stripped[0] ?? '', results };
 }

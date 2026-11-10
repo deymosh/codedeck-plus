@@ -76,6 +76,9 @@ so no context breakdown either.
 - A PreToolUse hook that asks shows as a permission card naming the hook
   (and its plugin, when one declares it); it asks every time, so the card
   has no "always".
+- An error row when Claude Code could not save to disk (full, or over
+  quota): the session carries on, but resuming it later may miss what was
+  not saved.
 - Usage: how full the context is and what fills it, part by part (its own
   `/context` data), the session's cost, and the plan's 5-hour and weekly
   limits with when they reset.

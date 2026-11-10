@@ -1,0 +1,72 @@
+name: Agent updates
+
+# Watches the npm releases of the agents the agent host drives and keeps one
+# open issue listing the packages whose pin trails the latest release (closed
+# again once none does). It opens an issue rather than a bump PR on purpose:
+# a bump means regenerating the install pins, sometimes re-resolving a
+# package's whole subtree, and a live session against the new version — work
+# an automated PR would only fail CI on.
+on:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: agent-updates
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Compare the pins with the latest releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          title='Agent updates available'
+          # The agents' own packages, and the ACP types their drivers use.
+          packages='@anthropic-ai/claude-agent-sdk @opencode/client @opencode/cli @deepseek-ai/dsh @qwen-code/qwen-code @agentclientprotocol/sdk'
+          rows=''
+          for name in $packages; do
+            pinned=$(jq -r --arg n "$name" '(.dependencies + .devDependencies)[$n] // empty' packages/agent-host/package.json | sed 's/^[\^~]//')
+            [ -n "$pinned" ] || { echo "::error::$name is not in packages/agent-host/package.json"; exit 1; }
+            latest=$(curl -fsSL "https://registry.npmjs.org/$name" | jq -r '.["dist-tags"].latest // empty')
+            # A package with no `latest` tag has nothing to compare against.
+            [ -n "$latest" ] || { echo "::warning::$name has no latest dist-tag"; continue; }
+            echo "$name: pinned $pinned, latest $latest"
+            if [ "$pinned" != "$latest" ]; then
+              # Package names in code spans: a bare scope reads as a mention.
+              rows+="| \`$name\` | $pinned | $latest | [npm](https://www.npmjs.com/package/$name?activeTab=versions) |"$'\n'
+            fi
+          done
+
+          issue=$(gh issue list --state open --search "in:title \"$title\"" --json number,title \
+            --jq "map(select(.title == \"$title\")) | .[0].number // empty")
+          if [ -z "$rows" ]; then
+            if [ -n "$issue" ]; then
+              gh issue close "$issue" --comment 'Every agent package is at its latest release.'
+            fi
+            exit 0
+          fi
+
+          body=$(printf '%s\n\n%s\n%s\n%s\n\n%s\n' \
+            'These agent packages have a newer release than the agent host pins (checked weekly).' \
+            '| Package | Pinned | Latest | Releases |' \
+            '|---|---|---|---|' \
+            "${rows%$'\n'}" \
+            'Bump each in its own commit: regenerate the install pins, run the agent against the fake model, and read the release notes for behaviour the driver relies on.')
+          if [ -n "$issue" ]; then
+            gh issue edit "$issue" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi

@@ -240,6 +240,13 @@ function parseSystem(msg: SdkSystemMessage | SdkSessionStateChangedMessage): Out
     return [];
   }
 
+  // The CLI could not write to disk (full, or over quota) and carries on
+  // without saving: the session runs on, but a resume after a restart would
+  // miss what was lost. Nothing else tells the user, so it is an error row.
+  if ((msg as { subtype?: string }).subtype === 'session_writes_lost') {
+    return [{ entryType: 'error', text: writesLostText(msg as unknown as Record<string, unknown>), timestamp: new Date().toISOString() }];
+  }
+
   // The SDK reporting the session idle is the authoritative "turn over,
   // waiting for input" signal (the phone's unread dot / notification).
   if (msg.subtype === 'session_state_changed') {
@@ -251,6 +258,20 @@ function parseSystem(msg: SdkSystemMessage | SdkSessionStateChangedMessage): Out
   }
 
   return [];
+}
+
+/** What a `session_writes_lost` message means for the user: why, and what
+ *  was not saved. Codes and kinds this driver does not know still read as a
+ *  failed write. */
+function writesLostText(msg: Record<string, unknown>): string {
+  const why = msg.error_code === 'EDQUOT' ? 'the disk quota is used up' : msg.error_code === 'ENOSPC' ? 'the disk is full' : 'a write failed';
+  const lost = Array.isArray(msg.lost) ? msg.lost : [];
+  const what = [
+    ...(lost.includes('transcript') ? ['this conversation, so resuming it may miss part of it'] : []),
+    ...(lost.includes('global_config') ? ["Claude Code's own settings changes"] : []),
+    ...(lost.some((kind) => kind !== 'transcript' && kind !== 'global_config') ? ['other data'] : []),
+  ];
+  return `Claude Code could not save to disk (${why}): ${what.length > 0 ? what.join(', and ') : 'some changes were lost'}.`;
 }
 
 // --- Background tasks ---
