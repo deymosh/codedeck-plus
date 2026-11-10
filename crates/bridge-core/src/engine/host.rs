@@ -459,9 +459,18 @@ impl Engine {
 
     fn on_plugins_reply(&mut self, agent: String, result: Result<HostMessage, String>) {
         let msg = match result {
-            Ok(HostMessage::Plugins { installed, marketplaces, toggles, available, .. }) => {
-                PluginsMsg { agent, installed, marketplaces, toggles, available, error: None }
-            }
+            Ok(HostMessage::Plugins {
+                installed, marketplaces, toggles, available, install_hint, install_note, ..
+            }) => PluginsMsg {
+                agent,
+                installed,
+                marketplaces,
+                toggles,
+                install_hint,
+                install_note,
+                available,
+                error: None,
+            },
             Ok(_) => Self::plugins_error(agent, "The agent gave no plugin list.".into()),
             Err(err) => Self::plugins_error(agent, format!("Could not list the plugins: {err}")),
         };
@@ -472,7 +481,16 @@ impl Engine {
     }
 
     pub(super) fn plugins_error(agent: String, error: String) -> PluginsMsg {
-        PluginsMsg { agent, installed: vec![], marketplaces: None, toggles: false, available: None, error: Some(error) }
+        PluginsMsg {
+            agent,
+            installed: vec![],
+            marketplaces: None,
+            toggles: false,
+            install_hint: None,
+            install_note: None,
+            available: None,
+            error: Some(error),
+        }
     }
 
     /// A done action is acknowledged, then the new list goes out, so every
@@ -489,9 +507,25 @@ impl Engine {
         result: Result<HostMessage, String>,
     ) {
         let (plugins, ack_message, error) = match result {
-            Ok(HostMessage::Plugins { installed, marketplaces, toggles, available, message }) => {
-                let plugins =
-                    PluginsMsg { agent: agent.clone(), installed, marketplaces, toggles, available, error: None };
+            Ok(HostMessage::Plugins {
+                installed,
+                marketplaces,
+                toggles,
+                available,
+                install_hint,
+                install_note,
+                message,
+            }) => {
+                let plugins = PluginsMsg {
+                    agent: agent.clone(),
+                    installed,
+                    marketplaces,
+                    toggles,
+                    install_hint,
+                    install_note,
+                    available,
+                    error: None,
+                };
                 (Some(plugins), message, None)
             }
             Ok(_) => (None, None, Some("The agent gave no answer to the change.".to_string())),

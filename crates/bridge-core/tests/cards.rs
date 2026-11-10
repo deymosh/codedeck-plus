@@ -371,8 +371,15 @@ fn plugins_are_listed_and_changed_by_the_agent_host() {
         description: None,
         enabled: true,
     };
-    let plugins =
-        || HostMessage::Plugins { installed: vec![plugin.clone()], marketplaces: Some(vec![]), toggles: true, available: None, message: None };
+    let plugins = || HostMessage::Plugins {
+        installed: vec![plugin.clone()],
+        marketplaces: Some(vec![]),
+        toggles: true,
+        available: None,
+        install_hint: None,
+        install_note: None,
+        message: None,
+    };
 
     rig.send(json!({"v":12,"type":"plugins-request","agent":"alpha","available":true}));
     let (id, msg) = rig.host_request(|m| matches!(m, BridgeMessage::ListPlugins { .. }));
@@ -399,6 +406,8 @@ fn plugins_are_listed_and_changed_by_the_agent_host() {
         marketplaces: Some(vec![]),
         toggles: true,
         available: Some(vec![]),
+        install_hint: None,
+        install_note: None,
         message: Some("Updated from 0.1.0 to 0.2.0.".into()),
     });
     let msgs = rig.messages();
@@ -419,6 +428,45 @@ fn plugins_are_listed_and_changed_by_the_agent_host() {
     let msgs = rig.messages();
     assert!(msgs.iter().any(|m| matches!(m, BridgeToPhone::PluginAck(a) if !a.success && a.target == "--prune")));
     assert!(msgs.iter().any(|m| matches!(m, BridgeToPhone::Plugins(p) if p.agent == "beta" && p.error.is_some())));
+}
+
+/// An agent without marketplaces writes its own wording for the install
+/// form; it rides both the listing and the list resent after an install, so
+/// the phone never has to know which agent it is talking to.
+#[test]
+fn plugin_install_hint_and_note_reach_the_phone() {
+    let mut rig = Rig::new();
+    rig.host_up();
+    let note = "Installed into the agent's own config; running sessions pick it up at their next start.";
+    let reply = || HostMessage::Plugins {
+        installed: vec![],
+        marketplaces: None,
+        toggles: false,
+        available: None,
+        install_hint: Some("npm package name".into()),
+        install_note: Some(note.into()),
+        message: None,
+    };
+
+    rig.send(json!({"v":12,"type":"plugins-request","agent":"alpha"}));
+    let (id, _) = rig.host_request(|m| matches!(m, BridgeMessage::ListPlugins { .. }));
+    rig.host_reply(&id, reply());
+    assert!(rig.messages().iter().any(|m| matches!(m,
+        BridgeToPhone::Plugins(p)
+            if p.install_hint.as_deref() == Some("npm package name")
+                && p.install_note.as_deref() == Some(note)
+                && p.marketplaces.is_none())));
+
+    rig.send(json!({"v":12,"type":"plugin-action","agent":"alpha","action":"install","target":"some-plugin"}));
+    let (id, _) = rig.host_request(|m| matches!(m, BridgeMessage::PluginAction { .. }));
+    rig.host_reply(&id, reply());
+    let list = rig.messages().into_iter().rev().find_map(|m| match m {
+        BridgeToPhone::Plugins(p) => Some(p),
+        _ => None,
+    });
+    let list = list.expect("the fresh list is published");
+    assert_eq!(list.install_hint.as_deref(), Some("npm package name"));
+    assert_eq!(list.install_note.as_deref(), Some(note));
 }
 
 #[test]
