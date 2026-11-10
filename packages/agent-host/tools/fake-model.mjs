@@ -15,6 +15,12 @@
  *                    — the same call a permission card is raised for, and on
  *                    OpenCode one is; the tool's own result then gets a plain
  *                    answer, which is what ends the turn
+ *   /background [command]
+ *                    the same shell call sent to the background, for a
+ *                    background task's start and end: Qwen Code's
+ *                    `run_shell_command` with `is_background` (Claude Code
+ *                    takes `/background` as a command of its own, so the
+ *                    model never sees it there)
  *   /question        ask one multiple-choice question through the request's
  *                    own question tool, then answer with the reply the agent
  *                    hands back
@@ -78,7 +84,7 @@ export const LONG_TEXT = Array.from(
 ).join('\n');
 
 /** The scenario commands, in the order the vocabulary lists them. */
-export const SCENARIOS = ['tool', 'question', 'plan-approval', 'error', 'long'];
+export const SCENARIOS = ['tool', 'background', 'question', 'plan-approval', 'error', 'long'];
 
 /**
  * How long a streamed reply is held between pieces, and the longest a text can
@@ -237,7 +243,7 @@ const QUESTION_TOOLS = ['AskUserQuestion', 'ask_user_question', 'question', 'ask
 const PLAN_TOOLS = ['ExitPlanMode', 'exit_plan_mode'];
 /** What each scenario's call prefers to be named — the agent's own tool for
  *  it, when the request offers one. */
-const SCENARIO_TOOLS = { question: QUESTION_TOOLS, 'plan-approval': PLAN_TOOLS, tool: SHELL_TOOLS };
+const SCENARIO_TOOLS = { question: QUESTION_TOOLS, 'plan-approval': PLAN_TOOLS, tool: SHELL_TOOLS, background: SHELL_TOOLS };
 
 /**
  * The tool a scenario calls, or null when the request offers none this server
@@ -256,6 +262,13 @@ function toolFor(offered, scenario) {
 /** The plan a `/plan-approval` call proposes, for the approval card. */
 export const PLAN_TEXT = '1. Do the thing\n2. Check it';
 
+/** `/background`'s default command: long enough to outlive the turn that
+ *  started it, so its end comes on its own. Node rather than a shell loop:
+ *  on Windows the agent may run it in cmd.exe, which may also strip the
+ *  quotes — so the script has no spaces and no shell metacharacters. */
+export const BACKGROUND_COMMAND = `node -e "i=0;t=setInterval(function(){console.log('codedeck-bg-'+(++i));if(i==3)clearInterval(t)},1000)"`;
+/** The argument that sends each agent's shell call to the background. */
+const BACKGROUND_FLAG = { run_shell_command: { is_background: true } };
 /** The default command a `/tool` call runs: a write, which is the kind of
  *  call an agent's permission policy has an opinion about (`echo` alone is
  *  on Claude Code's own safe list, so it would say nothing about that
@@ -290,6 +303,7 @@ function questionArguments(name, question) {
 export function toolArguments(name, scenario, argument = '') {
   if (scenario === 'plan-approval') return { plan: argument || PLAN_TEXT };
   if (scenario === 'question') return questionArguments(name, argument || 'Which color?');
+  if (scenario === 'background') return { command: argument || BACKGROUND_COMMAND, description: `A background ${name} call from the fake model`, ...BACKGROUND_FLAG[name] };
   return { command: argument || TOOL_COMMAND, description: `A ${name} call from the fake model` };
 }
 
