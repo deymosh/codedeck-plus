@@ -40,7 +40,9 @@ jobs:
           for name in $packages; do
             pinned=$(jq -r --arg n "$name" '(.dependencies + .devDependencies)[$n] // empty' packages/agent-host/package.json | sed 's/^[\^~]//')
             [ -n "$pinned" ] || { echo "::error::$name is not in packages/agent-host/package.json"; exit 1; }
-            latest=$(curl -fsSL "https://registry.npmjs.org/$name" | jq -r '.["dist-tags"].latest')
+            latest=$(curl -fsSL "https://registry.npmjs.org/$name" | jq -r '.["dist-tags"].latest // empty')
+            # A package with no `latest` tag has nothing to compare against.
+            [ -n "$latest" ] || { echo "::warning::$name has no latest dist-tag"; continue; }
             echo "$name: pinned $pinned, latest $latest"
             if [ "$pinned" != "$latest" ]; then
               # Package names in code spans: a bare scope reads as a mention.
