@@ -188,6 +188,21 @@ describe('src/generated/dshPackages.ts', () => {
       '../../generated/dshPackages.ts',
     );
   });
+
+  it('holds every harness package at the harness release', () => {
+    // The harness publishes all its dsh-* packages together and imports
+    // across them by name. A bump that leaves older lock entries behind lets
+    // pnpm satisfy a peer range with the previous release, and the harness
+    // then dies at startup on an export that release lacks. Re-resolve the
+    // dsh subtree from scratch (remove it, install, add it back).
+    const lockfile = fs.readFileSync(LOCKFILE_PATH, 'utf8');
+    const tree = packageTree(lockfile, 'packages/agent-host', '@deepseek-ai/dsh');
+    const release = tree.find((entry) => entry.name === '@deepseek-ai/dsh')!.version;
+    const stale = tree
+      .filter((entry) => entry.name.startsWith('@deepseek-ai/dsh-') && entry.version !== release)
+      .map((entry) => `${entry.name}@${entry.version}`);
+    expect(stale).toEqual([]);
+  });
 });
 
 describe('src/generated/qwenPackages.ts', () => {

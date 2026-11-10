@@ -4,15 +4,17 @@
  * can be tested without the CLI, a credential or a network.
  *
  * Two agents sit behind this fake, and they do not behave alike. `deepseek`
- * reproduces the DeepSeek Harness's `dsh --profile acp` (pinned 0.2.1-rc.2),
- * `qwen` reproduces Qwen Code's `qwen --acp` (pinned 0.26.1). A test says
+ * reproduces the DeepSeek Harness's `dsh --profile acp` (pinned 0.2.2-rc.1),
+ * `qwen` reproduces Qwen Code's `qwen --acp` (pinned 0.27.1). A test says
  * which one it drives; everything a driver can observe — the initialize
  * capabilities, how a session is created, resumed, listed and closed, where a
  * tool call's name travels, what a refused config option says, the permission
  * ask and the end of a turn — comes from that profile.
  *
  * Verified against dsh 0.2.1-rc.2 / qwen-code 0.26.1 on 2026-10-27; re-probe
- * on a bump. The probes (raw ACP over the agent's stdio, throwaway homes and
+ * on a bump. For dsh 0.2.2-rc.1 / qwen-code 0.27.1 (2026-11-10) the ACP
+ * agent sources behind these answers were diffed and found unchanged, and a
+ * fake-model session (a turn, a tool call, its permission, a question) ran. The probes (raw ACP over the agent's stdio, throwaway homes and
  * the local fake model for the turns) answered, per agent:
  *  - initialize: agentInfo, prompt/mcp/session capabilities, `loadSession`
  *    and `authMethods`; only the harness advertises `session/close`, only

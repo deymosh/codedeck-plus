@@ -19,7 +19,7 @@
   },
   "devDependencies": {
     "@agentclientprotocol/sdk": "^2.5.0",
-    "@deepseek-ai/dsh": "0.2.1-rc.2",
+    "@deepseek-ai/dsh": "0.2.2-rc.1",
     "@opencode/cli": "2.2.7",
     "@qwen-code/qwen-code": "0.27.1",
     "@types/js-yaml": "^4.0.9",

@@ -97,17 +97,18 @@ const CONFIGURED_NAMES = ['subagent', 'subagent_fork', 'workflow'];
  * Tools an installed package declares that this profile does not mount: the
  * agent-team experiment (nothing in the bundle inserts it), `present` (it
  * declares deliverable files for the harness's own web app, which nothing on
- * the phone shows), `ralph` (its row in the bundle is disabled), and the
- * worktree experiment and scheduled-task tools (the `acp` profile inserts
- * neither plugin), and the persistent-terminal and session-search tools (only
+ * the phone shows), `ralph` (its row in the bundle is disabled),
+ * `apply_patch` (`dsh-base` sets the `tool-fs` row's `applyPatch: false` and
+ * the `acp` profile leaves it), the worktree experiment and scheduled-task
+ * tools (the `acp` profile inserts neither plugin), and the persistent-terminal and session-search tools (only
  * the opt-in `dsh-experimental-terminal-bundle` and
  * `dsh-experimental-session-search` overlays insert them).
  */
 const NOT_MOUNTED = [
-  'present', 'ralph',
+  'present', 'ralph', 'apply_patch',
   'spawn_teammate', 'wait_agent', 'team_task_create', 'team_task_get', 'team_task_list', 'team_task_update',
   'create_worktree',
-  'schedule_create', 'schedule_list', 'schedule_delete', 'schedule_update',
+  'schedule_create', 'schedule_list', 'schedule_delete', 'schedule_update', 'schedule_view', 'schedule_edit',
   'terminal_open', 'terminal_send', 'terminal_read', 'terminal_signal', 'terminal_close', 'terminal_list',
   'session_search', 'session_event_search', 'session_trace', 'session_event_trace', 'session_event_read',
 ];
