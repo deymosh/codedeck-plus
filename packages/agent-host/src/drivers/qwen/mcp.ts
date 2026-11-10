@@ -6,8 +6,9 @@
  * disable commands edit.
  *
  * A Qwen Code process reads its servers as it starts, so every change bumps
- * `version`: the process pool starts later sessions on a fresh process that
- * loads the new set, while a running session keeps its own.
+ * the configuration version (runtime.ts): the process pool starts later
+ * sessions on a fresh process that loads the new set, while a running session
+ * keeps its own.
  *
  * Entries take Qwen Code's own keys: `command`/`args`/`env` for a stdio
  * server, `httpUrl` for a streamable HTTP one and `url` for SSE, each with
@@ -17,6 +18,7 @@
 import type { McpManager, McpState } from '../../sdk/driver';
 import { serverInfo } from '../../sdk/mcp';
 import type { McpAction, McpServerAdd, McpServerInfo } from '../../sdk/types';
+import { QwenConfigVersion } from './runtime';
 import type { QwenSettingsFile } from './settings';
 
 /** A server as Qwen Code's settings take it: the phone's setup, secrets in
@@ -99,15 +101,18 @@ export function applyQwenMcp(
 }
 
 export class QwenMcp implements McpManager {
-  /** How many times this manager changed the servers. A process records it
-   *  as it starts, so a change made afterwards is configuration that process
-   *  has not loaded. */
-  private versions = 0;
+  /** The configuration version this manager's last change made (0: none). */
+  private changedAt = 0;
 
-  constructor(readonly settings: QwenSettingsFile) {}
+  constructor(
+    readonly settings: QwenSettingsFile,
+    private readonly config: QwenConfigVersion = new QwenConfigVersion(),
+  ) {}
 
+  /** The configuration version of the servers' last change: a process that
+   *  recorded a lower one as it started has not loaded them as they are. */
   get version(): number {
-    return this.versions;
+    return this.changedAt;
   }
 
   async list(): Promise<McpState> {
@@ -123,7 +128,7 @@ export class QwenMcp implements McpManager {
     });
     // A change that changes nothing (switching on a server that is on) must
     // not retire the warm process the next session would have used.
-    if (changed) this.versions++;
+    if (changed) this.changedAt = this.config.bump();
     return { servers: qwenServers(next), toggles: true };
   }
 }

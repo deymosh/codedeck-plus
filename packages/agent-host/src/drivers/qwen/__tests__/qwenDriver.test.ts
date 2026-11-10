@@ -142,7 +142,7 @@ describe('QwenDriver.info', () => {
       providerModels: true,
       interrupt: true,
       commands: true,
-      plugins: false,
+      plugins: true,
       mcp: true,
       tasks: false,
     });

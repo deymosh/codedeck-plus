@@ -15,14 +15,12 @@
  * Deliberate limits:
  *  - no subscription usage: ACP carries none (the context meter travels as
  *    session info instead);
- *  - no plugins and no MCP manager: both are Qwen Code's own configuration
- *    files, which this driver does not read or write;
  *  - a file change's diff is shown when the agent asks about it: Qwen Code
  *    reports a diff as the permission request's own content, not with the
  *    result, and its completed call carries text only.
  */
 import type { RequestPermissionRequest, RequestPermissionResponse, SessionConfigOption, SessionUpdate } from '@agentclientprotocol/sdk';
-import type { Driver, DriverSession, SessionContext, SessionMcpState } from '../../sdk/driver';
+import type { Driver, DriverSession, PluginManager, SessionContext, SessionMcpState } from '../../sdk/driver';
 import type { ProviderHttp } from '../../sdk/net';
 import { checkToken, listModels, OPENAI_API } from '../../sdk/providerApi';
 import type { EndpointModel } from '../../sdk/providerModels';
@@ -53,7 +51,8 @@ import { QwenMcp } from './mcp';
 import { mergeQwenSettings, qwenProviderEnv, qwenSettingsKey, QwenSettingsFile } from './settings';
 import { qwenTool } from './tools';
 import { QWEN_LABEL } from './install';
-import { QwenRuntime } from './runtime';
+import { qwenCli, QwenPlugins } from './plugins';
+import { QwenConfigVersion, QwenRuntime } from './runtime';
 import { QWEN_STYLE } from './style';
 
 export const QWEN_AGENT_ID = 'qwen-code';
@@ -493,6 +492,9 @@ export interface QwenDriverOptions {
   /** The machine's MCP servers. Its settings file is the one the driver
    *  writes its providers to as well, so the two never rewrite it at once. */
   mcp?: QwenMcp;
+  /** The machine's extensions (plugins.ts); by default through the
+   *  runtime's own CLI, on a configuration version of their own. */
+  plugins?: PluginManager;
   log: (message: string) => void;
 }
 
@@ -510,6 +512,7 @@ export class QwenDriver implements Driver {
   private settingsError: string | undefined;
   private readonly settingsFile: QwenSettingsFile;
   readonly mcp: QwenMcp;
+  readonly plugins: PluginManager;
   private readonly sessions = new Map<string, AcpSession<undefined, AcpProcessEvents>>();
   private readonly live: AcpSessionRegistry<undefined, AcpProcessEvents> = {
     events: (): AcpProcessEvents => ({
@@ -528,6 +531,13 @@ export class QwenDriver implements Driver {
   private constructor(private readonly options: QwenDriverOptions) {
     this.mcp = options.mcp ?? new QwenMcp(new QwenSettingsFile(options.home, options.log));
     this.settingsFile = this.mcp.settings;
+    this.plugins =
+      options.plugins ??
+      new QwenPlugins(
+        options.home,
+        qwenCli(() => options.runtime.entryPoint(), options.home, options.baseEnv ?? process.env),
+        new QwenConfigVersion(),
+      );
     // The settings file has to exist before any process boots: Qwen Code
     // reads its provider list and its auth type as it starts. A failure is
     // kept, not swallowed — a session has to refuse rather than start an
@@ -584,10 +594,10 @@ export class QwenDriver implements Driver {
       efforts: QWEN_EFFORTS,
       defaultMode: DEFAULT_MODE,
       // What Qwen Code's ACP surface carries, and what it does not: no
-      // subscription usage and no plugin management. Its MCP servers live in
-      // the settings file this driver writes (mcp.ts). Its provider profiles
-      // add their models rather than binding a session, so `providers` is
-      // not advertised.
+      // subscription usage. Its MCP servers live in the settings file this
+      // driver writes (mcp.ts); its extensions are the plugins (plugins.ts).
+      // Its provider profiles add their models rather than binding a
+      // session, so `providers` is not advertised.
       supports: {
         models: true,
         usage: false,
@@ -595,7 +605,7 @@ export class QwenDriver implements Driver {
         providerModels: true,
         interrupt: true,
         commands: true,
-        plugins: false,
+        plugins: true,
         mcp: true,
         tasks: false,
       },

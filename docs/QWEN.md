@@ -53,11 +53,37 @@ writes the file readable by its owner only (Windows keeps the folder's own
 permissions). A session's MCP panel shows a server added after its process
 started as pending: the next session loads it.
 
+## Extensions
+
+The Plugins screen manages Qwen Code's extensions, the ones under
+`$QWEN_HOME/extensions` that `qwen` in a terminal sees too. Changes go through
+Qwen Code's own `qwen extensions` commands; the list is read from the
+directory, since the CLI prints its list as text only.
+
+- **Install** takes what `qwen extensions install` takes: a Git URL, a local
+  path or archive, or an npm package. The phone's install button is the
+  consent the CLI would otherwise ask for in a terminal.
+- **Switching one off** turns it off in every workspace on the machine. Qwen
+  Code's own `disable` only covers workspaces under your home directory (it
+  writes the rule `!$HOME/*`), which would leave it loading in the image's
+  `/data/workspaces`; the phone writes `!/*` instead (on Windows, the root of
+  the drive `$QWEN_HOME` is on, such as `!/C:/*`, so a workspace on another
+  drive is not covered). A narrower rule you set
+  in a terminal (`--scope workspace`) still applies, but the phone's switch
+  shows only the machine-wide one.
+- **Update** runs `qwen extensions update <name>`, and the row shows what it
+  says (for example that it is already up to date).
+- A Qwen Code process loads its extensions as it starts, the same way it loads
+  MCP servers: a change applies to sessions started after it.
+- The MCP servers an extension brings run in its sessions but are not on the
+  MCP screen, which shows the servers of `settings.json`.
+
+Qwen Code's marketplace `sources` (Claude-format marketplaces) are not on the
+phone: the CLI has no way to list what a source offers.
+
 ## What this does not have
 
 - **No subscription usage** to ask for (the context meter still works).
-- **No plugin management** from the phone: Qwen Code's extensions are its
-  own.
 - **No background tasks.**
 
 ## Offline and container notes

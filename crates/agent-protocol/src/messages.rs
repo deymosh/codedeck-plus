@@ -628,6 +628,15 @@ pub enum HostMessage {
         toggles: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         available: Option<Vec<AvailablePlugin>>,
+        /// What `install` takes, as the install field's placeholder, for an
+        /// agent without marketplaces; absent otherwise.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        install_hint: Option<String>,
+        /// One sentence on where an install comes from and how a change
+        /// reaches sessions, for an agent without marketplaces; absent
+        /// otherwise.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        install_note: Option<String>,
         /// After a `plugin-action`, what was done in the agent's own words,
         /// when it says (e.g. an update's from/to versions).
         #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -11,7 +11,8 @@ import { removePackageTree } from '../../install/agentInstall';
 import { QwenDriver } from './driver';
 import { QWEN_PACKAGE, installQwenTree, installedQwenTree } from './install';
 import { QwenMcp } from './mcp';
-import { QwenRuntime, qwenHomeDir } from './runtime';
+import { qwenCli, QwenPlugins } from './plugins';
+import { QwenConfigVersion, QwenRuntime, qwenHomeDir } from './runtime';
 import { QwenSettingsFile } from './settings';
 
 const explicitPath = (ctx: DriverEnv): string | undefined => ctx.env.CODEDECK_QWEN_PATH?.trim() || undefined;
@@ -22,26 +23,30 @@ export const qwenModule: DriverModule = {
   create(ctx) {
     const home = qwenHomeDir(ctx.lookupEnv);
     const qwenPath = explicitPath(ctx);
-    // The MCP servers live in the settings file, which a Qwen Code process
-    // reads as it starts: the pool is told the servers' version, so a change
-    // after a process started is configuration it has not loaded.
+    // The MCP servers (the settings file) and the extensions are read by a
+    // Qwen Code process as it starts: the pool is told their shared version,
+    // so a change after a process started is configuration it has not loaded.
+    const config = new QwenConfigVersion();
     const settings = new QwenSettingsFile(home, ctx.log);
-    const mcp = new QwenMcp(settings);
+    const mcp = new QwenMcp(settings, config);
+    const runtime = new QwenRuntime({
+      // An explicit path is the operator's own CLI; without one the pinned
+      // tree is installed on demand, at the version and sha512
+      // pnpm-lock.yaml holds.
+      ...(qwenPath ? { qwenPath } : {}),
+      home,
+      cacheDir: ctx.cacheDir,
+      registry: ctx.registry,
+      installQwen: installQwenTree,
+      configVersion: () => config.current,
+      log: ctx.log,
+    });
     const driver = QwenDriver.create({
-      runtime: new QwenRuntime({
-        // An explicit path is the operator's own CLI; without one the pinned
-        // tree is installed on demand, at the version and sha512
-        // pnpm-lock.yaml holds.
-        ...(qwenPath ? { qwenPath } : {}),
-        home,
-        cacheDir: ctx.cacheDir,
-        registry: ctx.registry,
-        installQwen: installQwenTree,
-        configVersion: () => mcp.version,
-        log: ctx.log,
-      }),
+      runtime,
       home,
       mcp,
+      // The extensions CLI is the one the sessions run.
+      plugins: new QwenPlugins(home, qwenCli(() => runtime.entryPoint(), home, ctx.ownEnv), config),
       baseEnv: ctx.ownEnv,
       providerHttp,
       log: ctx.log,

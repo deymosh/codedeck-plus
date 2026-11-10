@@ -79,7 +79,8 @@ internal fun browseResults(available: List<UniffiAvailablePlugin>, query: String
 /**
  * One agent's plugins on a machine. An agent with marketplaces (Claude Code)
  * gets two views — what is installed, with its marketplaces, and the catalog
- * to install from; one without (OpenCode) installs by package name. Pure —
+ * to install from; one without installs by what its driver names (a package,
+ * a source). Pure —
  * the caller supplies the machine and a dispatcher — so it renders the same
  * in a snapshot.
  */
@@ -158,7 +159,7 @@ private fun InstalledView(
                 Text("No plugins installed", color = Tokens.Text, fontSize = Tokens.TextLg)
                 Text(
                     if (marketplaces != null) "Plugins add commands, skills, agents and hooks to every session on this machine."
-                    else "Plugins are npm packages that extend every session on this machine.",
+                    else "Plugins extend every session on this machine.",
                     color = Tokens.TextMuted,
                     fontSize = Tokens.TextSm,
                 )
@@ -188,9 +189,8 @@ private fun InstalledView(
     }
 }
 
-/** An installed plugin; opened, where it came from and what to do with it.
- *  One from a marketplace can be updated, and what the update did shows
- *  here, where it was asked for. */
+/** An installed plugin; opened, where it came from and what to do with it:
+ *  update it, and see here what the update did, or uninstall it. */
 @Composable
 private fun InstalledRow(
     p: UniffiInstalledPlugin,
@@ -213,7 +213,7 @@ private fun InstalledRow(
         if (origin.isNotEmpty()) Text(origin.joinToString(", "), color = Tokens.TextDim, fontSize = Tokens.TextXs, modifier = Modifier.padding(top = 4.dp))
         notice?.let { Text(it, color = Tokens.Success, fontSize = Tokens.TextXs, modifier = Modifier.padding(top = 2.dp)) }
         Row(Modifier.padding(top = 2.dp)) {
-            if (p.marketplace != null) QuietButton(if (busy) "Updating…" else "Update", onClick = { act("update", p.id) }, enabled = !busy)
+            QuietButton(if (busy) "Updating…" else "Update", onClick = { act("update", p.id) }, enabled = !busy)
             QuietButton("Uninstall", onClick = onUninstall, danger = true, enabled = !busy)
         }
     }
@@ -273,16 +273,15 @@ private fun MarketplaceRow(m: UniffiPluginMarketplace, busy: Boolean, onUpdate: 
     }
 }
 
+/** Install by what the agent takes instead of a marketplace pick; the
+ *  placeholder and the footer are the agent's own words for it. */
 @Composable
 private fun PackageInstall(plugins: UniffiAgentPlugins, act: (String, String) -> Unit) {
     var name by remember { mutableStateOf("") }
-    Group(
-        title = "Install a plugin",
-        footer = "It is installed from npm the next time OpenCode loads. Changing its plugins reloads OpenCode, which restarts its running sessions.",
-    ) {
+    Group(title = "Install a plugin", footer = plugins.installNote) {
         GroupBody {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
-                Field(name, { name = it }, Modifier.weight(1f), placeholder = "npm package name", mono = true)
+                Field(name, { name = it }, Modifier.weight(1f), placeholder = plugins.installHint ?: "Package name", mono = true)
                 val installing = name.trim() in plugins.busy
                 SecondaryButton(if (installing) "Installing…" else "Install", onClick = {
                     act("install", name.trim())

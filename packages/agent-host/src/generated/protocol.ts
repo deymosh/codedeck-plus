@@ -1362,6 +1362,17 @@ export type HostMessage_Deserialize =
 	toggles?: boolean,
 	available?: AvailablePlugin_Deserialize[] | null,
 	/**
+	 *  What `install` takes, as the install field's placeholder, for an
+	 *  agent without marketplaces; absent otherwise.
+	 */
+	installHint?: string | null,
+	/**
+	 *  One sentence on where an install comes from and how a change
+	 *  reaches sessions, for an agent without marketplaces; absent
+	 *  otherwise.
+	 */
+	installNote?: string | null,
+	/**
 	 *  After a `plugin-action`, what was done in the agent's own words,
 	 *  when it says (e.g. an update's from/to versions).
 	 */
@@ -1497,6 +1508,17 @@ export type HostMessage_Serialize =
 	marketplaces?: PluginMarketplace[] | null,
 	toggles?: boolean,
 	available?: AvailablePlugin_Serialize[] | null,
+	/**
+	 *  What `install` takes, as the install field's placeholder, for an
+	 *  agent without marketplaces; absent otherwise.
+	 */
+	installHint?: string | null,
+	/**
+	 *  One sentence on where an install comes from and how a change
+	 *  reaches sessions, for an agent without marketplaces; absent
+	 *  otherwise.
+	 */
+	installNote?: string | null,
 	/**
 	 *  After a `plugin-action`, what was done in the agent's own words,
 	 *  when it says (e.g. an update's from/to versions).

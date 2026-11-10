@@ -720,6 +720,12 @@ pub struct UniffiAgentPlugins {
     pub marketplaces: Option<Vec<UniffiPluginMarketplace>>,
     /// A plugin can be switched off without uninstalling it.
     pub toggles: bool,
+    /// What the install field takes, as its placeholder, for an agent without
+    /// marketplaces; the agent's own wording.
+    pub install_hint: Option<String>,
+    /// One sentence on where an install comes from and how a change reaches
+    /// sessions, for an agent without marketplaces.
+    pub install_note: Option<String>,
     /// What the marketplaces offer, once asked for with `available`.
     pub available: Option<Vec<UniffiAvailablePlugin>>,
     /// Why the last list could not be read (the lists held are kept).
@@ -754,6 +760,8 @@ fn to_uniffi_agent_plugins(agent: &str, p: &AgentPlugins) -> UniffiAgentPlugins 
                 .collect()
         }),
         toggles: p.toggles,
+        install_hint: p.install_hint.clone(),
+        install_note: p.install_note.clone(),
         available: p.available.as_ref().map(|list| {
             list.iter()
                 .map(|a| UniffiAvailablePlugin {

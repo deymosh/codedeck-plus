@@ -509,6 +509,14 @@ pub struct AgentPlugins {
     /// A plugin can be switched off without uninstalling it.
     #[serde(default)]
     pub toggles: bool,
+    /// What `install` takes, as the install field's placeholder, for an
+    /// agent without marketplaces; the driver's wording, absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_hint: Option<String>,
+    /// One sentence on where an install comes from and how a change reaches
+    /// sessions, for an agent without marketplaces; absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_note: Option<String>,
     /// What the marketplaces offer, once asked for; never an installed one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub available: Option<Vec<AvailablePlugin>>,
@@ -1223,6 +1231,8 @@ impl MachinesState {
             p.installed = msg.installed.clone();
             p.marketplaces = msg.marketplaces.clone();
             p.toggles = msg.toggles;
+            p.install_hint = msg.install_hint.clone();
+            p.install_note = msg.install_note.clone();
             if let Some(available) = &msg.available {
                 p.available = Some(available.clone());
             }
@@ -2415,6 +2425,8 @@ mod tests {
             installed,
             marketplaces: Some(vec![]),
             toggles: true,
+            install_hint: None,
+            install_note: None,
             available,
             error: error.map(str::to_string),
         };
@@ -2457,6 +2469,24 @@ mod tests {
         // A failed read keeps what is held.
         st.apply_plugins("pk", &msg(vec![], None, Some("no claude")));
         assert_eq!((held(&st).installed.len(), held(&st).error), (2, Some("no claude".into())));
+
+        // The driver's install wording is replaced by each list, exactly like
+        // the rest of the state; a list without it clears what was held.
+        st.apply_plugins("pk", &PluginsMsg {
+            agent: "claude-code".into(),
+            installed: vec![],
+            marketplaces: None,
+            toggles: false,
+            install_hint: Some("npm package name".into()),
+            install_note: Some("Installed from npm; sessions pick it up at their next start.".into()),
+            available: None,
+            error: None,
+        });
+        let p = held(&st);
+        assert_eq!(p.install_hint.as_deref(), Some("npm package name"));
+        assert_eq!(p.install_note.as_deref(), Some("Installed from npm; sessions pick it up at their next start."));
+        st.apply_plugins("pk", &msg(vec![], None, None));
+        assert_eq!((held(&st).install_hint, held(&st).install_note), (None, None));
 
         let back = hydrate_machines(Some(&serialize_machines(&st.machines)));
         assert!(back["pk"].plugins.is_empty());
@@ -2548,7 +2578,16 @@ mod tests {
         // The machine is back: its lists and a sign-in answer arrive.
         st.apply_plugins(
             "pk",
-            &PluginsMsg { agent: "claude-code".into(), installed: vec![], marketplaces: None, toggles: false, available: None, error: None },
+            &PluginsMsg {
+                agent: "claude-code".into(),
+                installed: vec![],
+                marketplaces: None,
+                toggles: false,
+                install_hint: None,
+                install_note: None,
+                available: None,
+                error: None,
+            },
         );
         st.apply_mcp("pk", &McpServersMsg { agent: "claude-code".into(), servers: vec![], toggles: false, error: None });
         st.apply_account_sign_in(

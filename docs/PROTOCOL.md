@@ -498,6 +498,13 @@ plugins on the bridge's machine (all its sessions share them):
   marketplaces — it installs plugins by package name — sends no
   `marketplaces`; `toggles` says whether a plugin can be switched off without
   uninstalling it. A list that could not be read comes empty, with `error`.
+  Such an agent may also write `installHint` and `installNote`, both optional
+  driver text carried unchanged, so the phone can word its install form
+  without knowing which agent it is: `installHint` is what `install` takes,
+  shown as the field's placeholder (e.g. "npm package name"), and
+  `installNote` is one sentence on where an install comes from and how a
+  change reaches sessions. Both are meaningful only when `marketplaces` is
+  absent.
 - `plugin-action {agent, action, target}` → `plugin-ack {agent, action,
   target, success, error?, message?}`, then (when done) the new `plugins`, to
   every phone — with the fresh `available` when the change was to a
@@ -509,9 +516,10 @@ plugins on the bridge's machine (all its sessions share them):
   `remove-marketplace`, `update-marketplace` (target: its name). The bridge
   refuses a target that is empty, starts with `-` or holds control
   characters. `message` is what was done, in the agent's words, when it says
-  (e.g. an update's from/to versions). A change reaches running sessions:
-  Claude Code reloads its plugins in place; OpenCode reloads, restarting its
-  running sessions.
+  (e.g. an update's from/to versions). How a change reaches sessions is the
+  agent's: Claude Code reloads its plugins in place; OpenCode reloads,
+  restarting its running sessions; Qwen Code loads its extensions as a
+  process starts, so sessions started after the change have it.
 
 ### `mcp`
 
@@ -914,8 +922,8 @@ The bridge's ids are `b1, b2, …`; the host's are `h1, h2, …`.
 | `get-usage {sessionId}` | `usage {usage?}`: plan limits, the session's cost, and `context?` — what fills its window (`usedTokens`, `windowTokens`, `categories[{name, tokens, kind: used\|free\|buffer\|deferred}]`, `groups[{name, tokens, items[{name, tokens}]}]`) when the agent can say |
 | `list-commands {sessionId}` | `commands {commands}` |
 | `list-personas {agent, sessionId?}` | `personas {personas}`: the session's, or without one the machine-wide ones |
-| `list-plugins {agent, available?}` | `plugins {installed, marketplaces?, toggles, available?}` |
-| `plugin-action {agent, action, target}` | `plugins {…}` once done (`available?` after a marketplace change, `message?` saying what was done), or `error` with the agent's reason |
+| `list-plugins {agent, available?}` | `plugins {installed, marketplaces?, toggles, installHint?, installNote?, available?}`: an agent without marketplaces may write `installHint` (what `install` takes, as the form's placeholder) and `installNote` (one sentence on where an install comes from and how a change reaches sessions) |
+| `plugin-action {agent, action, target}` | `plugins {…}` once done (`available?` after a marketplace change, `installHint?`/`installNote?` as on `list-plugins`, `message?` saying what was done), or `error` with the agent's reason |
 | `list-mcp {agent}` | `mcp-servers {servers, toggles}` |
 | `mcp-action {agent, action, servers?, names?}` | `mcp-servers {…}` once done, or `error` with the agent's reason |
 | `session-mcp {sessionId}` | `session-mcp {servers, toggles, projectWide}` |
