@@ -63,7 +63,7 @@ function withPlugins(
 describe('listing', () => {
   it('answers nothing for a profile nobody has touched', async () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'codedeck-dsh-plugins-'));
-    expect(await withPlugins(dir).plugins.list(false)).toEqual({ installed: [], toggles: true });
+    expect(await withPlugins(dir).plugins.list(false)).toMatchObject({ installed: [], toggles: true, installHint: 'npm package name' });
   });
 
   it('shows what is installed, and which of it is a layer', async () => {

@@ -97,11 +97,16 @@ export interface DriverSession {
  *  agent that installs plugins by package name; `toggles`: a plugin can be
  *  switched off without uninstalling it; `available` is present only when
  *  asked for (or when the change touched a marketplace); `message` says what
- *  the last change did, in the agent's words, when it says. */
+ *  the last change did, in the agent's words, when it says. Without
+ *  marketplaces, `installHint` says what `install` takes (the install
+ *  field's placeholder) and `installNote` where an install comes from and
+ *  how a change reaches sessions — the driver's words, since only it knows. */
 export interface PluginState {
   installed: InstalledPlugin[];
   marketplaces?: PluginMarketplace[];
   toggles: boolean;
+  installHint?: string;
+  installNote?: string;
   available?: AvailablePlugin[];
   message?: string;
 }

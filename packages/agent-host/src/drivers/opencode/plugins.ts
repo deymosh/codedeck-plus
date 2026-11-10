@@ -166,6 +166,11 @@ export class OpenCodePlugins implements PluginManager {
         if (state?.status === 'failed') return { ...plugin, enabled: false, error: state.error };
         return plugin;
       });
-    return { installed: plugins, toggles: true };
+    return { installed: plugins, toggles: true, installHint: INSTALL_HINT, installNote: INSTALL_NOTE };
   }
 }
+
+/** What the phone's install form asks for, and what it should know. */
+const INSTALL_HINT = 'npm package name';
+const INSTALL_NOTE =
+  'It is installed from npm the next time OpenCode loads. Changing its plugins reloads OpenCode, which restarts its running sessions.';

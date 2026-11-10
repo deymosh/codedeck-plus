@@ -250,7 +250,13 @@ export class DeepSeekPlugins implements PluginManager {
       });
     }
     if (message !== undefined) this.message = message;
-    return { installed, toggles: true, ...(this.message !== undefined ? { message: this.message } : {}) };
+    return {
+      installed,
+      toggles: true,
+      installHint: 'npm package name',
+      installNote: 'It is installed into the harness’s profile by its own pnpm, which has to be on the bridge’s PATH.',
+      ...(this.message !== undefined ? { message: this.message } : {}),
+    };
   }
 
   /**

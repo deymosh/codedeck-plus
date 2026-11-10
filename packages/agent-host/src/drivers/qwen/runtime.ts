@@ -50,6 +50,26 @@ export function qwenCommand(entry: string, args: string[]): { command: string; a
   return /\.[cm]?js$/i.test(entry) ? { command: process.execPath, args: [entry, ...args] } : { command: entry, args };
 }
 
+/**
+ * How many times the configuration a Qwen Code process loads as it starts —
+ * its MCP servers, its extensions — has changed. A process records the value
+ * as it starts, so a later change is one it has not loaded. One counter for
+ * both, since the pool keys a process on a single number; each manager keeps
+ * the value of its own last change to tell what it alone made stale.
+ */
+export class QwenConfigVersion {
+  private value = 0;
+
+  get current(): number {
+    return this.value;
+  }
+
+  /** Record a change; the value after it. */
+  bump(): number {
+    return ++this.value;
+  }
+}
+
 export interface QwenRuntimeOptions {
   /** An operator-provided CLI entry point (a `qwen` they installed and want
    *  used, `CODEDECK_QWEN_PATH`); wins over the installed tree. */
@@ -65,8 +85,8 @@ export interface QwenRuntimeOptions {
   spawnFn?: SpawnFn;
   /** How long a process outlives its last session (0 to close at once). */
   idleCloseMs?: number;
-  /** The MCP servers' version: a session asking after a change gets a
-   *  process started since, which has loaded them. */
+  /** The configuration's version (QwenConfigVersion): a session asking
+   *  after a change gets a process started since, which has loaded it. */
   configVersion?: () => number;
 }
 

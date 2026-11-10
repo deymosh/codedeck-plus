@@ -34,6 +34,8 @@ describe('OpenCode plugins', () => {
         { id: 'off-plugin', name: 'off-plugin', enabled: false },
       ],
       toggles: true,
+      installHint: 'npm package name',
+      installNote: expect.stringContaining('restarts its running sessions'),
     });
     expect(toInstalledPlugin('@acme/oc-plugin')).toEqual({ id: '@acme/oc-plugin', name: '@acme/oc-plugin', enabled: true });
   });
