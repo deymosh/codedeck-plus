@@ -444,6 +444,9 @@ impl Engine {
         let mut run = Runner::new(Phase::Pending, StartKind::Create, false);
         run.pending_persona = persona;
         self.sessions.insert(session_id.clone(), Session { rec, listed: false, run: Some(run) });
+        // Stored as pending, so a restart before the agent answers still
+        // answers the phone.
+        self.registry_dirty = true;
         self.spawn(&session_id);
     }
 

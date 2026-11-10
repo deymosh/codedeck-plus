@@ -38,7 +38,7 @@ use std::collections::BTreeMap;
 use protocol::capabilities::{BridgeHostKind, ALL_BRIDGE_CAPABILITIES, TERMINAL};
 use protocol::common::{OutputEntry, RemoteSessionInfo, SessionState};
 use protocol::crypto::Keypair;
-use protocol::events::{BridgeToPhone, OutputMsg, SessionListMsg, TerminalInfo};
+use protocol::events::{BridgeToPhone, OutputMsg, SessionFailedMsg, SessionListMsg, TerminalInfo};
 
 use crate::catalog::Catalog;
 use crate::ingest::{since_for_connect, CommandsFilter, Ingest};
@@ -196,6 +196,10 @@ pub struct Engine {
     list_rev: u64,
     /// Store the registry once the current input is handled.
     registry_dirty: bool,
+    /// Creations the phone was shown as pending before a restart, which the
+    /// restart ended: answered with `session-failed` at the first heartbeat
+    /// (relays resubscribed by then), and stored until they are.
+    interrupted_creates: Vec<String>,
     /// Only `last_activity` changed since the registry was stored: written
     /// with the next heartbeat (or any structural change, or shutdown) rather
     /// than per output batch — each store rewrites and syncs the whole state
@@ -245,6 +249,7 @@ impl Engine {
             sign_ins: Vec::new(),
             list_rev: 0,
             registry_dirty: false,
+            interrupted_creates: Vec::new(),
             activity_dirty: false,
         }
     }
@@ -338,6 +343,7 @@ impl Engine {
 
         let doc = self.store.get(store_keys::REGISTRY).map(|raw| RegistryDoc::load(&raw)).unwrap_or_default();
         self.tombstones = Tombstones::new(doc.removed_sessions);
+        self.interrupted_creates = doc.pending_creates;
         for rec in doc.sessions {
             // Resumed once the agent host is up.
             let run = Runner::new(Phase::Ready, StartKind::Resume, rec.title.is_some());
@@ -359,6 +365,10 @@ impl Engine {
         self.arm(self.config.retention_interval_ms, TimerKind::Retention);
         self.out.push(Effect::Resubscribe);
         self.list_dirty = true;
+        // Without a heartbeat there is no later point to answer them at.
+        if self.config.heartbeat_interval_ms == 0 {
+            self.answer_interrupted_creates();
+        }
     }
 
     /// End every session, publish the offline heartbeat, stop.
@@ -399,6 +409,7 @@ impl Engine {
         let Some(kind) = self.out.take_timer(id) else { return };
         match kind {
             TimerKind::Heartbeat => {
+                self.answer_interrupted_creates();
                 self.prune_session_keys();
                 self.forget_gone_devices();
                 self.persist_cursor();
@@ -584,12 +595,30 @@ impl Engine {
         }
     }
 
+    /// A restart ends a creation still in flight (no runner survives it), so
+    /// each one the phone was shown as pending is answered as failed.
+    fn answer_interrupted_creates(&mut self) {
+        if self.interrupted_creates.is_empty() {
+            return;
+        }
+        for session_id in std::mem::take(&mut self.interrupted_creates) {
+            log::info!("[Engine] Session {session_id} was still starting when the bridge restarted");
+            self.publish_all(BridgeToPhone::SessionFailed(SessionFailedMsg {
+                pending_id: session_id,
+                reason: "The bridge restarted before the session started. Create it again.".to_string(),
+            }));
+        }
+        self.registry_dirty = true;
+    }
+
     fn persist_registry(&mut self) {
         self.registry_dirty = false;
         self.activity_dirty = false;
+        let pending = self.sessions.values().filter(|s| !s.listed).map(|s| s.rec.session_id.clone());
         let doc = RegistryDoc {
             sessions: self.sessions.values().filter(|s| s.listed).map(|s| s.rec.clone()).collect(),
             removed_sessions: self.tombstones.stored(),
+            pending_creates: self.interrupted_creates.iter().cloned().chain(pending).collect(),
         };
         let json = serde_json::to_string(&doc).expect("the registry serializes");
         if let Err(err) = self.store.set(store_keys::REGISTRY, &json) {

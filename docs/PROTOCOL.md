@@ -142,7 +142,9 @@ shared by every bridge that runs it.
   `session-pending {pendingId}` → `session-ready {pendingId, session}` /
   `session-failed {pendingId, reason}`. The bridge uses the future sessionId as
   the pendingId; a pending placeholder is also resolved by the session simply
-  appearing in a heartbeat's `sessions[]`.
+  appearing in a heartbeat's `sessions[]`. A bridge that restarts while a
+  creation is pending answers it with `session-failed` at its first
+  heartbeat.
 - **Ordering:** each `sessions` list carries `rev`, strictly greater than the
   last one the bridge published (its clock in ms, kept ahead of the stored
   last one, so a restart or a clock set back cannot lower it). The same list

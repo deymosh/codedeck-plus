@@ -64,7 +64,7 @@ fn a_representative_engine_state_survives_a_reopen() {
     };
     let values = [
         (store_keys::PAIRED_PHONES, serde_json::to_string(&vec![phone]).unwrap()),
-        (store_keys::REGISTRY, serde_json::to_string(&RegistryDoc { sessions: vec![record("s1"), record("s2")], removed_sessions: vec![Tombstone { id: "s0".into(), removed_at: 1_800_000_000_000 }] }).unwrap()),
+        (store_keys::REGISTRY, serde_json::to_string(&RegistryDoc { sessions: vec![record("s1"), record("s2")], removed_sessions: vec![Tombstone { id: "s0".into(), removed_at: 1_800_000_000_000 }], pending_creates: vec![] }).unwrap()),
         (store_keys::LAST_SEEN, "1800000000".into()),
         (store_keys::PROCESSED_IDS, serde_json::to_string(&["ev1", "ev2", "ev3"]).unwrap()),
         (store_keys::LIST_REV, "1800000123".into()),
