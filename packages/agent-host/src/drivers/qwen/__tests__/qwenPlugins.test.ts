@@ -67,8 +67,10 @@ describe.skipIf(entry === null)('Qwen Code extensions through the real CLI', () 
     expect(config.current).toBe(1);
 
     expect((await manager.act('disable', 'ctx-ext')).installed[0]?.enabled).toBe(false);
-    // The rule covers every path, not only the home directory's.
-    if (process.platform !== 'win32') expect(rules('ctx-ext')).toEqual(['!/*']);
+    // The rule covers every path (on Windows, the drive's), not only the home
+    // directory's.
+    const drive = path.parse(path.resolve(home)).root.replace(/\\/g, '/');
+    expect(rules('ctx-ext')).toEqual([process.platform === 'win32' ? `!/${drive}*` : '!/*']);
     expect(config.current).toBe(2);
     // Switching off what is off leaves the warm process alone.
     await manager.act('disable', 'ctx-ext');
@@ -141,5 +143,8 @@ describe('Qwen Code extensions, scripted', () => {
     expect(enabledEverywhere(['!/*', '/*'])).toBe(true);
     // The terminal's own disable covers the home directory only.
     expect(enabledEverywhere(['/*', '!/home/me/*'])).toBe(true);
+    // Windows: a drive root, as Qwen Code writes it.
+    expect(enabledEverywhere(['!/D:/*'])).toBe(false);
+    expect(enabledEverywhere(['/*', '!/D:/Users/me/*'])).toBe(true);
   });
 });

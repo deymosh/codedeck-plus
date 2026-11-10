@@ -116,8 +116,9 @@ export function actionArgs(action: PluginAction, target: string): string[] | und
   }
 }
 
-/** Is a rule one over every path: `/*`, or a drive root's on Windows? */
-const ROOT_RULE = /^(?:[A-Za-z]:)?[\\/]\*$/;
+/** Is a rule one over every path: `/*`, or a drive root's on Windows, which
+ *  Qwen Code writes with its slashes forward and a leading one (`/C:/*`)? */
+const ROOT_RULE = /^\/(?:[A-Za-z]:\/)?\*$/;
 
 /**
  * Is an extension on for the whole machine? The last rule over every path

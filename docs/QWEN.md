@@ -66,7 +66,9 @@ directory, since the CLI prints its list as text only.
 - **Switching one off** turns it off in every workspace on the machine. Qwen
   Code's own `disable` only covers workspaces under your home directory (it
   writes the rule `!$HOME/*`), which would leave it loading in the image's
-  `/data/workspaces`; the phone writes `!/*` instead. A narrower rule you set
+  `/data/workspaces`; the phone writes `!/*` instead (on Windows, the root of
+  the drive `$QWEN_HOME` is on, such as `!/C:/*`, so a workspace on another
+  drive is not covered). A narrower rule you set
   in a terminal (`--scope workspace`) still applies, but the phone's switch
   shows only the machine-wide one.
 - **Update** runs `qwen extensions update <name>`, and the row shows what it
