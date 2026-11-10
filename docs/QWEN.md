@@ -81,10 +81,27 @@ directory, since the CLI prints its list as text only.
 Qwen Code's marketplace `sources` (Claude-format marketplaces) are not on the
 phone: the CLI has no way to list what a source offers.
 
+## Background shells
+
+When Qwen Code runs a command in the background (`run_shell_command` with
+`is_background`, for a dev server or a watcher), the session shows it as a
+background task: running once it starts, then completed, failed or stopped,
+with Qwen Code's own words for how it ended. Stopping it from the phone uses
+Qwen Code's own task cancel. Its output stays in the file Qwen Code writes
+(the shell's tool result names it); the phone does not stream it.
+
+When a background shell ends, Qwen Code tells the model in a turn of its own,
+which the phone shows as the agent working. That turn is a model request
+like any other and is billed as one. A shell that ends before the turn that
+started it is reported within that turn. A message sent during that turn
+cuts it short — Qwen Code drops the rest of its reply and answers the
+message — and so does Stop. A shell that ends after its session was closed
+starts no turn (no request is made): Qwen Code keeps the result for the
+conversation's next message while its process runs.
+
 ## What this does not have
 
 - **No subscription usage** to ask for (the context meter still works).
-- **No background tasks.**
 
 ## Offline and container notes
 
