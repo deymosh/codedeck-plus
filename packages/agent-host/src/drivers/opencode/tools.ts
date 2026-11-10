@@ -14,7 +14,7 @@
  * flattened name, which is why none of them is listed here: a version that
  * starts emitting one is a new name, and the unknown-name log says so.
  *
- * The names are the ones the 2.1.4 sources register (`editor.add({name, …})`
+ * The names are the ones the 2.2.7 sources register (`editor.add({name, …})`
  * in `packages/core/src/tool/plugin/*.ts`, and the `execute` tool out of
  * `packages/core/src/codemode`). `__tests__/opencodeTools.test.ts` holds this
  * table against the list recorded from them.
@@ -72,6 +72,9 @@ export const OPENCODE_TOOLS: ToolDialects = {
   // The session's todo list; registered only while the config sets
   // `experimental.todo`.
   todowrite: { kind: ToolKind.Think },
+  // Starts an image job (the image lands in the workspace when it finishes);
+  // registered while the catalog holds an image model.
+  experimental_image_generate: { kind: ToolKind.Other, title: (input) => oneLine(str(input.prompt)), detail: (input) => str(input.prompt) },
 };
 
 /** Read one of this agent's tool calls. `report` is told a name this table

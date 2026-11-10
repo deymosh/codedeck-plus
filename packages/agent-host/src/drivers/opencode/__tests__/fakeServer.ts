@@ -3,8 +3,12 @@
  *
  * Behaviour verified against OpenCode 2.1.4 on 2026-10-27; re-probe on a
  * version bump (`packages/agent-host/tools/fake-model.mjs` for a real
- * session, throwaway XDG dirs and `serve --port=0` for the rest). What the
- * probes established, and this fake therefore states:
+ * session, throwaway XDG dirs and `serve --port=0` for the rest). For 2.2.7
+ * (2026-11-10) the client types and server handlers behind these answers
+ * were diffed and found unchanged — except that `integration.list` now
+ * leaves out integrations a config policy denies, which no probe here sets —
+ * and a fake-model session (a turn, a tool call, its permission, a question)
+ * ran. What the probes established, and this fake therefore states:
  *
  *  - `provider.list` lists only the providers the server can use, and an
  *    empty list for the first moments after it starts (registration); the
