@@ -49,6 +49,7 @@ import { qwenUpdateToEntries } from './adapter';
 import { deleteQwenConversation } from './conversations';
 import { QwenMcp } from './mcp';
 import { mergeQwenSettings, qwenProviderEnv, qwenSettingsKey, QwenSettingsFile } from './settings';
+import { END_TURN_METHOD, QwenBackgroundTasks, START_TURN_METHOD, TURN_REFUSED } from './tasks';
 import { qwenTool } from './tools';
 import { QWEN_LABEL } from './install';
 import { qwenCli, QwenPlugins } from './plugins';
@@ -92,6 +93,9 @@ const EFFORT_CONFIG_ID = 'reasoning_effort';
 /** The extension request Qwen Code sends before a tool batch, offering the
  *  client the messages a user typed while the turn ran. */
 const MID_TURN_DRAIN_METHOD = 'craft/drainMidTurnQueue';
+
+/** Qwen Code's own cancel for a background task, by its id and kind. */
+const TASK_CANCEL_METHOD = 'qwen/control/session/task/cancel';
 
 /** The environment names that would let the machine's own OpenAI/Qwen setup
  *  outrank the provider profiles this driver writes into Qwen Code's settings.
@@ -145,6 +149,8 @@ export class QwenSession extends AcpSession<undefined, AcpProcessEvents, QwenSes
   private sessionMode: string;
   /** The slash commands the agent last listed, by name. */
   private commands: SlashCommand[] = [];
+  /** The background shells this session started, and their ends. */
+  private readonly background = new QwenBackgroundTasks();
   /** Messages typed while a turn ran, waiting for the agent's next drain. */
   private readonly midTurn: string[] = [];
   /** Slash lines steered into the running turn: they cannot join it, so they
@@ -178,7 +184,34 @@ export class QwenSession extends AcpSession<undefined, AcpProcessEvents, QwenSes
       );
       return [];
     }
-    return qwenUpdateToEntries(update, calls, this.reportUnknownTool);
+    const background = this.background.read(update);
+    if (background.drop) return background.entries;
+    return [...qwenUpdateToEntries(update, calls, this.reportUnknownTool), ...background.entries];
+  }
+
+  /**
+   * Stop a background shell with Qwen Code's own task cancel. Its end then
+   * arrives as for any other (status `cancelled`), which reports it stopped.
+   * A task that ended before the cancel reached it (`not_running`) is not an
+   * error: it is not running, which is what the stop asked for, and its own
+   * end is reported as it came.
+   */
+  async stopTask(taskId: string): Promise<void> {
+    await this.ready;
+    const sessionId = this.nativeId;
+    if (sessionId === undefined || this.ended) throw new Error('The session has ended.');
+    const taskKind = this.background.agentKindOf(taskId) ?? 'shell';
+    const result = (await this.client.extRequest(TASK_CANCEL_METHOD, { sessionId, taskId, taskKind })) as {
+      cancelled?: unknown;
+      reason?: unknown;
+    } | null;
+    if (result?.cancelled !== true && result?.reason !== 'not_running') {
+      throw new Error(
+        result?.reason === 'not_found'
+          ? `${QWEN_LABEL} has no running task ${taskId}.`
+          : `${QWEN_LABEL} did not stop the task${typeof result?.reason === 'string' ? ` (${result.reason})` : ''}.`,
+      );
+    }
   }
 
   protected override autoApprove(): boolean {
@@ -342,11 +375,29 @@ export class QwenSession extends AcpSession<undefined, AcpProcessEvents, QwenSes
    * prompt starts.
    */
   protected override async handleExtRequest(method: string, params: Record<string, unknown>): Promise<unknown> {
-    if (method !== MID_TURN_DRAIN_METHOD) return undefined;
     if (params.sessionId !== this.nativeId) return undefined;
+    if (method === START_TURN_METHOD) {
+      // Qwen Code asks before a turn of its own (telling the model a
+      // background task ended); admitted, and shown as the agent working —
+      // unless the session is ending, when nobody would see the turn the
+      // model is asked for.
+      if (this.ended) return TURN_REFUSED;
+      this.beginAgentTurn();
+      return { accepted: true };
+    }
+    if (method !== MID_TURN_DRAIN_METHOD) return undefined;
     // Answered from an in-memory queue, so it must resolve at once: the agent
     // waits two seconds and latches the drain off after three timeouts.
     return { messages: this.midTurn.splice(0), hasQueuedPrompt: this.queuedAfterTurn > 0 };
+  }
+
+  /** The bracket of a turn Qwen Code runs by itself: `_qwencode/start_turn`
+   *  also arrives as a notification (for its goal turns), and
+   *  `_qwencode/end_turn` always does. */
+  protected override handleExtNotification(method: string, params: Record<string, unknown>): void {
+    if (params.sessionId !== this.nativeId) return;
+    if (method === START_TURN_METHOD) this.beginAgentTurn();
+    else if (method === END_TURN_METHOD) this.endAgentTurn();
   }
 
   // --- the model and the session's own state ---
@@ -607,7 +658,7 @@ export class QwenDriver implements Driver {
         commands: true,
         plugins: true,
         mcp: true,
-        tasks: false,
+        tasks: true,
       },
       credentials: [],
       style: QWEN_STYLE,

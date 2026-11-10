@@ -223,4 +223,60 @@ live('Qwen Code against the fake model', () => {
     },
     TURN_MS,
   );
+
+  /** The `background_task` entries so far, in order. */
+  const tasks = (ctx: ReturnType<typeof recordingContext>) => ctx.entries().filter((e) => e.entryType === 'background_task');
+  const turns = (ctx: ReturnType<typeof recordingContext>) =>
+    ctx.events.filter((e) => e.type === 'turn').map((e) => (e as { state: string }).state);
+
+  it(
+    'reports a background shell running, then how it ended, with the turn the agent runs about it',
+    async () => {
+      const ctx = start({}, { mode: 'yolo' });
+      // `/background` runs `run_shell_command` with `is_background`: the turn
+      // ends while the shell runs, and Qwen Code tells the model when it is
+      // done, in a turn of its own. (A shell that ends before the turn does
+      // is told within that turn, which then shows as one.)
+      // Node, not a shell builtin: on Windows Qwen Code runs a command in
+      // `%ComSpec%` (cmd.exe `/d /s /c`, verbatim) unless Git Bash's
+      // MSYSTEM/TERM are set. The script has no spaces and no shell
+      // metacharacters, so bash, cmd and PowerShell all pass it to node whole —
+      // whether or not cmd strips the surrounding quotes.
+      const command = `node -e "setTimeout(function(){console.log('codedeck-bg');process.exit(3)},2000)"`;
+      await turn(ctx, `/background ${command}`);
+      expect(tasks(ctx)[0]).toMatchObject({ status: 'running', kind: 'shell', title: command, callId: 'call_fake_1' });
+      const taskId = (tasks(ctx)[0] as { taskId: string }).taskId;
+      await ctx.waitFor(() => turns(ctx).length >= 4, TURN_MS);
+      expect(tasks(ctx)).toHaveLength(2);
+      expect(tasks(ctx)[1]).toMatchObject({ taskId, status: 'failed', summary: expect.stringContaining('failed') });
+      // The prompted turn, then the agent's own: each shown running, then idle.
+      expect(turns(ctx)).toEqual(['running', 'idle', 'running', 'idle']);
+      // The end is said once — as the task — not again as agent text; the
+      // model's reply to it is the conversation.
+      const agentText = ctx.entries().filter((e) => e.entryType === 'text' && e.role === 'agent').map((e) => (e as { text: string }).text);
+      expect(agentText.filter((text) => text.startsWith('Background shell'))).toEqual([]);
+      expect(agentText.some((text) => text.startsWith('echo: <task-notification>'))).toBe(true);
+    },
+    TURN_MS,
+  );
+
+  it(
+    'stops a background shell with Qwen Code’s own cancel',
+    async () => {
+      const ctx = start({}, { mode: 'yolo' });
+      // A minute of node, for the same reason as above: `sleep` is no command
+      // in cmd.exe, whose shell would end at once.
+      await turn(ctx, `/background node -e "setTimeout(function(){},60000)"`);
+      const taskId = (tasks(ctx)[0] as { taskId: string }).taskId;
+      await session!.stopTask!(taskId);
+      await ctx.waitFor(() => tasks(ctx).length >= 2, TURN_MS);
+      expect(tasks(ctx)[1]).toMatchObject({ taskId, status: 'stopped' });
+      // A Stop that reaches a task as it ends finds it already over (Qwen
+      // Code: `not_running`): what it asked for is so, and its end is
+      // reported on its own.
+      await expect(session!.stopTask!(taskId)).resolves.toBeUndefined();
+      await expect(session!.stopTask!('bg_unknown')).rejects.toThrow(/no running task/);
+    },
+    TURN_MS,
+  );
 });
