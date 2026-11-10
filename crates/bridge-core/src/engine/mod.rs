@@ -365,6 +365,10 @@ impl Engine {
         self.arm(self.config.retention_interval_ms, TimerKind::Retention);
         self.out.push(Effect::Resubscribe);
         self.list_dirty = true;
+        // Without a heartbeat there is no later point to answer them at.
+        if self.config.heartbeat_interval_ms == 0 {
+            self.answer_interrupted_creates();
+        }
     }
 
     /// End every session, publish the offline heartbeat, stop.

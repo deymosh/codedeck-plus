@@ -105,12 +105,19 @@ fn a_create_pending_at_a_restart_is_answered_not_lost() {
     rig.host_up();
     rig.advance(60_000);
     let msgs = rig.messages();
-    let failed = msgs.iter().any(|m| matches!(m, BridgeToPhone::SessionFailed(f) if f.pending_id == pending));
-    let heartbeat = last_heartbeat(&msgs);
-    let listed = heartbeat.sessions.iter().any(|s| s.id == pending);
-    let removed = heartbeat.removed_sessions.as_deref().unwrap_or_default().contains(&pending);
+    // The placeholder resolves only through session-failed: an id that
+    // merely showed up in a list or a tombstone would leave it waiting.
     assert!(
-        failed || listed || removed,
+        msgs.iter().any(|m| matches!(m, BridgeToPhone::SessionFailed(f) if f.pending_id == pending)),
         "the phone was told nothing about pending session {pending}: it saw session-pending before the restart"
+    );
+
+    // Answered once: a later restart does not answer it again.
+    let mut rig = rig.restart();
+    rig.take();
+    rig.advance(60_000);
+    assert!(
+        !rig.messages().iter().any(|m| matches!(m, BridgeToPhone::SessionFailed(f) if f.pending_id == pending)),
+        "pending session {pending} was answered again after a second restart"
     );
 }
