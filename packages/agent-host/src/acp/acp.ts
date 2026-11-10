@@ -84,6 +84,7 @@ export class AcpClient {
   private readonly notifications = new Map<string, (params: never) => void>();
   private readonly requests = new Map<string, (params: never) => Promise<unknown>>();
   private unknownRequest: ((method: string, params: unknown) => Promise<unknown> | undefined) | undefined;
+  private unknownNotification: ((method: string, params: unknown) => void) | undefined;
   /** Agent requests being handled, and who waits for the last answer to be
    *  written: a session ending settles its pending asks and must not let the
    *  connection drop before their replies are on the wire. */
@@ -167,6 +168,17 @@ export class AcpClient {
     }) as Promise<AgentRequestResponsesByMethod[M]>;
   }
 
+  /** Send a request for one of the agent's own extension methods (Qwen
+   *  Code's `qwen/control/session/task/cancel`), which ACP does not define
+   *  and this client cannot type. */
+  extRequest(method: string, params: Record<string, unknown>, options?: { timeoutMs?: number }): Promise<unknown> {
+    return (this.request as (method: string, params: unknown, options?: { timeoutMs?: number }) => Promise<unknown>)(
+      method,
+      params,
+      options,
+    );
+  }
+
   /** Send one notification (no reply follows, by definition). */
   notify<M extends keyof AgentNotificationParamsByMethod>(
     method: M,
@@ -194,6 +206,12 @@ export class AcpClient {
    */
   onUnknownRequest(handler: (method: string, params: unknown) => Promise<unknown> | undefined): void {
     this.unknownRequest = handler;
+  }
+
+  /** Handle a notification whose method no handler was registered for — an
+   *  agent's own extension notification (Qwen Code's `_qwencode/end_turn`). */
+  onUnknownNotification(handler: (method: string, params: unknown) => void): void {
+    this.unknownNotification = handler;
   }
 
   /** Stop reading and end every pending request. Idempotent. */
@@ -275,10 +293,11 @@ export class AcpClient {
   }
 
   private notifyIncoming(method: string, params: unknown): void {
-    const handler = this.notifications.get(method);
+    const handler = (this.notifications.get(method) as ((params: unknown) => void) | undefined) ??
+      (this.unknownNotification ? (p: unknown) => this.unknownNotification!(method, p) : undefined);
     if (!handler) return;
     try {
-      (handler as (params: unknown) => void)(params);
+      handler(params);
     } catch (error) {
       this.log(`${method} handler failed: ${error instanceof Error ? error.message : String(error)}`);
     }

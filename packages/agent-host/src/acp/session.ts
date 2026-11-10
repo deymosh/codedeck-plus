@@ -195,6 +195,9 @@ export abstract class AcpSession<
         update: (notification) => this.onUpdate(notification),
         permission: (request) => this.onPermission(request),
         extRequest: (method, params) => this.handleExtRequest(method, params),
+        extNotification: (method, params) => {
+          if (!this.ended) this.handleExtNotification(method, params);
+        },
       });
       this.deps.live.add(opened.sessionId, this);
       await this.applySelection();
@@ -389,6 +392,32 @@ export abstract class AcpSession<
     void method;
     void params;
     return undefined;
+  }
+
+  /** An extension notification the agent sent for this session. The default
+   *  ignores it, as a notification nobody handles is. */
+  protected handleExtNotification(method: string, params: Record<string, unknown>): void {
+    void method;
+    void params;
+  }
+
+  /**
+   * A turn the agent started by itself, with no prompt of this session's (a
+   * background task's completion it reacts to): the phone shows the agent
+   * working, as for a prompted turn. Nothing to do while a turn is open — a
+   * prompted turn already shows it, and its end ends both.
+   */
+  protected beginAgentTurn(): void {
+    if (this.ended || this.turnOpen) return;
+    this.turnOpen = true;
+    this.ctx.emit({ type: 'turn', state: 'running' });
+  }
+
+  /** The end of a turn `beginAgentTurn` opened; a prompted turn still in
+   *  flight is left to its prompt to end. */
+  protected endAgentTurn(): void {
+    if (this.ended || !this.turnOpen || this.promptInFlight) return;
+    this.endTurn();
   }
 
   /** How full the context is, over the window the agent reports. */
