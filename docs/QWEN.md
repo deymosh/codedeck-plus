@@ -27,6 +27,12 @@ never touches the file (anything on the machine can read it): the file names
 an environment variable, `CODEDECK_QWEN_KEY_<hash>`, that only the session's
 own process carries.
 
+Qwen Code keeps its own memory of your conversations, as it does in a
+terminal: after each turn it sends the provider one more request to pick
+out what is worth remembering, so a turn costs that request too. Set
+`memory.enableManagedAutoMemory` to `false` in that `settings.json` to turn
+it off; the driver leaves the setting alone.
+
 ## Modes and reasoning
 
 Qwen Code's own approval modes: Ask (`default`), Auto edit, Plan, Auto (an

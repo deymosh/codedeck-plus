@@ -21,7 +21,7 @@
     "@agentclientprotocol/sdk": "^2.0.2",
     "@deepseek-ai/dsh": "0.2.1-rc.2",
     "@opencode/cli": "2.2.7",
-    "@qwen-code/qwen-code": "0.26.1",
+    "@qwen-code/qwen-code": "0.27.1",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.10.0",
     "esbuild": "^0.25.0",

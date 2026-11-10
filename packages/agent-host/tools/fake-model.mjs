@@ -204,8 +204,11 @@ function readContent(content) {
       } else if (typeof block?.text === 'string') texts.push(block.text);
     }
   }
+  // A reminder can come with a lead-in line of its own, outside the
+  // delimiters (Qwen Code's memory catalog: "Current memory catalog …:"
+  // then the reminder), which is part of it, not the user's words.
   const stripped = texts
-    .map((text) => text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim())
+    .map((text) => text.replace(/(?:^[^\n]*:\n)?<system-reminder>[\s\S]*?<\/system-reminder>/gm, '').trim())
     .filter((text) => text !== '');
   return { text: stripped.join('\n'), own: stripped[0] ?? '', results };
 }
