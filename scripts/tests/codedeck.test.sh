@@ -383,6 +383,23 @@ TEST="dev --timeout needs a number"
 run -- dev --timeout soon cargo test
 expect_code 2
 
+# --- The Android command's own output. ---
+
+TEST="android keeps Gradle's output in a log, and prints it with --verbose"
+reset_repo
+run -- android lint
+expect_code 0
+expect_no_out "gradlew: ran"
+if grep -q "gradlew: ran lintDebug" "$REPO/dist/logs/android.log"; then ok; else fail "no dist/logs/android.log"; fi
+run -- android lint --verbose
+expect_out "gradlew: ran lintDebug"
+
+TEST="a failing Gradle run prints the end of its log and fails"
+run STUB_FAIL=lintDebug -- android lint
+expect_code 3
+expect_out "Gradle FAILED (exit 3)"
+expect_out "the stub was told to fail on 'lintDebug'"
+
 # --- Worktrees. ---
 
 # A path as the script hands it to a native program (C:/… under Git Bash).
