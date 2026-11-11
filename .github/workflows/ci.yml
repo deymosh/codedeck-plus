@@ -276,11 +276,21 @@ jobs:
           workspaces: .
           save-if: ${{ github.ref == 'refs/heads/master' }}
 
+      # `cache: gradle` keeps Gradle's distribution and dependency cache
+      # between runs, keyed on the Gradle files: this job's Gradle step is the
+      # longest in the workflow, and the first part of it is downloading
+      # both. A run whose Gradle files are master's restores master's cache
+      # and saves nothing, so pull requests do not crowd the cache quota.
       - name: Set up JDK 21
         uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
           java-version: '21'
+          cache: gradle
+          cache-dependency-path: |
+            apps/android/**/*.gradle*
+            apps/android/**/gradle-wrapper.properties
+            apps/android/gradle/libs.versions.toml
 
       # `ubuntu-latest` runners ship with an Android SDK + cmdline-tools
       # already installed at $ANDROID_HOME (release.yml's own "Install NDK"
