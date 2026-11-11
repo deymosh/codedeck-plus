@@ -64,4 +64,19 @@ all = { level = "warn", priority = -1 }
 # out of a foreign callback instead of letting it kill the app.
 [profile.release]
 lto = "thin"
+
+# The dev profile is what every check builds and links: some forty test
+# executables, relinked after any change to a crate the others stand on.
+# Full debug info made them up to 437 MB each. Nothing here runs a debugger
+# over them; what a failing test needs is a backtrace with file and line for
+# this workspace's own frames, which `line-tables-only` keeps. Dependencies
+# carry none (their frames keep their function names). Measured on the
+# Windows GNU toolchain, 10 jobs: a cold test build 96 s to 58-66 s, the
+# target directory 9.3 GB to 3.4-4.6 GB, a rebuild after touching
+# crates/protocol 30 s to 14-19 s.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
 codegen-units = 1
