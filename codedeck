@@ -218,11 +218,14 @@ locally is required; without Docker, or with CODEDECK_ENGINE=local, these run
 on the vendored toolchain instead, installed on first use):
   check                    The bar for a change: the agent host's typecheck,
                            tests and build; clippy, tests and docs for every
-                           crate. Every step runs and is listed at the end
+                           crate, and the host's generated types. Every step
+                           runs and is listed at the end, with its duration
   typecheck                typecheck only (agent host + cargo clippy)
   test                     test only
-    --changed              Only the half (agent host, crates) that differs
-                           from master, by the path rules CI uses
+    --changed              Only the parts that differ from master, by the
+                           path rules CI uses: the agent host, the crates,
+                           and the app (its bindings, tests, snapshots and
+                           lint — which only this option runs)
     --verbose | --quiet    Stream every step's output, or one line per step
                            and the tail of a failure (full output in
                            dist/logs/). Default: stream on a terminal only
@@ -795,6 +798,46 @@ detect_changes() {
   done <<<"$(git diff --name-only "$base"; git ls-files --others --exclude-standard)"
   [ "$CHANGED_HOST" = 1 ] || echo "==> --changed: nothing under the agent host differs from master — skipped"
   [ "$CHANGED_RUST" = 1 ] || echo "==> --changed: no crate differs from master — skipped"
+  [ "$CHANGED_ANDROID" = 1 ] || echo "==> --changed: nothing the app is built from differs from master — skipped"
+}
+
+# One of CI's drift checks, as a step: regenerate <kind> and fail when that
+# changed anything under <path>. The regenerated files stay — they are what
+# the tree should hold — so the failure is one to read, review and commit,
+# and the same step passes on the next run.
+# (Run through `step`, by name: ShellCheck cannot see that call.)
+# shellcheck disable=SC2329
+generated_current() {
+  local kind="$1" path="$2" before after
+  before="$(tree_digest "$path")"
+  (cmd_regen "$kind")
+  after="$(tree_digest "$path")"
+  if [ "$before" != "$after" ]; then
+    echo "$path was stale and has been regenerated: review the change and commit it."
+    return 1
+  fi
+}
+
+# What the files under a path hold, as one comparable string.
+# shellcheck disable=SC2329
+tree_digest() {
+  if [ -e "$1" ]; then find "$1" -type f -exec git hash-object {} + | LC_ALL=C sort; fi
+}
+
+# The app's bar, for a sweep that found its inputs changed: the bindings CI
+# regenerates and compares, then one Gradle run for the mode's tasks (one run,
+# because Gradle's start-up is most of a small task's time).
+android_steps() {
+  local tasks=()
+  case "$1" in
+    typecheck) tasks=(compileDebugUnitTestKotlin) ;;
+    test) tasks=(test verifyPaparazziDebug) ;;
+    check)
+      tasks=(test verifyPaparazziDebug lintDebug)
+      step "android: bindings" generated_current bindings apps/android/app/src/main/java/uniffi || true
+      ;;
+  esac
+  step "android: gradle" bash "$REPO_ROOT/codedeck" android "${tasks[@]}" || true
 }
 
 # Each Docker check in a subshell: start_throwaway's EXIT trap removes that
@@ -817,14 +860,18 @@ run_checks() {
   done
   [ "$changed" = 1 ] && detect_changes
 
-  # Each half on the engine that can run it: a host may have the agent host's
-  # toolchain locally and not the crates' (Windows with CODEDECK_ENGINE=local).
-  # Both are asked before either runs, so a daemon that is down stops the
-  # sweep at the start rather than after its first half.
-  local host_state=0 rust_state=0
+  # Each part on the engine that can run it: a host may have a local toolchain
+  # for one and not for another. All are asked before any runs, so a daemon
+  # that is down stops the sweep at the start rather than part of the way in.
+  # The app is part of a sweep only under `--changed`, when its inputs
+  # differ: its bar is minutes of Gradle, which a plain `check` of a change
+  # that cannot reach the app should not pay.
+  local host_state=0 rust_state=0 android_state=0 with_android=0
+  if [ "$changed" = 1 ] && [ "$CHANGED_ANDROID" = 1 ]; then with_android=1; fi
   if [ "$CHANGED_HOST" = 1 ]; then engine_state node || host_state=$?; fi
   if [ "$CHANGED_RUST" = 1 ]; then engine_state rust || rust_state=$?; fi
-  if [ "$host_state" = 2 ] || [ "$rust_state" = 2 ]; then fail_docker_down; fi
+  if [ "$with_android" = 1 ]; then engine_state android || android_state=$?; fi
+  if [ "$host_state" = 2 ] || [ "$rust_state" = 2 ] || [ "$android_state" = 2 ]; then fail_docker_down; fi
 
   if [ "$CHANGED_HOST" = 1 ]; then
     if [ "$host_state" = 0 ]; then
@@ -841,14 +888,15 @@ run_checks() {
       ensure_toolchain rust
       rust_steps "$mode"
     fi
+    # The host's protocol types are generated from crates/agent-protocol, and
+    # CI fails on a stale copy.
+    if [ "$mode" = check ]; then
+      step "crates: host types" generated_current ts packages/agent-host/src/generated/protocol.ts || true
+    fi
   fi
+  if [ "$with_android" = 1 ]; then android_steps "$mode"; fi
 
-  local code=0
-  check_summary || code=$?
-  if [ "$CHANGED_ANDROID" = 1 ]; then
-    echo "    the app's inputs changed too: ./codedeck android test verifyPaparazziDebug lintDebug"
-  fi
-  return "$code"
+  check_summary
 }
 
 # --- The dev container: what the throwaway checks are too slow for. ---
