@@ -23,6 +23,12 @@ cd "$(git rev-parse --show-toplevel)"
 # apps/android) and this script's own files are still theirs to reach.
 REPO_ROOT="$PWD"
 
+# The vendored toolchain's directory: the main checkout's, for every checkout
+# of this repository (scripts/lib/toolchain-dir.sh says why).
+# shellcheck source=scripts/lib/toolchain-dir.sh
+. scripts/lib/toolchain-dir.sh
+TOOLCHAIN="$(toolchain_dir)"
+
 # Git Bash (MSYS) on Windows rewrites leading-/ arguments as if they were
 # Windows paths before docker.exe sees them — breaks `docker exec -w /path`.
 # Scoped (not exported globally): doing that also breaks docker cp's HOST-side
@@ -156,15 +162,29 @@ ensure_toolchain() {
     [ "$component" = ndk ] || components+=("$component")
   done
   set -- ${components[@]+"${components[@]}"}
-  if [ ! -f toolchain/env.sh ]; then
-    echo "==> No ./toolchain yet — installing what this needs"
+  if [ ! -f "$TOOLCHAIN/env.sh" ]; then
+    echo "==> No toolchain at $TOOLCHAIN yet — installing what this needs"
     [ $# -gt 0 ] && echo "    (${*})"
     echo "    one-time; Ctrl-C to abort"
   fi
   INSTALL_TOOLCHAIN_QUIET=1 bash scripts/install-toolchain.sh "$@"
   # shellcheck source=/dev/null
-  . toolchain/env.sh
+  . "$TOOLCHAIN/env.sh"
   apply_local_limits
+  share_cargo_target
+}
+
+# A linked worktree builds into the main checkout's target directory. Cargo
+# keys what it builds by package, features, profile and — for the workspace's
+# own crates — the path they were built from, so two checkouts share every
+# dependency (most of a build, and gigabytes on disk) and never each other's
+# crates. The one thing shared is the build lock: two builds at once queue. A
+# CARGO_TARGET_DIR the caller set is left alone.
+share_cargo_target() {
+  if [ -z "${CARGO_TARGET_DIR:-}" ] && [ -n "${DEV_WORKTREE:-}" ]; then
+    CARGO_TARGET_DIR="$(native_path "$(main_checkout)/target")"
+    export CARGO_TARGET_DIR
+  fi
 }
 
 # CODEDECK_CPUS on the local engine. There is no container to put in a cpuset
@@ -988,17 +1008,25 @@ ensure_dev_deps() {
   have="$(dexec "$DEV_CONTAINER" cat "$DEV_LOCK_STAMP" 2>/dev/null || true)"
   [ "$want" = "$have" ] && return 0
   echo "==> Installing the workspace's Node dependencies"
-  dexec -w "$DEV_ROOT" "$DEV_CONTAINER" pnpm install --frozen-lockfile
+  # Its output is a page of progress and a notice about build scripts: shown
+  # for a failure, which is the only time anyone reads it.
+  local output
+  if ! output="$(dexec -w "$DEV_ROOT" "$DEV_CONTAINER" pnpm install --frozen-lockfile 2>&1)"; then
+    printf '%s\n' "$output" >&2
+    return 1
+  fi
   dexec "$DEV_CONTAINER" sh -c "printf '%s' '$want' > $DEV_LOCK_STAMP"
 }
 
-# The same "install when the lockfile moved" rule for a host that has the tree
-# itself (a Docker-less Linux host): the stamp goes in the toolchain directory,
-# which is gitignored and only exists for that path.
+# The same "install when the lockfile moved" rule for the local engine, where
+# the tree is this one: the stamp goes in node_modules, which it describes —
+# gitignored, and each checkout's own (the toolchain directory is shared).
+# The packages themselves are hard links into pnpm's store, so a second
+# checkout's install downloads nothing and costs little disk.
 ensure_local_deps() {
-  local want have
+  local want have output
   want="$(git hash-object pnpm-lock.yaml)"
-  have="$(cat toolchain/.codedeck-dev-lock 2>/dev/null || true)"
+  have="$(cat node_modules/.codedeck-lock 2>/dev/null || true)"
   [ "$want" = "$have" ] && return 0
   echo "==> Installing the workspace's Node dependencies"
   # NODE_ENV=production would make pnpm skip devDependencies — which is where
@@ -1006,8 +1034,14 @@ ensure_local_deps() {
   # CI=true and no stdin: pnpm asks before it replaces a node_modules it did
   # not make (another store, another version), and a prompt nobody is there
   # to answer holds the command for ever.
-  (unset NODE_ENV; CI=true pnpm install --frozen-lockfile </dev/null)
-  printf '%s' "$want" > toolchain/.codedeck-dev-lock
+  # Its output is a page of progress and a notice about build scripts: shown
+  # for a failure, which is the only time anyone reads it.
+  if ! output="$(unset NODE_ENV; CI=true pnpm install --frozen-lockfile </dev/null 2>&1)"; then
+    printf '%s\n' "$output" >&2
+    return 1
+  fi
+  mkdir -p node_modules
+  printf '%s' "$want" > node_modules/.codedeck-lock
 }
 
 # One command in the dev container, with the tree in step first.
@@ -1455,7 +1489,7 @@ cmd_android() {
       # daemon's files) beside the rest of the toolchain rather than in the
       # user's: what this build downloads and caches is then the checkout's
       # own to keep or delete. A GRADLE_USER_HOME already set is left alone.
-      export GRADLE_USER_HOME="${GRADLE_USER_HOME:-$(native_path "$REPO_ROOT/toolchain/gradle")}"
+      export GRADLE_USER_HOME="${GRADLE_USER_HOME:-$(native_path "$TOOLCHAIN/gradle")}"
       # CODEDECK_CPUS, for Gradle: its workers, test forks included.
       local limit=()
       if [ -n "${CODEDECK_CPUS:-}" ]; then limit=(--max-workers "$CODEDECK_CPUS"); fi
@@ -1576,7 +1610,7 @@ cmd_live() {
       workdir="$(native_path "$(mktemp -d)")"
       local code=0
       # The agents an install fetches are kept where this engine keeps
-      # everything else it installs (./toolchain, gitignored) — the local
+      # everything else it installs (the toolchain directory) — the local
       # counterpart of the agents volume the Docker path mounts, so a run is
       # the only one that downloads. An explicit CODEDECK_AGENT_CACHE wins.
       #
@@ -1586,7 +1620,7 @@ cmd_live() {
       # passes are therefore converted by hand (native_path); a --cwd, --dump
       # or --env path given on the command line is taken as written.
       MSYS_NO_PATHCONV=1 env ${pairs[@]+"${pairs[@]}"} CODEDECK_AGENT_HOST_DRIVERS="$agent" \
-        CODEDECK_AGENT_CACHE="${CODEDECK_AGENT_CACHE:-$(native_path "$PWD/toolchain/agents")}" \
+        CODEDECK_AGENT_CACHE="${CODEDECK_AGENT_CACHE:-$(native_path "$TOOLCHAIN/agents")}" \
         timeout "${timeout}s" node packages/agent-host/tools/live-probe.mjs \
         --host packages/agent-host/dist/main.js --agent "$agent" --cwd "$workdir" \
         --timeout "$timeout" ${probe[@]+"${probe[@]}"} || code=$?
@@ -1766,16 +1800,16 @@ cmd_clean() {
 # missing rather than failing on it — that is the point of it.
 # What ./toolchain holds, by the binary that does each component's work.
 local_toolchain_summary() {
-  if [ ! -f toolchain/env.sh ]; then
-    echo "absent"
+  if [ ! -f "$TOOLCHAIN/env.sh" ]; then
+    echo "absent ($TOOLCHAIN)"
     return 0
   fi
   local have=""
-  if [ -x toolchain/node/bin/node ] || [ -x toolchain/node/node ]; then have="$have node"; fi
-  if [ -x toolchain/cargo/bin/cargo ]; then have="$have rust"; fi
-  if [ -x toolchain/jdk/bin/java ]; then have="$have java"; fi
-  if [ -d toolchain/android-sdk/platforms ]; then have="$have android"; fi
-  echo "./toolchain:${have:- nothing yet} (the local engine)"
+  if [ -x "$TOOLCHAIN/node/bin/node" ] || [ -x "$TOOLCHAIN/node/node" ]; then have="$have node"; fi
+  if [ -x "$TOOLCHAIN/cargo/bin/cargo" ]; then have="$have rust"; fi
+  if [ -x "$TOOLCHAIN/jdk/bin/java" ]; then have="$have java"; fi
+  if [ -d "$TOOLCHAIN/android-sdk/platforms" ]; then have="$have android"; fi
+  echo "$TOOLCHAIN:${have:- nothing yet} (the local engine)"
 }
 
 cmd_doctor() {
@@ -1861,9 +1895,10 @@ cmd_doctor() {
 # temp dir. The Docker variant below copies only the cargo workspace in; the
 # cargo registry and target dir live in cached volumes.
 gen_android_bindings_local() {
-  local out dest library=target/debug/libclient_ffi.so
+  local out dest library
   # The host's own name for a cdylib; the Kotlin it describes is the same.
-  case "$(uname -s)" in MINGW* | MSYS*) library=target/debug/client_ffi.dll ;; esac
+  library="${CARGO_TARGET_DIR:-target}/debug/libclient_ffi.so"
+  case "$(uname -s)" in MINGW* | MSYS*) library="${CARGO_TARGET_DIR:-target}/debug/client_ffi.dll" ;; esac
   out="$(native_path "$(mktemp -d)")"
   dest="apps/android/app/src/main/java/uniffi"
   echo "==> Building crates/client-ffi (host target)"

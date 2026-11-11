@@ -13,9 +13,12 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
-if [ -f toolchain/env.sh ]; then
+# The toolchain is the main checkout's, also from a linked worktree.
+# shellcheck source=../../../scripts/lib/toolchain-dir.sh
+. scripts/lib/toolchain-dir.sh
+if [ -f "$(toolchain_dir)/env.sh" ]; then
   # shellcheck source=/dev/null
-  source toolchain/env.sh
+  source "$(toolchain_dir)/env.sh"
 fi
 if [ -z "${ANDROID_HOME:-}" ]; then
   echo "error: ANDROID_HOME not set and toolchain/env.sh not found — run" >&2

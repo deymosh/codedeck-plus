@@ -39,12 +39,14 @@ printf '# docs\n' >"$REPO/README.md"
 printf '/toolchain/\n/dist/\n' >"$REPO/.gitignore"
 
 # The installer's stand-in: what `./codedeck` asks of the real one is an
-# env.sh that puts the toolchain on PATH, and here the toolchain is the stubs.
+# env.sh, in the repository's toolchain directory, that puts the toolchain on
+# PATH — and here the toolchain is the stubs.
 cat >"$REPO/scripts/install-toolchain.sh" <<EOF
 #!/usr/bin/env bash
-mkdir -p toolchain
+. scripts/lib/toolchain-dir.sh
+mkdir -p "\$(toolchain_dir)"
 printf 'installer %s\n' "\$*" >>"$STUB_LOG"
-printf 'export PATH="%s:\$PATH"\n' "$STUBS" >toolchain/env.sh
+printf 'export PATH="%s:\$PATH"\n' "$STUBS" >"\$(toolchain_dir)/env.sh"
 EOF
 
 # A stub records its name, arguments and the limits it was handed, and fails
@@ -55,8 +57,9 @@ make_stub() {
   cat >"$1" <<'EOF'
 #!/usr/bin/env bash
 name="$(basename "$0")"
-printf '%s %s [jobs=%s tests=%s vitest=%s]\n' "$name" "$*" \
-  "${CARGO_BUILD_JOBS:-}" "${RUST_TEST_THREADS:-}" "${VITEST_MAX_FORKS:-}" >>"$STUB_LOG"
+printf '%s %s [jobs=%s tests=%s vitest=%s] target=%s\n' "$name" "$*" \
+  "${CARGO_BUILD_JOBS:-}" "${RUST_TEST_THREADS:-}" "${VITEST_MAX_FORKS:-}" \
+  "${CARGO_TARGET_DIR:-}" >>"$STUB_LOG"
 echo "$name: ran $*"
 previous=""
 for arg in "$@"; do
@@ -93,9 +96,11 @@ PASSED=0
 OUT=""
 CODE=0
 
-# run [VAR=value…] -- <codedeck args…>: the script in the sandbox, on the
-# local engine, with no terminal. Output (both streams) lands in $OUT, the
-# exit code in $CODE, and what the stubs were called with in $STUB_LOG.
+# run [VAR=value…] -- <codedeck args…>: the script in the sandbox (in
+# $RUN_IN, the main checkout unless a test says otherwise), on the local
+# engine, with no terminal. Output (both streams) lands in $OUT, the exit
+# code in $CODE, and what the stubs were called with in $STUB_LOG.
+RUN_IN="$REPO"
 run() {
   local env=()
   while [ "$1" != "--" ]; do
@@ -105,8 +110,9 @@ run() {
   shift
   : >"$STUB_LOG"
   CODE=0
-  OUT="$(cd "$REPO" && env -u CODEDECK_CPUS -u CODEDECK_MEMORY -u CODEDECK_TIMEOUT \
+  OUT="$(cd "$RUN_IN" && env -u CODEDECK_CPUS -u CODEDECK_MEMORY -u CODEDECK_TIMEOUT \
     -u CARGO_BUILD_JOBS -u RUST_TEST_THREADS -u VITEST_MAX_FORKS -u VITEST_MAX_THREADS \
+    -u CARGO_TARGET_DIR -u CODEDECK_TOOLCHAIN -u GRADLE_USER_HOME \
     CODEDECK_ENGINE=local ${env[@]+"${env[@]}"} bash ./codedeck "$@" 2>&1 </dev/null)" || CODE=$?
 }
 
@@ -376,6 +382,35 @@ expect_call "installer node"
 TEST="dev --timeout needs a number"
 run -- dev --timeout soon cargo test
 expect_code 2
+
+# --- Worktrees. ---
+
+# A path as the script hands it to a native program (C:/… under Git Bash).
+native() {
+  if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi
+}
+
+TEST="a linked worktree uses the main checkout's toolchain and cargo target"
+reset_repo
+rm -rf "$REPO/toolchain"
+git -C "$REPO" worktree add -q "$WORK/linked" -b linked
+RUN_IN="$WORK/linked"
+run -- dev cargo build
+expect_code 0
+expect_call "cargo build [jobs= tests= vitest=] target=$(native "$(cd "$REPO" && pwd -P)/target")"
+if [ -f "$REPO/toolchain/env.sh" ] && [ ! -e "$WORK/linked/toolchain" ]; then ok; else fail "the toolchain was not installed into the main checkout alone"; fi
+
+TEST="a worktree keeps a cargo target the caller chose"
+run CARGO_TARGET_DIR=/elsewhere -- dev cargo build
+expect_call "target=/elsewhere"
+RUN_IN="$REPO"
+git -C "$REPO" worktree remove --force "$WORK/linked"
+git -C "$REPO" branch -q -D linked
+
+TEST="the main checkout builds into its own target directory"
+run -- dev cargo build
+expect_call "cargo build [jobs= tests= vitest=] target="
+expect_no_call "target=$(native "$(cd "$REPO" && pwd -P)/target")"
 
 TEST="e2e builds the host first, and runs neither test without the bundle"
 run -- e2e

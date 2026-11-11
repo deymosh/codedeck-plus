@@ -151,7 +151,15 @@ extract_zip() {
   fi
 }
 
-TOOLCHAIN_DIR="$PWD/toolchain"
+# The helper scripts this one runs or installs: where the toolchain goes, the
+# python extractors for a host with no xz/unzip, and the Zig shims that go
+# into toolchain/bin.
+LIB_DIR="$(cd "$(dirname "$0")" && pwd)/lib"
+# One toolchain for every checkout of the repository: a linked git worktree
+# installs into, and uses, the main checkout's (lib/toolchain-dir.sh).
+# shellcheck source=lib/toolchain-dir.sh
+. "$LIB_DIR/toolchain-dir.sh"
+TOOLCHAIN_DIR="$(toolchain_dir)"
 
 # What a run that found everything in place has to say. `./codedeck` calls
 # this script before every command of the local engine, as the check of what
@@ -162,9 +170,6 @@ INSTALLED_SOMETHING=0
 note() {
   if [ "${INSTALL_TOOLCHAIN_QUIET:-0}" != 1 ]; then echo "$@"; fi
 }
-# The helper scripts this one runs or installs: the python extractors for a
-# host with no xz/unzip, and the Zig shims that go into toolchain/bin.
-LIB_DIR="$(cd "$(dirname "$0")" && pwd)/lib"
 JDK_DIR="$TOOLCHAIN_DIR/jdk"
 RUSTUP_HOME="$TOOLCHAIN_DIR/rustup"
 CARGO_HOME="$TOOLCHAIN_DIR/cargo"
