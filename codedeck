@@ -688,30 +688,32 @@ CHECK_STREAM=0
 CHECK_TAIL=60
 
 step() {
-  local label="$1" slug log code=0
+  local label="$1" slug log code=0 started=$SECONDS took
   shift
   if [ "$CHECK_STREAM" = 1 ]; then
     echo "==> $label"
     "$@" || code=$?
+    took=$((SECONDS - started))
   else
     slug="$(printf '%s' "$label" | tr -cs 'a-z0-9' '-')"
     log="$CHECK_LOG_DIR/${slug%-}.log"
     printf '==> %-18s ' "$label"
     "$@" >"$log" 2>&1 </dev/null || code=$?
+    took=$((SECONDS - started))
     if [ "$code" = 0 ]; then
-      echo "ok"
+      echo "ok (${took}s)"
     else
-      echo "FAILED (exit $code) — the end of $log:"
+      echo "FAILED (exit $code, ${took}s) — the end of $log:"
       tail -n "$CHECK_TAIL" "$log" | sed 's/^/    /'
     fi
   fi
-  printf '%s\t%s\n' "$code" "$label" >>"$CHECK_RESULTS"
+  printf '%s\t%s\t%s\n' "$code" "$took" "$label" >>"$CHECK_RESULTS"
   return "$code"
 }
 
 # Every step that ran, and one exit code for the lot.
 check_summary() {
-  local code label failed=0
+  local code took label failed=0
   if [ ! -s "$CHECK_RESULTS" ]; then
     rm -f "$CHECK_RESULTS"
     echo "==> Nothing to run."
@@ -719,11 +721,13 @@ check_summary() {
   fi
   echo
   echo "==> Summary"
-  while IFS=$'\t' read -r code label; do
+  # Each step with how long it took: where a sweep's time goes is the first
+  # thing to know before making it shorter.
+  while IFS=$'\t' read -r code took label; do
     if [ "$code" = 0 ]; then
-      printf '    ok      %s\n' "$label"
+      printf '    ok      %-20s %4ss\n' "$label" "$took"
     else
-      printf '    FAILED  %s\n' "$label"
+      printf '    FAILED  %-20s %4ss\n' "$label" "$took"
       failed=1
     fi
   done <"$CHECK_RESULTS"
@@ -1115,7 +1119,11 @@ copy_back() {
       MSYS_NO_PATHCONV=1 docker cp "$DEV_CONTAINER:$DEV_ROOT/$path" "$path"
     fi
   done
-  # What the regeneration changed, which is the answer to "was it stale?".
+}
+
+# What a regeneration changed, which is the answer to "was it stale?" — on
+# either engine: the files as they now are against what git last saw.
+report_regen() {
   local changed
   changed="$(git status --short -- "$@")"
   if [ -n "$changed" ]; then printf '%s\n' "$changed"; else echo "==> Already current: $*"; fi
@@ -1131,11 +1139,13 @@ regen_one() {
       # for what Cargo.toml now asks and leaves every other entry where it was.
       ${run[@]+"${run[@]}"} sh -c 'cargo metadata --format-version 1 >/dev/null'
       [ "$docker" = 1 ] && copy_back Cargo.lock
+      report_regen Cargo.lock
       ;;
     ts)
       echo "==> The agent host's protocol types"
       ${run[@]+"${run[@]}"} cargo test --locked -p agent-protocol --test gen_ts_bindings -- --ignored
       [ "$docker" = 1 ] && copy_back packages/agent-host/src/generated/protocol.ts
+      report_regen packages/agent-host/src/generated/protocol.ts
       ;;
     pins)
       echo "==> pnpm-lock.yaml and the agents' install pins"
@@ -1147,6 +1157,7 @@ regen_one() {
         # or the next `dev` would reinstall what is already there.
         dexec "$DEV_CONTAINER" sh -c "printf '%s' '$(git hash-object pnpm-lock.yaml)' > $DEV_LOCK_STAMP"
       fi
+      report_regen pnpm-lock.yaml packages/agent-host/src/generated
       ;;
   esac
   return 0
@@ -1169,6 +1180,7 @@ cmd_regen() {
     # The bindings have a container and a command of their own.
     if [ "$kind" = bindings ]; then
       (cmd_gen_android_bindings)
+      report_regen apps/android/app/src/main/java/uniffi
       continue
     fi
     # The pins are pnpm's work, the rest cargo's — and a host may have only
