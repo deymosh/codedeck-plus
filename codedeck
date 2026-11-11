@@ -454,8 +454,8 @@ cmd_apk() {
 #                    container too, so this also bounds what the VM holds on to.
 #
 # Unset means no limit of this script's making. A long-lived container picks a
-# changed value up on the next command (docker update); one that had a limit
-# keeps it until `dev --reset` once the variable is unset again.
+# changed value up on the next command, and a limit that is no longer asked
+# for is lifted then too (see ensure_container).
 CPU_LIMIT=()
 case "${CODEDECK_CPUS:-}" in
   '') ;;
@@ -543,6 +543,21 @@ ensure_container() {
     echo "==> Replacing $name (not this script's, or its image changed)"
     docker rm -f "$name" >/dev/null
   fi
+  # A container created with a memory limit of its own (the Android one:
+  # Gradle is sized to it) keeps that one — only its cores are bounded here.
+  local own_memory=0
+  case " $* " in
+    *" -m "* | *" --memory "*) own_memory=1 ;;
+  esac
+  # A memory limit an earlier command set and this one does not ask for.
+  # Docker cannot take a memory limit off a running container (an update to
+  # 0 is "no change", and one to the engine's whole memory is refused), so
+  # the container is replaced: it is disposable, and its caches are volumes.
+  if [ "$own_memory" = 0 ] && [ -z "${CODEDECK_MEMORY:-}" ] && container_exists "$name" &&
+    [ "$(docker inspect -f '{{.HostConfig.Memory}}' "$name" 2>/dev/null)" != 0 ]; then
+    echo "==> Replacing $name (it was limited by a CODEDECK_MEMORY that is no longer set)"
+    docker rm -f "$name" >/dev/null
+  fi
   if ! container_exists "$name"; then
     echo "==> Creating $name (kept between commands)"
     MSYS_NO_PATHCONV=1 docker create --name "$name" --label "$label=1" "$@" "$image" sleep infinity >/dev/null
@@ -550,13 +565,19 @@ ensure_container() {
   # Already running is fine: this is "make sure it is up", not "start it".
   docker start "$name" >/dev/null 2>&1 || true
   # On every command, not only at creation: the container outlives the shell
-  # that made it, and the limit in force should be the one asked for now. A
-  # container created with a memory limit of its own (the Android one: Gradle
-  # is sized to it) keeps that one — only its cores are bounded here.
+  # that made it, and the limit in force should be the one asked for now.
   local limits=(${RESOURCE_LIMITS[@]+"${RESOURCE_LIMITS[@]}"})
-  case " $* " in
-    *" -m "* | *" --memory "*) limits=(${CPU_LIMIT[@]+"${CPU_LIMIT[@]}"}) ;;
-  esac
+  if [ "$own_memory" = 1 ]; then limits=(${CPU_LIMIT[@]+"${CPU_LIMIT[@]}"}); fi
+  # A cpuset an earlier command set and this one does not ask for is widened
+  # back to every core (an empty cpuset is "no change" to docker update).
+  if [ ${#CPU_LIMIT[@]} -eq 0 ]; then
+    local cpuset every_core
+    cpuset="$(docker inspect -f '{{.HostConfig.CpusetCpus}}' "$name" 2>/dev/null)"
+    if [ -n "$cpuset" ]; then
+      every_core="0-$(($(docker info -f '{{.NCPU}}') - 1))"
+      if [ "$cpuset" != "$every_core" ]; then limits+=(--cpuset-cpus "$every_core"); fi
+    fi
+  fi
   if [ ${#limits[@]} -gt 0 ]; then
     docker update "${limits[@]}" "$name" >/dev/null ||
       echo "==> Could not apply CODEDECK_CPUS/CODEDECK_MEMORY to $name (it keeps its previous limits)" >&2
