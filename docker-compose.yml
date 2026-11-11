@@ -1,5 +1,8 @@
 services:
   codedeck-bridge:
+    # Named, so the local build is not Compose's default
+    # `<project>-<service>` (codedeck-plus-codedeck-bridge).
+    image: codedeck-plus-bridge
     build:
       context: .
       dockerfile: docker/Dockerfile
