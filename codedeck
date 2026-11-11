@@ -285,8 +285,13 @@ that runs a container; unset = no limit):
   CODEDECK_CPUS=8          Cores a container may use — builds and test runners
                            size themselves to it. On the local engine: the
                            jobs and workers cargo, its tests and vitest start
-  CODEDECK_MEMORY=12g      Memory a container may use, page cache included
-                           (containers only)
+  CODEDECK_MEMORY=4g       Memory a container may use, page cache included
+                           (containers only). Measured with 10 cores: the
+                           crates' tests build and link in 2g and fail in
+                           1.5g, so 4g leaves room. The Android container
+                           has 6g of its own, whatever this says: Gradle's
+                           daemon is killed at 3g and takes twice as long
+                           at 4g
 
 The dev container — one long-lived container with node_modules and the caches
 kept warm, for the loop between checks (editing a driver, running one test
@@ -343,6 +348,10 @@ passed to Gradle as it is):
   android snapshot         app:recordPaparazziDebug, goldens copied back
   android shell            A shell in apps/android
   android <task> [args…]   Any other Gradle task
+    --verbose | --quiet    Stream Gradle's output, or keep it in
+                           dist/logs/android.log and print the report (and
+                           the end of the log on a failure). Default: stream
+                           on a terminal only
 
 Bindings (throwaway Rust container; on the local engine, in this tree):
   gen-android-bindings     Regenerate apps/android/app/src/main/java/uniffi/**
@@ -470,7 +479,7 @@ cmd_apk() {
 #                    Gradle would still start one worker per core of the
 #                    machine and fight over the slice. Inside a cpuset the
 #                    core count they read is the limit, so each sizes itself.
-#   CODEDECK_MEMORY  docker's own form (8g, 12g). Page cache is charged to the
+#   CODEDECK_MEMORY  docker's own form (4g, 6g). Page cache is charged to the
 #                    container too, so this also bounds what the VM holds on to.
 #
 # Unset means no limit of this script's making. A long-lived container picks a
@@ -1439,13 +1448,39 @@ android_task() {
   esac
 }
 
+# One Gradle run, said the way a sweep's step is: with a terminal its output
+# streams; without one (a script, an agent) it goes to dist/logs/android.log,
+# and only a failure prints anything — the end of that log, without the
+# hundreds of "> Task" lines a build is mostly made of. The report that
+# follows (android_report) has the counts either way.
+ANDROID_STREAM=0
+ANDROID_LOG=dist/logs/android.log
+
+gradle_run() {
+  if [ "$ANDROID_STREAM" = 1 ]; then
+    "$@"
+    return
+  fi
+  local log="$REPO_ROOT/$ANDROID_LOG" code=0
+  mkdir -p "$(dirname "$log")"
+  "$@" >"$log" 2>&1 </dev/null || code=$?
+  if [ "$code" != 0 ]; then
+    echo "==> Gradle FAILED (exit $code) — the end of $ANDROID_LOG:"
+    grep -v '^> Task \|^[[:space:]]*$' "$log" | tail -n "$CHECK_TAIL" | sed 's/^/    /'
+  fi
+  return "$code"
+}
+
 cmd_android() {
   # Options may sit anywhere: the rest of the line is the task and its own
   # arguments, passed through as they are.
   local sync=1 args=()
+  if [ -t 1 ]; then ANDROID_STREAM=1; fi
   while [ $# -gt 0 ]; do
     case "$1" in
       --no-sync) sync=0 ;;
+      --verbose) ANDROID_STREAM=1 ;;
+      --quiet) ANDROID_STREAM=0 ;;
       --) ;;
       *) args+=("$1") ;;
     esac
@@ -1495,7 +1530,7 @@ cmd_android() {
       if [ -n "${CODEDECK_CPUS:-}" ]; then limit=(--max-workers "$CODEDECK_CPUS"); fi
       local code=0 since
       since="$(mktemp)"
-      ./gradlew "$task" "$@" ${limit[@]+"${limit[@]}"} --console=plain </dev/null || code=$?
+      gradle_run ./gradlew "$task" "$@" ${limit[@]+"${limit[@]}"} --console=plain || code=$?
       ANDROID_REPORT_SINCE="$since" android_report
       rm -f "$since"
       # Recording writes the goldens straight into the tree here, which is
@@ -1516,7 +1551,7 @@ cmd_android() {
 
   local code=0 since=/tmp/codedeck-android-run
   dexec "$ANDROID_CONTAINER" touch "$since"
-  dexec -w "$ANDROID_ROOT/$ANDROID_PROJECT" "$ANDROID_CONTAINER" \
+  gradle_run dexec -w "$ANDROID_ROOT/$ANDROID_PROJECT" "$ANDROID_CONTAINER" \
     gradle "$task" "$@" --console=plain || code=$?
 
   ANDROID_REPORT_SINCE="$since" android_report "$ANDROID_CONTAINER"
@@ -1829,6 +1864,9 @@ cmd_doctor() {
        return 0 ;;
   esac
   printf '  %-14s %s\n' "limits" "CODEDECK_CPUS=${CODEDECK_CPUS:-unset (every core)}, CODEDECK_MEMORY=${CODEDECK_MEMORY:-unset (all the engine has)}"
+  # What Docker itself may take: on Docker Desktop this is the VM's size,
+  # which no variable here changes (.wslconfig on Windows).
+  printf '  %-14s %s\n' "docker engine" "$(docker info -f '{{.NCPU}} cores, {{.MemTotal}}' | awk '{printf "%s cores, %.1f GB of memory", $1, $3 / 1073741824}')"
 
   local tag size
   echo
@@ -1849,6 +1887,17 @@ cmd_doctor() {
   local containers
   containers="$(docker ps -a --filter name=codedeck --format '  {{.Names}}: {{.Status}}')"
   if [ -n "$containers" ]; then printf '%s\n' "$containers"; else echo "  none"; fi
+  # On the local engine the dev and Android containers are only what a
+  # CODEDECK_ENGINE=docker command uses: left running, they are memory the
+  # machine does not get back.
+  if [ "${CODEDECK_ENGINE:-}" = local ] && host_local_supports node rust android; then
+    case "$containers" in
+      *codedeck-dev* | *codedeck-android-dev*)
+        echo "  (the local engine runs the checks in this tree: the dev and Android containers"
+        echo "   are idle unless a command asks for CODEDECK_ENGINE=docker — ./codedeck clean)"
+        ;;
+    esac
+  fi
 
   # What the two long-lived containers are good for right now. Only read while
   # they are running: a fact from a stopped container is no fact.

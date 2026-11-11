@@ -161,7 +161,7 @@ branch's types means stale artifacts — touch the crate and rebuild. Never
 pass `--offline` to the Android build (AGP downloads its platform).
 
 A build takes every core it is shown. On a machine that is also being used,
-`CODEDECK_CPUS=<cores>` and `CODEDECK_MEMORY=<12g>` bound every container the
+`CODEDECK_CPUS=<cores>` and `CODEDECK_MEMORY=<4g>` bound every container the
 script runs (a cpuset, so cargo, vitest and Gradle size themselves to it);
 on the local engine `CODEDECK_CPUS` becomes the jobs and workers those
 tools start, and there is no memory bound. Set them in the environment the
