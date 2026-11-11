@@ -62,12 +62,15 @@ for whatever this host has one for.
   per command — that is what makes them fast enough for a loop of edits.
   A git worktree gets a `dev`/`live` container of its own
   (`codedeck-dev-<worktree>`, caches shared), so checkouts never take turns.
-  With `CODEDECK_ENGINE=local` the agent host's half skips Docker: Node and
-  the pinned pnpm go into `./toolchain/` (`scripts/install-toolchain.sh
-  node`), and `check`'s host steps, `dev vitest|pnpm|node …`, `live` and
-  `regen pins` run in this tree — as the Windows CI job does, so a failure
-  that only Windows has shows up here first. The crates and the app still
-  run in Docker there (they need the MSVC build tools and the Android SDK).
+  With `CODEDECK_ENGINE=local` the agent host and the crates skip Docker:
+  Node with the pinned pnpm, and Rust's GNU toolchain with a GCC beside it,
+  go into `./toolchain/` (`scripts/install-toolchain.sh node rust`), and
+  `check`, `e2e`, `dev`, `live` and `regen` run in this tree. The agent host
+  then runs as the Windows CI job runs it. The crates do not: CI builds them
+  with MSVC on Windows, and its bar is the Linux job, which also compiles
+  the `cfg(unix)` code a Windows build never sees — so CI stays the judge,
+  and `CODEDECK_ENGINE=docker ./codedeck check` is that Linux run on this
+  machine. The app still runs in Docker there.
 - **Linux (e.g. inside a container that doesn't itself have Docker-in-Docker,
   or any bare Linux machine):** `scripts/install-toolchain.sh` installs the
   toolchain into `./toolchain/` (gitignored), independent of anything already

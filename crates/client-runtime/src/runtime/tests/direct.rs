@@ -2,8 +2,11 @@ use super::*;
 
 /// A bridge's direct link, scripted: it takes the phone's HELLO, pushes
 /// `push` (a message for the phone), then answers every command with an
-/// `OK` and hands it, read with `payload_key` (the identity, or the session
-/// key the phone was granted), to `commands`.
+/// `OK` and hands it to `commands`. `payload_key` is the key this bridge
+/// knows the phone by (the identity, or the session key the phone was
+/// granted): it writes `push` to that key and reads the commands with it,
+/// as a bridge does. A push to the identity from a bridge holding a grant
+/// would tell the phone the grant was lost.
 async fn scripted_direct_bridge(
     listener: tokio::net::TcpListener,
     machine: Keypair,
@@ -28,9 +31,9 @@ async fn scripted_direct_bridge(
     assert_eq!(check_direct_auth(&auth, "c1", auth.created_at).unwrap(), phone_pubkey, "signed by the identity");
     ws.send(text(&DirectFrame::Ready)).await.unwrap();
 
-    let ct = protocol::crypto::encrypt_to(&machine.secret_key, &phone_pubkey, &encode_bridge_to_phone(&push)).unwrap();
+    let ct = protocol::crypto::encrypt_to(&machine.secret_key, &payload_key, &encode_bridge_to_phone(&push)).unwrap();
     let event = nostr::EventBuilder::new(nostr::Kind::Custom(LIVE_KIND), ct)
-                .tag(recipient(&machine, &phone_pubkey))
+        .tag(recipient(&machine, &payload_key))
         .tag(nostr::Tag::public_key(nostr::PublicKey::from_hex(&phone_pubkey).unwrap()))
         .sign_with_keys(&nostr::Keys::new(machine.secret_key.clone()))
         .unwrap();

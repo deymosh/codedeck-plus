@@ -38,12 +38,16 @@
 # everything else in this repo (crates/*, apps/android, the TS workspace)
 # does not need them.
 #
-# Linux, and on Windows (Git Bash) the `node` component alone: the agent host
-# is tested on Windows by CI, and Node there is a zip with nothing to link.
-# The rest stays with Docker on Windows — the crates compile C (ring,
-# secp256k1, sqlite), which needs the MSVC build tools, a system install this
-# script will not make; and the Android toolchain without Android Studio's
-# own installer is its own can of worms. macOS likely works too
+# Linux, and on Windows (Git Bash) the `node` and `rust` components. Node there
+# is a zip with nothing to link. The crates compile C (ring, secp256k1,
+# sqlite) and link executables, which on Windows normally means the MSVC build
+# tools — a system install this script will not make. So `rust` on Windows is
+# the GNU flavour instead (`x86_64-pc-windows-gnu`), with the GCC it needs
+# unpacked beside it (WinLibs: GCC + MinGW-w64, one archive, pinned by hash).
+# That is NOT the toolchain CI and the release build use on Windows (MSVC):
+# same sources, same `cfg(windows)` code, another C compiler, linker and C
+# runtime — good for the loop, and CI stays the judge. The Android toolchain
+# stays with Docker on Windows. macOS likely works too
 # (Adoptium/rustup/Node/cmdline-tools all publish macOS binaries) but is
 # untested — the NDK clang triples build-apk-local.sh uses are
 # Linux-host-specific (`linux-x86_64` prebuilt dir) either way.
@@ -76,12 +80,13 @@ case "$(uname -s)" in
 esac
 
 # What was asked for, as a space-delimited set to match against. `android`
-# implies `java` and `rust` implies `zig`, resolved here so each section below
-# only has to ask for its own name. On Windows there is one component, so
-# "everything" is that one and asking for another is an error, not a skip:
-# the caller would otherwise go on to run a tool that is not there.
+# implies `java`, and `rust` implies the C compiler it links through (`zig` on
+# Linux, `mingw` on Windows), resolved here so each section below only has to
+# ask for its own name. Windows has fewer components, so "everything" is those
+# and asking for another is an error, not a skip: the caller would otherwise
+# go on to run a tool that is not there.
 ALL_COMPONENTS=(java rust node android)
-if [ "$HOST_OS" = windows ]; then ALL_COMPONENTS=(node); fi
+if [ "$HOST_OS" = windows ]; then ALL_COMPONENTS=(rust node); fi
 WANTED=("$@")
 if [ ${#WANTED[@]} -eq 0 ]; then
   WANTED=("${ALL_COMPONENTS[@]}")
@@ -99,7 +104,11 @@ else
 fi
 WANTED_STR=" ${WANTED[*]} "
 case "$WANTED_STR" in *" android "*) WANTED_STR="$WANTED_STR java " ;; esac
-case "$WANTED_STR" in *" rust "*) WANTED_STR="$WANTED_STR zig " ;; esac
+case "$WANTED_STR" in
+  *" rust "*)
+    if [ "$HOST_OS" = windows ]; then WANTED_STR="$WANTED_STR mingw "; else WANTED_STR="$WANTED_STR zig "; fi
+    ;;
+esac
 
 # Whether this run is to install `$1` (and, for the two that stand on
 # something else, what they bring with them).
@@ -141,6 +150,16 @@ extract_zip() {
 }
 
 TOOLCHAIN_DIR="$PWD/toolchain"
+
+# What a run that found everything in place has to say. `./codedeck` calls
+# this script before every command of the local engine, as the check of what
+# is installed, and sets INSTALL_TOOLCHAIN_QUIET so that a check which
+# installed nothing prints nothing; a run that does install something is
+# heard either way.
+INSTALLED_SOMETHING=0
+note() {
+  if [ "${INSTALL_TOOLCHAIN_QUIET:-0}" != 1 ]; then echo "$@"; fi
+}
 # The helper scripts this one runs or installs: the python extractors for a
 # host with no xz/unzip, and the Zig shims that go into toolchain/bin.
 LIB_DIR="$(cd "$(dirname "$0")" && pwd)/lib"
@@ -158,6 +177,7 @@ mkdir -p "$TOOLCHAIN_DIR"
 # --- JDK (Temurin 21 LTS, via Adoptium's API — always the latest 21.x build) ---
 if wants java; then
   if [ ! -x "$JDK_DIR/bin/java" ]; then
+    INSTALLED_SOMETHING=1
     echo "==> Installing a JDK (Temurin 21)"
     arch="$(uname -m)"; case "$arch" in x86_64) arch=x64 ;; aarch64) arch=aarch64 ;; esac
     jdk_url="$(curl -fsSL "https://api.adoptium.net/v3/assets/latest/21/hotspot?os=linux&architecture=${arch}&image_type=jdk" \
@@ -172,7 +192,7 @@ if wants java; then
     tar -xzf "$tmp/jdk.tar.gz" -C "$JDK_DIR" --strip-components=1
     rm -rf "$tmp"
   else
-    echo "==> JDK already installed, skipping"
+    note "==> JDK already installed, skipping"
   fi
   export JAVA_HOME="$JDK_DIR"
   export PATH="$JAVA_HOME/bin:$PATH"
@@ -181,23 +201,88 @@ fi
 # --- Rust (project-scoped rustup — never the user's own ~/.rustup) ---
 if wants rust; then
   if [ ! -x "$CARGO_HOME/bin/cargo" ]; then
+    INSTALLED_SOMETHING=1
     echo "==> Installing a project-scoped Rust toolchain"
     tmp="$(mktemp -d)"
-    curl -fsSL -o "$tmp/rustup-init.sh" https://sh.rustup.rs
-    RUSTUP_HOME="$RUSTUP_HOME" CARGO_HOME="$CARGO_HOME" \
-      sh "$tmp/rustup-init.sh" -y --no-modify-path --default-toolchain stable >/dev/null
+    if [ "$HOST_OS" = windows ]; then
+      # The GNU host, because its linker is the GCC below and not the MSVC
+      # build tools. `--no-modify-path` keeps rustup out of the user's PATH
+      # and registry, and the path check is skipped because a rustup of the
+      # user's own (in ~/.cargo) is no reason not to have this one: the two
+      # never see each other, each has its own RUSTUP_HOME. The minimal
+      # profile plus clippy is what the checks run; the offline docs alone
+      # would be another few hundred MB.
+      curl -fsSL -o "$tmp/rustup-init.exe" https://win.rustup.rs/x86_64
+      RUSTUP_HOME="$RUSTUP_HOME" CARGO_HOME="$CARGO_HOME" RUSTUP_INIT_SKIP_PATH_CHECK=yes \
+        "$tmp/rustup-init.exe" -y --no-modify-path --default-host x86_64-pc-windows-gnu \
+        --default-toolchain stable --profile minimal --component clippy </dev/null >/dev/null
+    else
+      curl -fsSL -o "$tmp/rustup-init.sh" https://sh.rustup.rs
+      RUSTUP_HOME="$RUSTUP_HOME" CARGO_HOME="$CARGO_HOME" \
+        sh "$tmp/rustup-init.sh" -y --no-modify-path --default-toolchain stable >/dev/null
+    fi
     rm -rf "$tmp"
   else
-    echo "==> Project-scoped Rust toolchain already installed, skipping"
+    note "==> Project-scoped Rust toolchain already installed, skipping"
   fi
   export RUSTUP_HOME CARGO_HOME
   export PATH="$CARGO_HOME/bin:$PATH"
   # Asked of the local toolchain, not of the network: `target list
   # --installed` reads what is here, so a run that finds the targets already
   # in place costs nothing and this script stays cheap to call as a check.
-  if ! rustup target list --installed 2>/dev/null | grep -qx 'aarch64-linux-android'; then
+  # Linux only: the APK is not built on a Windows host.
+  if [ "$HOST_OS" = linux ] &&
+    ! rustup target list --installed 2>/dev/null | grep -qx 'aarch64-linux-android'; then
+    INSTALLED_SOMETHING=1
     echo "==> Adding Android Rust targets"
     rustup target add aarch64-linux-android x86_64-linux-android
+  fi
+fi
+
+# --- MinGW-w64 GCC — the C compiler and linker of the Windows GNU toolchain ---
+# rustc for x86_64-pc-windows-gnu links through `gcc`, and the crates that
+# carry C (ring, secp256k1, sqlite) compile it with the same one. WinLibs is
+# GCC and MinGW-w64 in one archive that runs from wherever it is unpacked. The
+# MSVCRT build, not the UCRT one: it is the C runtime Rust's own GNU target
+# links against, and objects built against the other's headers would ask for
+# symbols it does not have. Pinned to one release and its SHA-256 — what is
+# unpacked here compiles and links every crate and test.
+MINGW_DIR="$TOOLCHAIN_DIR/mingw64"
+MINGW_RELEASE="16.2.0posix-14.0.0-msvcrt-r2"
+MINGW_FILE="winlibs-x86_64-posix-seh-gcc-16.2.0-mingw-w64msvcrt-14.0.0-r2.zip"
+MINGW_SHA256="1b90ec73c96e6905a913746b56fb6b20122422787029810d3afc6a3b440f2322"
+if wants mingw; then
+  if [ ! -x "$MINGW_DIR/bin/gcc.exe" ]; then
+    INSTALLED_SOMETHING=1
+    echo "==> Installing MinGW-w64 GCC (WinLibs $MINGW_RELEASE; a 270 MB download)"
+    tmp="$(mktemp -d)"
+    curl -fsSL -o "$tmp/$MINGW_FILE" \
+      "https://github.com/brechtsanders/winlibs_mingw/releases/download/$MINGW_RELEASE/$MINGW_FILE"
+    if ! (cd "$tmp" && printf '%s  %s\n' "$MINGW_SHA256" "$MINGW_FILE" | sha256sum -c - >/dev/null); then
+      echo "error: $MINGW_FILE does not match the SHA-256 this script pins" >&2
+      exit 1
+    fi
+    # The zip holds one directory, mingw64. Unpacked beside its final place
+    # and moved, so an interrupted run leaves no half toolchain that the
+    # check above would take for a whole one.
+    rm -rf "$MINGW_DIR" "$TOOLCHAIN_DIR/mingw64.partial"
+    mkdir -p "$TOOLCHAIN_DIR/mingw64.partial"
+    extract_zip "$tmp/$MINGW_FILE" "$TOOLCHAIN_DIR/mingw64.partial"
+    rm -rf "$tmp"
+    # What the archive carries beyond a C compiler and linker — other
+    # languages' front ends, a debugger, CMake, Doxygen, documentation —
+    # is a third of its size and nothing here runs it.
+    (
+      cd "$TOOLCHAIN_DIR/mingw64.partial/mingw64"
+      rm -rf share
+      rm -f libexec/gcc/*/*/f951.exe libexec/gcc/*/*/cc1obj.exe libexec/gcc/*/*/cc1objplus.exe \
+        bin/gdb.exe bin/gdbserver.exe bin/lto-dump.exe bin/doxygen.exe bin/cppcheck.exe \
+        bin/cmake.exe bin/ctest.exe bin/cpack.exe bin/ninja.exe
+    )
+    mv "$TOOLCHAIN_DIR/mingw64.partial/mingw64" "$MINGW_DIR"
+    rm -rf "$TOOLCHAIN_DIR/mingw64.partial"
+  else
+    note "==> MinGW-w64 GCC already installed, skipping"
   fi
 fi
 
@@ -211,6 +296,7 @@ fi
 ZIG_DIR="$TOOLCHAIN_DIR/zig"
 if wants zig; then
   if [ ! -x "$ZIG_DIR/zig" ]; then
+    INSTALLED_SOMETHING=1
     echo "==> Installing Zig (host linker stand-in for cargo)"
     arch="$(uname -m)"
     case "$arch" in x86_64 | aarch64) ;; *)
@@ -234,7 +320,7 @@ if wants zig; then
     extract_tar_xz "$tmp/zig.tar.xz" "$ZIG_DIR"
     rm -rf "$tmp"
   else
-    echo "==> Zig already installed, skipping"
+    note "==> Zig already installed, skipping"
   fi
 fi
 
@@ -260,6 +346,7 @@ NODE_BIN="$NODE_DIR/bin"
 if [ "$HOST_OS" = windows ]; then NODE_BIN="$NODE_DIR"; fi
 if wants node; then
   if [ ! -x "$NODE_BIN/node" ]; then
+    INSTALLED_SOMETHING=1
     echo "==> Installing Node.js $NODE_MAJOR.x"
     arch="$(uname -m)"; case "$arch" in x86_64) arch=x64 ;; aarch64) arch=arm64 ;; esac
     node_suffix="linux-${arch}.tar.xz"
@@ -290,17 +377,18 @@ if wants node; then
     fi
     rm -rf "$tmp"
   else
-    echo "==> Node.js already installed, skipping"
+    note "==> Node.js already installed, skipping"
   fi
   export PATH="$NODE_BIN:$PATH"
 
   if [ ! -x "$NODE_BIN/pnpm" ]; then
+    INSTALLED_SOMETHING=1
     echo "==> Installing pnpm $PNPM_VERSION via corepack"
     export COREPACK_HOME="$TOOLCHAIN_DIR/corepack"
     corepack enable --install-directory "$NODE_BIN"
     corepack prepare "pnpm@$PNPM_VERSION" --activate
   else
-    echo "==> pnpm already installed, skipping"
+    note "==> pnpm already installed, skipping"
   fi
 fi
 
@@ -310,6 +398,7 @@ if wants android; then
   SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
   mkdir -p "$ANDROID_HOME"
   if [ ! -x "$SDKMANAGER" ]; then
+    INSTALLED_SOMETHING=1
     echo "==> Installing Android cmdline-tools"
     tmp="$(mktemp -d)"
     curl -fsSL -o "$tmp/cmdline-tools.zip" \
@@ -323,7 +412,7 @@ if wants android; then
     mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
     rm -rf "$tmp"
   else
-    echo "==> Android cmdline-tools already installed, skipping"
+    note "==> Android cmdline-tools already installed, skipping"
   fi
 
   # The four packages behind cmdline-tools are asked for only when one of them
@@ -331,6 +420,7 @@ if wants android; then
   # which is what lets this script be called as a check on every command
   # rather than once with a marker file claiming what it installed.
   if [ ! -d "$ANDROID_HOME/platforms/$PLATFORM" ] || [ ! -d "$ANDROID_HOME/ndk/$NDK_VERSION" ]; then
+    INSTALLED_SOMETHING=1
     echo "==> Installing platform-tools, $PLATFORM, build-tools $BUILD_TOOLS, NDK $NDK_VERSION"
     yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
     "$SDKMANAGER" --install \
@@ -339,7 +429,7 @@ if wants android; then
       "build-tools;$BUILD_TOOLS" \
       "ndk;$NDK_VERSION"
   else
-    echo "==> Android platform, build-tools and NDK already installed, skipping"
+    note "==> Android platform, build-tools and NDK already installed, skipping"
   fi
 fi
 
@@ -356,7 +446,11 @@ fi
 component_present() {
   case "$1" in
     java) [ -x "$JDK_DIR/bin/java" ] ;;
-    rust) [ -x "$CARGO_HOME/bin/cargo" ] ;;
+    # On Windows a cargo that cannot link is not a Rust toolchain.
+    rust)
+      [ -x "$CARGO_HOME/bin/cargo" ] &&
+        { [ "$HOST_OS" != windows ] || [ -x "$MINGW_DIR/bin/gcc.exe" ]; }
+      ;;
     node) [ -x "$NODE_BIN/node" ] ;;
     android)
       [ -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ] &&
@@ -381,6 +475,11 @@ component_present() {
     echo "export RUSTUP_HOME=\"$RUSTUP_HOME\""
     echo "export CARGO_HOME=\"$CARGO_HOME\""
     path_prefix="$path_prefix\$CARGO_HOME/bin:"
+    # The GCC the GNU toolchain links through (Windows). Always, unlike the
+    # Zig shims below: Git Bash has a /mingw64/bin of its own with no compiler
+    # in it, and a GCC from somewhere else is not the one the crates were
+    # checked against.
+    if [ "$HOST_OS" = windows ]; then path_prefix="$path_prefix$MINGW_DIR/bin:"; fi
   fi
   if component_present node; then
     echo "export COREPACK_HOME=\"$TOOLCHAIN_DIR/corepack\""
@@ -399,8 +498,11 @@ component_present() {
   echo "fi"
 } > "$TOOLCHAIN_DIR/env.sh"
 
+if [ "$INSTALLED_SOMETHING" = 0 ] && [ "${INSTALL_TOOLCHAIN_QUIET:-0}" = 1 ]; then
+  exit 0
+fi
 echo
-if component_present android; then
+if component_present android && [ "$HOST_OS" = linux ]; then
   echo "==> Done. toolchain/env.sh written — source it, then run:"
   echo "    apps/android/scripts/build-apk-local.sh"
 else

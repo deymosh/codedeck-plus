@@ -68,10 +68,13 @@ require_docker() {
 
 # Whether this host can run a command that needs these components (node,
 # rust, java, android; none named = all of them) without Docker. Linux: yes,
-# scripts/install-toolchain.sh vendors every one. Windows (Git Bash): the Node
-# half only — the agent host, which CI tests on Windows too. The crates
-# compile C and want the MSVC build tools, and the Android toolchain is its
-# own install; neither is something this script puts on a machine.
+# scripts/install-toolchain.sh vendors every one. Windows (Git Bash): Node —
+# the agent host, as CI tests it on Windows — and Rust, as the GNU toolchain
+# with a GCC unpacked beside it. That one is not what CI builds with on
+# Windows (MSVC, a system install this script will not make), and a Windows
+# build never compiles the `cfg(unix)` code: it is the loop's engine, and the
+# Linux and MSVC runs in CI stay the judge. The Android toolchain is Docker's
+# there.
 host_local_supports() {
   local component
   case "$(uname -s)" in
@@ -79,7 +82,10 @@ host_local_supports() {
     MINGW* | MSYS*)
       [ $# -gt 0 ] || return 1
       for component in "$@"; do
-        [ "$component" = node ] || return 1
+        case "$component" in
+          node | rust) ;;
+          *) return 1 ;;
+        esac
       done
       return 0
       ;;
@@ -128,15 +134,15 @@ native_path() {
 # what was installed can drift from what is there (a deleted NDK, a half-run
 # that landed cmdline-tools and nothing else). Every step of it skips without
 # touching the network when its target is present, so the check costs a shell
-# startup. Sources env.sh into THIS shell so cargo/node/pnpm/java stay on PATH
+# startup — and says nothing unless it installs something. Sources env.sh into THIS shell so cargo/node/pnpm/java stay on PATH
 # for the rest of the script. What a host can run locally is
-# host_local_supports' to say: all of it on Linux, the Node half on Windows.
+# host_local_supports' to say: all of it on Linux, Node and Rust on Windows.
 ensure_toolchain() {
   if ! host_local_supports "$@"; then
     echo "Docker is unavailable, and this host has no local toolchain for" >&2
-    echo "this command (scripts/install-toolchain.sh: everything on Linux, the" >&2
-    echo "agent host's Node on Windows). Install and start Docker (Docker" >&2
-    echo "Desktop on Windows/macOS), then re-run it. See CLAUDE.md, \"Commands\"." >&2
+    echo "this command (scripts/install-toolchain.sh: everything on Linux, Node" >&2
+    echo "and Rust on Windows). Install and start Docker (Docker Desktop on" >&2
+    echo "Windows/macOS), then re-run it. See CLAUDE.md, \"Commands\"." >&2
     exit 1
   fi
   if [ ! -f toolchain/env.sh ]; then
@@ -144,9 +150,25 @@ ensure_toolchain() {
     [ $# -gt 0 ] && echo "    (${*})"
     echo "    one-time; Ctrl-C to abort"
   fi
-  bash scripts/install-toolchain.sh "$@"
+  INSTALL_TOOLCHAIN_QUIET=1 bash scripts/install-toolchain.sh "$@"
   # shellcheck source=/dev/null
   . toolchain/env.sh
+  apply_local_limits
+}
+
+# CODEDECK_CPUS on the local engine. There is no container to put in a cpuset
+# here, so the number goes to each tool that would otherwise start one worker
+# per core of the machine: cargo's build jobs (its jobserver bounds rustc's
+# own threads too), the Rust test harness and vitest's pool. A value the
+# caller already set for one of them is left alone. CODEDECK_MEMORY has no
+# local form: nothing here can bound a process tree's memory without a
+# container.
+apply_local_limits() {
+  [ -n "${CODEDECK_CPUS:-}" ] || return 0
+  export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-$CODEDECK_CPUS}"
+  export RUST_TEST_THREADS="${RUST_TEST_THREADS:-$CODEDECK_CPUS}"
+  export VITEST_MAX_THREADS="${VITEST_MAX_THREADS:-$CODEDECK_CPUS}"
+  export VITEST_MAX_FORKS="${VITEST_MAX_FORKS:-$CODEDECK_CPUS}"
 }
 
 usage() {
@@ -181,8 +203,8 @@ apps/android/scripts/build-apk-local.sh — see those files for details):
                            arm64 device + x86_64 emulator)
 
 Workspace checks (throwaway Node and Rust containers — nothing installed
-locally is required; on a Docker-less Linux host these run locally through
-the vendored toolchain instead, installed on first use):
+locally is required; without Docker, or with CODEDECK_ENGINE=local, these run
+on the vendored toolchain instead, installed on first use):
   check                    The bar for a change: the agent host's typecheck,
                            tests and build; clippy, tests and docs for every
                            crate. Every step runs and is listed at the end
@@ -216,16 +238,22 @@ Pull request:
 Engine — Docker runs everything when its daemon answers; without Docker the
 local toolchain does (scripts/install-toolchain.sh, into ./toolchain):
   CODEDECK_ENGINE=local    Prefer the local toolchain even with Docker up, for
-                           what this host has one for: everything on Linux,
-                           the agent host (check's host half, dev vitest/
-                           pnpm/node, live, regen pins) on Windows. The rest
-                           still runs in Docker, and says so
+                           what this host has one for: everything on Linux;
+                           on Windows the agent host and the crates (check,
+                           e2e, dev, live, regen) — the crates on the GNU
+                           toolchain, where CI's Windows job uses MSVC. The
+                           rest (android, apk) still runs in Docker, and
+                           says so
+  CODEDECK_ENGINE=docker   For one command: run it in the Linux container,
+                           which is what CI's bar is
 
 Limits, for a machine that is also being used (any command above or below
 that runs a container; unset = no limit):
   CODEDECK_CPUS=8          Cores a container may use — builds and test runners
-                           size themselves to it
+                           size themselves to it. On the local engine: the
+                           jobs and workers cargo, its tests and vitest start
   CODEDECK_MEMORY=12g      Memory a container may use, page cache included
+                           (containers only)
 
 The dev container — one long-lived container with node_modules and the caches
 kept warm, for the loop between checks (editing a driver, running one test
@@ -282,7 +310,7 @@ maps to its Gradle task; anything else is passed to Gradle as it is):
   android shell            A shell in apps/android
   android <task> [args…]   Any other Gradle task
 
-Bindings (throwaway Rust container; locally on a Docker-less Linux host):
+Bindings (throwaway Rust container; on the local engine, in this tree):
   gen-android-bindings     Regenerate apps/android/app/src/main/java/uniffi/**
                            from crates/client-ffi via uniffi-bindgen
                            (source of truth — see that crate's own doc
@@ -443,6 +471,7 @@ start_throwaway() {
   # Double-quoted so $name is baked in NOW, as a literal — the trap fires
   # after the calling function has returned (its locals are gone by then), so
   # a single-quoted trap referencing $name would fail under `set -u`.
+  # shellcheck disable=SC2064
   trap "docker rm -f '$name' >/dev/null 2>&1 || true" EXIT
 }
 
@@ -470,7 +499,7 @@ ensure_tool_image() {
 # failure for a name that was found.
 container_named() {
   local names
-  names="$(docker ps $1 --format '{{.Names}}')"
+  names="$(docker ps ${1:+"$1"} --format '{{.Names}}')"
   case $'\n'"$names"$'\n' in
     *$'\n'"$2"$'\n'*) return 0 ;;
     *) return 1 ;;
@@ -538,6 +567,8 @@ sync_tree() {
   echo "==> Syncing the working tree into $container"
   dexec "$container" sh -c 'rm -rf /tmp/codedeck-tree && mkdir -p /tmp/codedeck-tree'
   pack_repo_into "$container" /tmp/codedeck-tree
+  # The script is the container's shell's to expand, not this one's.
+  # shellcheck disable=SC2016
   dexec "$container" sh -c '
     set -e
     dest="$1"
@@ -660,30 +691,32 @@ CHECK_STREAM=0
 CHECK_TAIL=60
 
 step() {
-  local label="$1" slug log code=0
+  local label="$1" slug log code=0 started=$SECONDS took
   shift
   if [ "$CHECK_STREAM" = 1 ]; then
     echo "==> $label"
     "$@" || code=$?
+    took=$((SECONDS - started))
   else
     slug="$(printf '%s' "$label" | tr -cs 'a-z0-9' '-')"
     log="$CHECK_LOG_DIR/${slug%-}.log"
     printf '==> %-18s ' "$label"
     "$@" >"$log" 2>&1 </dev/null || code=$?
+    took=$((SECONDS - started))
     if [ "$code" = 0 ]; then
-      echo "ok"
+      echo "ok (${took}s)"
     else
-      echo "FAILED (exit $code) — the end of $log:"
+      echo "FAILED (exit $code, ${took}s) — the end of $log:"
       tail -n "$CHECK_TAIL" "$log" | sed 's/^/    /'
     fi
   fi
-  printf '%s\t%s\n' "$code" "$label" >>"$CHECK_RESULTS"
+  printf '%s\t%s\t%s\n' "$code" "$took" "$label" >>"$CHECK_RESULTS"
   return "$code"
 }
 
 # Every step that ran, and one exit code for the lot.
 check_summary() {
-  local code label failed=0
+  local code took label failed=0
   if [ ! -s "$CHECK_RESULTS" ]; then
     rm -f "$CHECK_RESULTS"
     echo "==> Nothing to run."
@@ -691,11 +724,13 @@ check_summary() {
   fi
   echo
   echo "==> Summary"
-  while IFS=$'\t' read -r code label; do
+  # Each step with how long it took: where a sweep's time goes is the first
+  # thing to know before making it shorter.
+  while IFS=$'\t' read -r code took label; do
     if [ "$code" = 0 ]; then
-      printf '    ok      %s\n' "$label"
+      printf '    ok      %-20s %4ss\n' "$label" "$took"
     else
-      printf '    FAILED  %s\n' "$label"
+      printf '    FAILED  %-20s %4ss\n' "$label" "$took"
       failed=1
     fi
   done <"$CHECK_RESULTS"
@@ -951,6 +986,7 @@ cmd_dev() {
   local needs=(node rust)
   case "${1:-}" in
     vitest | pnpm | node | npx | tsc) needs=(node) ;;
+    cargo | rustc | rustup) needs=(rust) ;;
   esac
 
   local workdir="" vitest=()
@@ -976,11 +1012,12 @@ cmd_dev() {
     # toolchain, with no container in the way at all. `--sync-only` has done
     # its work once the dependencies are in, and must not open a shell.
     *)
-      # Node is what this installs. A host that cannot run the rest of what
-      # the command needs locally (cargo, on Windows) is told so here, by
-      # asking for it, rather than left to a "command not found".
-      if host_local_supports "${needs[@]}"; then ensure_toolchain node; else ensure_toolchain "${needs[@]}"; fi
-      ensure_local_deps
+      # What the command names is what gets installed: `dev cargo …` never
+      # fetches Node, `dev vitest …` never fetches Rust, and a shell or a
+      # script (which may call either) gets both. Only a command that runs
+      # Node needs the workspace's packages.
+      ensure_toolchain "${needs[@]}"
+      case " ${needs[*]} " in *" node "*) ensure_local_deps ;; esac
       [ "$only_sync" = 1 ] && return 0
       cd "${workdir:-.}"
       if [ $# -eq 0 ]; then exec "${SHELL:-bash}"; fi
@@ -1085,7 +1122,11 @@ copy_back() {
       MSYS_NO_PATHCONV=1 docker cp "$DEV_CONTAINER:$DEV_ROOT/$path" "$path"
     fi
   done
-  # What the regeneration changed, which is the answer to "was it stale?".
+}
+
+# What a regeneration changed, which is the answer to "was it stale?" — on
+# either engine: the files as they now are against what git last saw.
+report_regen() {
   local changed
   changed="$(git status --short -- "$@")"
   if [ -n "$changed" ]; then printf '%s\n' "$changed"; else echo "==> Already current: $*"; fi
@@ -1101,11 +1142,13 @@ regen_one() {
       # for what Cargo.toml now asks and leaves every other entry where it was.
       ${run[@]+"${run[@]}"} sh -c 'cargo metadata --format-version 1 >/dev/null'
       [ "$docker" = 1 ] && copy_back Cargo.lock
+      report_regen Cargo.lock
       ;;
     ts)
       echo "==> The agent host's protocol types"
       ${run[@]+"${run[@]}"} cargo test --locked -p agent-protocol --test gen_ts_bindings -- --ignored
       [ "$docker" = 1 ] && copy_back packages/agent-host/src/generated/protocol.ts
+      report_regen packages/agent-host/src/generated/protocol.ts
       ;;
     pins)
       echo "==> pnpm-lock.yaml and the agents' install pins"
@@ -1117,6 +1160,7 @@ regen_one() {
         # or the next `dev` would reinstall what is already there.
         dexec "$DEV_CONTAINER" sh -c "printf '%s' '$(git hash-object pnpm-lock.yaml)' > $DEV_LOCK_STAMP"
       fi
+      report_regen pnpm-lock.yaml packages/agent-host/src/generated
       ;;
   esac
   return 0
@@ -1139,6 +1183,7 @@ cmd_regen() {
     # The bindings have a container and a command of their own.
     if [ "$kind" = bindings ]; then
       (cmd_gen_android_bindings)
+      report_regen apps/android/app/src/main/java/uniffi
       continue
     fi
     # The pins are pnpm's work, the rest cargo's — and a host may have only
@@ -1478,7 +1523,7 @@ cmd_live() {
     esac
     local i
     for i in "${!probe[@]}"; do
-      if [ "${probe[$i]}" = "--dump" ]; then probe[$((i + 1))]="$dump"; fi
+      if [ "${probe[$i]}" = "--dump" ]; then probe[i + 1]="$dump"; fi
     done
   fi
 
@@ -1614,18 +1659,32 @@ cmd_clean() {
 # A session should not have to ask Docker five questions to learn what it may
 # run: this answers them in one call. Read-only, and it reports what is
 # missing rather than failing on it — that is the point of it.
+# What ./toolchain holds, by the binary that does each component's work.
+local_toolchain_summary() {
+  if [ ! -f toolchain/env.sh ]; then
+    echo "absent"
+    return 0
+  fi
+  local have=""
+  if [ -x toolchain/node/bin/node ] || [ -x toolchain/node/node ]; then have="$have node"; fi
+  if [ -x toolchain/cargo/bin/cargo ]; then have="$have rust"; fi
+  if [ -x toolchain/jdk/bin/java ]; then have="$have java"; fi
+  if [ -d toolchain/android-sdk/platforms ]; then have="$have android"; fi
+  echo "./toolchain:${have:- nothing yet} (the local engine)"
+}
+
 cmd_doctor() {
   echo "host"
   printf '  %-14s %s\n' "repo" "$(pwd)"
   printf '  %-14s %s\n' "os" "$(uname -s)"
-  printf '  %-14s %s\n' "toolchain" "$([ -f toolchain/env.sh ] && echo 'present (./toolchain — the local engine)' || echo 'absent')"
+  printf '  %-14s %s\n' "toolchain" "$(local_toolchain_summary)"
   printf '  %-14s %s\n' "engine" "CODEDECK_ENGINE=${CODEDECK_ENGINE:-unset (Docker when it answers; 'local' prefers ./toolchain)}"
 
   local state=0
   docker_state || state=$?
   case $state in
     0) printf '  %-14s %s\n' "docker" "running" ;;
-    1) printf '  %-14s %s\n' "docker" "not installed — check/test/typecheck/apk/dev/android/gen-android-bindings run locally; bridge and tor cannot"
+    1) printf '  %-14s %s\n' "docker" "not installed — the checks, dev, live and regen run locally where this host has a toolchain; bridge and tor cannot"
        return 0 ;;
     2) printf '  %-14s %s\n' "docker" "installed, but its daemon is not answering — start it"
        return 0 ;;
@@ -1697,14 +1756,16 @@ cmd_doctor() {
 # temp dir. The Docker variant below copies only the cargo workspace in; the
 # cargo registry and target dir live in cached volumes.
 gen_android_bindings_local() {
-  local out dest
-  out="$(mktemp -d)"
+  local out dest library=target/debug/libclient_ffi.so
+  # The host's own name for a cdylib; the Kotlin it describes is the same.
+  case "$(uname -s)" in MINGW* | MSYS*) library=target/debug/client_ffi.dll ;; esac
+  out="$(native_path "$(mktemp -d)")"
   dest="apps/android/app/src/main/java/uniffi"
   echo "==> Building crates/client-ffi (host target)"
   cargo build --locked -p client-ffi --lib
   echo "==> Running uniffi-bindgen (Kotlin, library mode)"
   cargo run --locked -p client-ffi --bin uniffi-bindgen -- \
-    generate --library target/debug/libclient_ffi.so --language kotlin --no-format \
+    generate --library "$library" --language kotlin --no-format \
     --out-dir "$out"
   rm -rf "$dest"
   mkdir -p "$dest"

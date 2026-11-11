@@ -316,7 +316,8 @@ jobs:
         run: ./gradlew testDebugUnitTest verifyPaparazziDebug lintDebug --console=plain
 
   # The deployment side, which no other job touches: every shell script must
-  # at least parse, and the bridge image must build (never pushed here). The
+  # parse and pass ShellCheck, ./codedeck must behave as its tests say, and
+  # the bridge image must build (never pushed here). The
   # image build compiles the whole bridge in release mode without a layer
   # cache: its Rust layer changes with nearly every crate edit, so a cache
   # would rarely hit while holding gigabytes of the cache quota.
@@ -335,6 +336,18 @@ jobs:
           for f in codedeck $(git ls-files '*.sh'); do
             bash -n "$f" || { echo "::error file=$f::does not parse"; exit 1; }
           done
+
+      # ShellCheck is part of the runner image. SCRIPTDIR lets a `source=`
+      # directive be written relative to the script that carries it.
+      - name: ShellCheck
+        if: needs.changes.outputs.scripts == 'true'
+        run: shellcheck -x -P SCRIPTDIR codedeck $(git ls-files '*.sh')
+
+      # What ./codedeck decides — which steps run, what `--changed` covers,
+      # what a failure reports — against stub tools: seconds, no toolchain.
+      - name: ./codedeck behaviour tests
+        if: needs.changes.outputs.scripts == 'true'
+        run: bash scripts/tests/codedeck.test.sh
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
         if: needs.changes.outputs.image == 'true'
