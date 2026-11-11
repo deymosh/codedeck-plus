@@ -331,7 +331,8 @@ a Docker-less host:
                            (tools/fake-model.mjs): no account, no network,
                            and the same replies every run. Each prompt is a
                            scenario — /tool (a tool call; a permission card
-                           on OpenCode), /question, /plan-approval, /error,
+                           on OpenCode), /background (Qwen Code's background
+                           shell), /question, /plan-approval, /error,
                            /long (a long answer, and a context figure that
                            has moved) — and anything else is echoed.
                            --dump DIR writes every request the agent made,

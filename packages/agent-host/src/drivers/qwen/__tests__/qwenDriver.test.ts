@@ -144,7 +144,7 @@ describe('QwenDriver.info', () => {
       commands: true,
       plugins: true,
       mcp: true,
-      tasks: false,
+      tasks: true,
     });
     expect(info.credentials).toEqual([]);
   });
@@ -621,6 +621,67 @@ describe('QwenSession steering', () => {
     releases[0]?.();
     await vi.waitFor(() => expect(prompts).toEqual(['one', 'two']));
     releases[1]?.();
+  });
+
+  // Qwen Code asks `_qwencode/start_turn` before telling the model a
+  // background task ended, and admits the turn on any answer but
+  // `{accepted: false}` — `-32601` included. Refused, it retries three times
+  // and keeps the result for the conversation's next message.
+  const startTurn = (sessionId: string) =>
+    ({ sessionId, source: 'background_notification', turnId: `${sessionId}#n1`, taskId: 'bg_1', kind: 'shell' }) as const;
+
+  it('admits a turn of the agent’s own and shows it as the agent working', async () => {
+    const ready = withDriver();
+    const ctx = await started(ready);
+    const answer = await ready.agent.extRequest('_qwencode/start_turn', startTurn('s1'));
+    expect(answer.result).toEqual({ accepted: true });
+    await vi.waitFor(() => expect(ctx.events.some((event) => event.type === 'turn' && event.state === 'running')).toBe(true));
+  });
+
+  it('runs a message sent during a turn of the agent’s own as a turn the message ends', async () => {
+    // Verified against 0.27.1: a prompt during its own turn makes Qwen Code
+    // cancel that turn (`end_turn`, reason `cancelled`) and run the prompt —
+    // whose end, not the cancelled turn's, is the turn's end.
+    const ready = withDriver();
+    const ctx = await started(ready);
+    const turns = () => ctx.events.filter((event) => event.type === 'turn').map((event) => (event as { state: string }).state);
+    await ready.agent.extRequest('_qwencode/start_turn', startTurn('s1'));
+    let release: (() => void) | undefined;
+    ready.agent.onPrompt = () => new Promise<string>((resolve) => (release = () => resolve('end_turn')));
+    ready.session.prompt('hello');
+    await vi.waitFor(() => expect(ready.agent.requests.some((r) => r.method === 'session/prompt')).toBe(true));
+    ready.agent.send('_qwencode/end_turn', { sessionId: 's1', reason: 'cancelled', turnId: 's1#n1', source: 'background_notification' });
+    await ready.agent.extRequest('craft/drainMidTurnQueue', { sessionId: 's1' });
+    expect(turns().at(-1)).toBe('running');
+    release?.();
+    await vi.waitFor(() => expect(turns().at(-1)).toBe('idle'));
+    expect(turns().filter((state) => state === 'idle')).toHaveLength(1);
+  });
+
+  it('refuses a turn of the agent’s own for a session that is ending', async () => {
+    const ready = withDriver();
+    await started(ready);
+    // A prompt the agent never answers holds the end in its wait for the
+    // connection to go idle, with the session still attached.
+    ready.agent.onPrompt = () => new Promise<string>(() => {});
+    ready.session.prompt('build the parser');
+    await vi.waitFor(() => expect(ready.agent.requests.some((r) => r.method === 'session/prompt')).toBe(true));
+    void ready.session.end();
+    const answer = await ready.agent.extRequest('_qwencode/start_turn', startTurn('s1'));
+    expect(answer.result).toEqual({ accepted: false });
+  });
+
+  it('refuses a turn of the agent’s own for a session it no longer serves', async () => {
+    const ready = withDriver();
+    await started(ready);
+    // A second session keeps the process up after the first one ends, as the
+    // pool's idle close does in production.
+    const other = recordingContext();
+    ready.driver.startSession(start({ sessionId: 'b2' }), other);
+    await other.waitFor((event) => event.type === 'ready');
+    await ready.session.end();
+    const answer = await ready.agent.extRequest('_qwencode/start_turn', startTurn('s1'));
+    expect(answer.result).toEqual({ accepted: false });
   });
 
   it('refuses an extension method it does not know, at once', async () => {

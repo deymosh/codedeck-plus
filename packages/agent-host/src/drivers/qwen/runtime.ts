@@ -18,6 +18,7 @@ import { agentCacheDir } from '../../install/agentInstall';
 import { isFile } from '../../sdk/executable';
 import { packageVersionOf } from '../../sdk/packageVersion';
 import { QWEN_LABEL } from './install';
+import { START_TURN_METHOD, TURN_REFUSED } from './tasks';
 
 export type { SpawnFn } from '../../acp/runtime';
 
@@ -125,6 +126,15 @@ export class QwenRuntime extends AcpRuntime<undefined, AcpProcessEvents> {
         throw error;
       });
     return this.entry;
+  }
+
+  /** A background task of a session that has ended may still finish while
+   *  the process serves others: the turn Qwen Code would start to tell the
+   *  model is refused, so no request is spent on a conversation nobody has
+   *  open. Qwen Code keeps the result queued in the process, for that
+   *  conversation's next message. */
+  protected override unclaimedExtRequest(method: string): Promise<unknown> | undefined {
+    return method === START_TURN_METHOD ? Promise.resolve(TURN_REFUSED) : undefined;
   }
 
   /** One process's command and environment. */

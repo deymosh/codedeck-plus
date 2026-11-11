@@ -56,6 +56,9 @@ export interface AcpSessionHandler {
    *  `undefined` leaves it to the default `-32601`, so a method the driver
    *  does not claim is refused at once rather than left hanging. */
   extRequest?(method: string, params: Record<string, unknown>): Promise<unknown> | undefined;
+  /** An extension notification the agent sent for this session, routed the
+   *  same way. */
+  extNotification?(method: string, params: Record<string, unknown>): void;
 }
 
 /** What the driver is told about a process, whichever sessions it serves. */
@@ -154,6 +157,8 @@ interface ProcessHooks<H> {
   stderr: (line: string, process_: AgentProcess<H>) => boolean;
   /** The child has exited; the driver removes whatever it made for it. */
   cleanup: (process_: AgentProcess<H>) => void;
+  /** An extension request no attached session claims. */
+  unclaimed: (method: string, params: Record<string, unknown>) => Promise<unknown> | undefined;
 }
 
 /** The identity of one environment: same variables, same process. The hash is
@@ -202,12 +207,19 @@ class AgentProcess<H> implements AcpProcess<H> {
       return handler.permission(request);
     });
     // A method ACP does not define is the driver's, routed to the session its
-    // params name. One no session claims stays unclaimed, and the client
-    // answers `-32601`.
+    // params name. One that names no attached session (it has ended) is the
+    // runtime's to answer; unanswered there too, the client answers `-32601`.
     this.client.onUnknownRequest((method, params) => {
+      const record = (params ?? {}) as Record<string, unknown>;
+      const sessionId = record.sessionId;
+      const handler = typeof sessionId === 'string' ? this.handlers.get(sessionId) : undefined;
+      if (handler) return handler.extRequest?.(method, record);
+      return hooks.unclaimed(method, record);
+    });
+    this.client.onUnknownNotification((method, params) => {
       const sessionId = (params as { sessionId?: unknown } | null)?.sessionId;
       const handler = typeof sessionId === 'string' ? this.handlers.get(sessionId) : undefined;
-      return handler?.extRequest?.(method, params as Record<string, unknown>);
+      handler?.extNotification?.(method, params as Record<string, unknown>);
     });
 
     // The agent logs its own diagnostics on stderr (ACP owns stdout).
@@ -318,6 +330,15 @@ export abstract class AcpRuntime<H = undefined, E extends AcpProcessEvents = Acp
   /** The child has exited: the driver removes whatever it made for it. */
   protected cleanup?(process_: AcpProcess<H>): void;
 
+  /**
+   * An extension request for a session this process no longer serves — it
+   * ended, while the process lives on for others or for its idle close. The
+   * agent may still be finishing that session's work. `undefined` (the
+   * default) leaves it to `-32601`; a driver whose agent reads `-32601` as
+   * consent answers its own refusal here.
+   */
+  protected unclaimedExtRequest?(method: string, params: Record<string, unknown>): Promise<unknown> | undefined;
+
   /** The connection for one session's environment, started on first use. */
   async acquire(env: Record<string, string>, events: E): Promise<AcpProcess<H>> {
     if (this.stopping) throw new Error('the agent host is shutting down');
@@ -416,6 +437,7 @@ export abstract class AcpRuntime<H = undefined, E extends AcpProcessEvents = Acp
         ended: (sessionIds, error) => events.ended(sessionIds, error),
         stderr: (line, process__) => this.stderr?.(line, process__, events) ?? false,
         cleanup: (process__) => this.cleanup?.(process__),
+        unclaimed: (method, params) => this.unclaimedExtRequest?.(method, params),
       },
     );
     // The connection is initialized before any session uses it: the agent
