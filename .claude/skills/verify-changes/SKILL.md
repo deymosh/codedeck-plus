@@ -55,7 +55,7 @@ What to run for what changed:
   After that, the pnpm store, cargo registry and target dir live in named
   volumes, so reruns only rebuild what changed.
 - Each check's container is removed on exit (success, failure, or Ctrl-C).
-- `CODEDECK_CPUS=<cores>` / `CODEDECK_MEMORY=<12g>` bound every container the
+- `CODEDECK_CPUS=<cores>` / `CODEDECK_MEMORY=<4g>` bound every container the
   script runs, for a machine someone is also working on.
 
 - `CODEDECK_ENGINE=local` runs a command without Docker where the host has a
