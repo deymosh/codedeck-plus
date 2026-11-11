@@ -1,6 +1,6 @@
 ---
 name: verify-changes
-description: Verify a change in this repository when there is no Node/Rust toolchain on the host — run the agent host and Rust checks in Docker via ./codedeck, and know when an APK or a running bridge is actually needed. Use before committing, when asked to run the tests, or to confirm a change works.
+description: Verify a change in this repository when there is no Node/Rust toolchain on the host — run the agent host, Rust and Android checks through ./codedeck (in Docker, or on the toolchain it vendors), and know when an APK or a running bridge is actually needed. Use before committing, when asked to run the tests, or to confirm a change works.
 ---
 
 # Verifying changes without a host toolchain
@@ -106,6 +106,13 @@ anything changed. After changing a type in `crates/agent-protocol`, run
 ./codedeck android snapshot      # re-record them; goldens copied back to review
 ./codedeck android <task>        # any other Gradle task, passed through
 ```
+
+Without a terminal Gradle's own output goes to `dist/logs/android.log` and
+the command prints the report — the counts, the classes that failed, lint's
+verdict for this run — plus the end of the log when the run failed
+(`--verbose` streams everything). The bar for lint is no errors; the three
+"a newer version is available" warnings it reports today are a Gradle/AGP
+bump waiting to be done, not something a change introduced.
 
 Gradle runs without `--offline` on purpose: AGP resolves the platform DSL's
 `release(37)` to `android-37.0`, which the toolchain image does not carry, so
