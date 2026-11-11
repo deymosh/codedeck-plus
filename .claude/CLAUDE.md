@@ -51,7 +51,9 @@ upstream did not design for:
 `pnpm`/`node`/`cargo`/`java` are already on `PATH` without checking which
 applies. `./codedeck doctor` answers what this machine has right now.** Every
 command below runs on both engines: Docker when its daemon answers, otherwise
-the vendored toolchain — the caller does not choose, and does not need to know.
+the vendored toolchain — the caller does not have to choose.
+`CODEDECK_ENGINE=local` prefers the vendored toolchain even with Docker up,
+for whatever this host has one for.
 
 - **Windows (the maintainer's usual host):** no toolchain on the host at
   all. Everything runs through Docker via the `./codedeck` script (Git Bash).
@@ -60,6 +62,12 @@ the vendored toolchain — the caller does not choose, and does not need to know
   per command — that is what makes them fast enough for a loop of edits.
   A git worktree gets a `dev`/`live` container of its own
   (`codedeck-dev-<worktree>`, caches shared), so checkouts never take turns.
+  With `CODEDECK_ENGINE=local` the agent host's half skips Docker: Node and
+  the pinned pnpm go into `./toolchain/` (`scripts/install-toolchain.sh
+  node`), and `check`'s host steps, `dev vitest|pnpm|node …`, `live` and
+  `regen pins` run in this tree — as the Windows CI job does, so a failure
+  that only Windows has shows up here first. The crates and the app still
+  run in Docker there (they need the MSVC build tools and the Android SDK).
 - **Linux (e.g. inside a container that doesn't itself have Docker-in-Docker,
   or any bare Linux machine):** `scripts/install-toolchain.sh` installs the
   toolchain into `./toolchain/` (gitignored), independent of anything already

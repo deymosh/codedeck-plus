@@ -54,6 +54,13 @@ What to run for what changed:
 - `CODEDECK_CPUS=<cores>` / `CODEDECK_MEMORY=<12g>` bound every container the
   script runs, for a machine someone is also working on.
 
+- `CODEDECK_ENGINE=local` runs the agent host's half without Docker where
+  the host has a toolchain for it — on Windows that is Node in `./toolchain/`
+  (installed on first use): `check`'s host steps, `dev vitest|pnpm|node …`,
+  `live` and `regen pins` then run in this tree, natively, which is also how
+  to reproduce a failure only the Windows CI job shows. Everything else still
+  goes to Docker and says so. `./codedeck doctor` shows which is in force.
+
 To iterate on one piece without the full sweep, use the dev container — one
 long-lived container that keeps its `node_modules` and the caches, with the
 working tree synced into it on every command (so an edit, a new file or a
