@@ -5,10 +5,12 @@ description: Verify a change in this repository when there is no Node/Rust toolc
 
 # Verifying changes without a host toolchain
 
-The maintainer's machine has Docker but **no `node`/`pnpm`/`cargo` on `PATH`**.
-All verification goes through the `./codedeck` script, which spins up throwaway
-containers (Node for the agent host, Rust for the crates) and runs the checks
-inside them. Paths below are relative to the repo root.
+The maintainer's machine has **no `node`/`pnpm`/`cargo` on `PATH`** to rely
+on. All verification goes through the `./codedeck` script, which runs each
+check where a toolchain is: in throwaway containers (Node for the agent host,
+Rust for the crates), or on the toolchain it vendors into `./toolchain/` when
+`CODEDECK_ENGINE=local` is set or there is no Docker. The commands are the
+same either way. Paths below are relative to the repo root.
 
 ## Primary path — always start here
 
@@ -54,12 +56,17 @@ What to run for what changed:
 - `CODEDECK_CPUS=<cores>` / `CODEDECK_MEMORY=<12g>` bound every container the
   script runs, for a machine someone is also working on.
 
-- `CODEDECK_ENGINE=local` runs the agent host's half without Docker where
-  the host has a toolchain for it — on Windows that is Node in `./toolchain/`
-  (installed on first use): `check`'s host steps, `dev vitest|pnpm|node …`,
-  `live` and `regen pins` then run in this tree, natively, which is also how
-  to reproduce a failure only the Windows CI job shows. Everything else still
-  goes to Docker and says so. `./codedeck doctor` shows which is in force.
+- `CODEDECK_ENGINE=local` runs a command without Docker where the host has a
+  toolchain for it, installed into `./toolchain/` on first use. On Windows
+  that is Node and Rust: `check`, `e2e`, `dev`, `live` and `regen` then run
+  in this tree, natively — no container, no tree to sync. The agent host
+  runs as the Windows CI job runs it, which is also how to reproduce a
+  failure only that job shows. The crates are built with Rust's GNU
+  toolchain, where CI's Windows job uses MSVC and CI's bar is Linux: a
+  Windows build never compiles `cfg(unix)` code (the terminal, mostly), so
+  after touching it run `CODEDECK_ENGINE=docker ./codedeck check --changed`
+  once before the PR. Everything else (`android`, `apk`) still goes to
+  Docker and says so. `./codedeck doctor` shows which is in force.
 
 To iterate on one piece without the full sweep, use the dev container — one
 long-lived container that keeps its `node_modules` and the caches, with the
