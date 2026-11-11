@@ -38,16 +38,19 @@
 # everything else in this repo (crates/*, apps/android, the TS workspace)
 # does not need them.
 #
-# Linux, and on Windows (Git Bash) the `node` and `rust` components. Node there
-# is a zip with nothing to link. The crates compile C (ring, secp256k1,
-# sqlite) and link executables, which on Windows normally means the MSVC build
-# tools — a system install this script will not make. So `rust` on Windows is
-# the GNU flavour instead (`x86_64-pc-windows-gnu`), with the GCC it needs
-# unpacked beside it (WinLibs: GCC + MinGW-w64, one archive, pinned by hash).
-# That is NOT the toolchain CI and the release build use on Windows (MSVC):
-# same sources, same `cfg(windows)` code, another C compiler, linker and C
-# runtime — good for the loop, and CI stays the judge. The Android toolchain
-# stays with Docker on Windows. macOS likely works too
+# Linux, and Windows (Git Bash). Node on Windows is a zip with nothing to
+# link. The crates compile C (ring, secp256k1, sqlite) and link executables,
+# which on Windows normally means the MSVC build tools — a system install this
+# script will not make. So `rust` on Windows is the GNU flavour instead
+# (`x86_64-pc-windows-gnu`), with the GCC it needs unpacked beside it
+# (WinLibs: GCC + MinGW-w64, one archive, pinned by hash). That is NOT the
+# toolchain CI and the release build use on Windows (MSVC): same sources,
+# same `cfg(windows)` code, another C compiler, linker and C runtime — good
+# for the loop, and CI stays the judge. `android` on Windows is what the
+# app's unit tests, snapshot tests and lint need — the JDK, the platform and
+# the build tools — and not the NDK: the APK itself is not built on a Windows
+# host (build-apk-local.sh links through the NDK's Linux clang), so Docker
+# keeps that. macOS likely works too
 # (Adoptium/rustup/Node/cmdline-tools all publish macOS binaries) but is
 # untested — the NDK clang triples build-apk-local.sh uses are
 # Linux-host-specific (`linux-x86_64` prebuilt dir) either way.
@@ -82,11 +85,10 @@ esac
 # What was asked for, as a space-delimited set to match against. `android`
 # implies `java`, and `rust` implies the C compiler it links through (`zig` on
 # Linux, `mingw` on Windows), resolved here so each section below only has to
-# ask for its own name. Windows has fewer components, so "everything" is those
-# and asking for another is an error, not a skip: the caller would otherwise
-# go on to run a tool that is not there.
+# ask for its own name. Asking for a name that is not a component is an error,
+# not a skip: the caller would otherwise go on to run a tool that is not
+# there.
 ALL_COMPONENTS=(java rust node android)
-if [ "$HOST_OS" = windows ]; then ALL_COMPONENTS=(rust node); fi
 WANTED=("$@")
 if [ ${#WANTED[@]} -eq 0 ]; then
   WANTED=("${ALL_COMPONENTS[@]}")
@@ -149,7 +151,15 @@ extract_zip() {
   fi
 }
 
-TOOLCHAIN_DIR="$PWD/toolchain"
+# The helper scripts this one runs or installs: where the toolchain goes, the
+# python extractors for a host with no xz/unzip, and the Zig shims that go
+# into toolchain/bin.
+LIB_DIR="$(cd "$(dirname "$0")" && pwd)/lib"
+# One toolchain for every checkout of the repository: a linked git worktree
+# installs into, and uses, the main checkout's (lib/toolchain-dir.sh).
+# shellcheck source=lib/toolchain-dir.sh
+. "$LIB_DIR/toolchain-dir.sh"
+TOOLCHAIN_DIR="$(toolchain_dir)"
 
 # What a run that found everything in place has to say. `./codedeck` calls
 # this script before every command of the local engine, as the check of what
@@ -160,9 +170,6 @@ INSTALLED_SOMETHING=0
 note() {
   if [ "${INSTALL_TOOLCHAIN_QUIET:-0}" != 1 ]; then echo "$@"; fi
 }
-# The helper scripts this one runs or installs: the python extractors for a
-# host with no xz/unzip, and the Zig shims that go into toolchain/bin.
-LIB_DIR="$(cd "$(dirname "$0")" && pwd)/lib"
 JDK_DIR="$TOOLCHAIN_DIR/jdk"
 RUSTUP_HOME="$TOOLCHAIN_DIR/rustup"
 CARGO_HOME="$TOOLCHAIN_DIR/cargo"
@@ -180,16 +187,32 @@ if wants java; then
     INSTALLED_SOMETHING=1
     echo "==> Installing a JDK (Temurin 21)"
     arch="$(uname -m)"; case "$arch" in x86_64) arch=x64 ;; aarch64) arch=aarch64 ;; esac
-    jdk_url="$(curl -fsSL "https://api.adoptium.net/v3/assets/latest/21/hotspot?os=linux&architecture=${arch}&image_type=jdk" \
-      | grep -o '"link": *"[^"]*tar\.gz"' | head -1 | cut -d'"' -f4 || true)"
+    # Linux ships a tarball, Windows a zip (and an installer, which is the
+    # other "link" in the answer and not what this wants).
+    jdk_os=linux
+    jdk_ext='tar\.gz'
+    if [ "$HOST_OS" = windows ]; then
+      jdk_os=windows
+      jdk_ext='zip'
+    fi
+    jdk_url="$(curl -fsSL "https://api.adoptium.net/v3/assets/latest/21/hotspot?os=${jdk_os}&architecture=${arch}&image_type=jdk" \
+      | grep -o "\"link\": *\"[^\"]*${jdk_ext}\"" | head -1 | cut -d'"' -f4 || true)"
     if [ -z "$jdk_url" ]; then
       echo "error: could not resolve a Temurin 21 download URL from the Adoptium API" >&2
       exit 1
     fi
     tmp="$(mktemp -d)"
-    curl -fsSL -o "$tmp/jdk.tar.gz" "$jdk_url"
+    rm -rf "$JDK_DIR"
     mkdir -p "$JDK_DIR"
-    tar -xzf "$tmp/jdk.tar.gz" -C "$JDK_DIR" --strip-components=1
+    if [ "$HOST_OS" = windows ]; then
+      curl -fsSL -o "$tmp/jdk.zip" "$jdk_url"
+      # The zip holds one directory, jdk-<version>.
+      extract_zip "$tmp/jdk.zip" "$tmp/unpacked"
+      mv "$tmp/unpacked"/jdk-*/* "$JDK_DIR"/
+    else
+      curl -fsSL -o "$tmp/jdk.tar.gz" "$jdk_url"
+      tar -xzf "$tmp/jdk.tar.gz" -C "$JDK_DIR" --strip-components=1
+    fi
     rm -rf "$tmp"
   else
     note "==> JDK already installed, skipping"
@@ -393,16 +416,40 @@ if wants node; then
 fi
 
 # --- Android SDK + NDK ---
+# On Windows the SDK manager is a batch file, and the SDK stops at what the
+# JVM-side checks need (the platform and the build tools): no NDK, because no
+# APK is linked there.
+SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+SDK_OS=linux
+SDK_PACKAGES=("platform-tools" "platforms;$PLATFORM" "build-tools;$BUILD_TOOLS" "ndk;$NDK_VERSION")
+if [ "$HOST_OS" = windows ]; then
+  SDKMANAGER="$SDKMANAGER.bat"
+  SDK_OS=win
+  SDK_PACKAGES=("platforms;$PLATFORM" "build-tools;$BUILD_TOOLS")
+fi
+
+# Whether the SDK manager is there to run. A batch file is not "executable"
+# to Git Bash's test, so on Windows its presence is the question.
+have_sdkmanager() {
+  if [ "$HOST_OS" = windows ]; then [ -f "$SDKMANAGER" ]; else [ -x "$SDKMANAGER" ]; fi
+}
+
+# Whether everything SDK_PACKAGES names has landed: the platform and the
+# build tools everywhere, the NDK where one is installed.
+sdk_packages_present() {
+  [ -d "$ANDROID_HOME/platforms/$PLATFORM" ] && [ -d "$ANDROID_HOME/build-tools/$BUILD_TOOLS" ] &&
+    { [ "$HOST_OS" = windows ] || [ -d "$ANDROID_HOME/ndk/$NDK_VERSION" ]; }
+}
+
 if wants android; then
   export ANDROID_HOME
-  SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
   mkdir -p "$ANDROID_HOME"
-  if [ ! -x "$SDKMANAGER" ]; then
+  if ! have_sdkmanager; then
     INSTALLED_SOMETHING=1
     echo "==> Installing Android cmdline-tools"
     tmp="$(mktemp -d)"
     curl -fsSL -o "$tmp/cmdline-tools.zip" \
-      "https://dl.google.com/android/repository/commandlinetools-linux-${CMDLINE_TOOLS_VERSION}_latest.zip"
+      "https://dl.google.com/android/repository/commandlinetools-${SDK_OS}-${CMDLINE_TOOLS_VERSION}_latest.zip"
     # Cleared first: a copy left half-extracted (an interrupted run, or an
     # extractor that lost the executable bits) must not survive into the
     # `mv` below, which would land the real tools one directory down.
@@ -415,21 +462,17 @@ if wants android; then
     note "==> Android cmdline-tools already installed, skipping"
   fi
 
-  # The four packages behind cmdline-tools are asked for only when one of them
-  # is missing: a run that finds them all in place does not touch the network,
+  # The packages behind cmdline-tools are asked for only when one of them is
+  # missing: a run that finds them all in place does not touch the network,
   # which is what lets this script be called as a check on every command
   # rather than once with a marker file claiming what it installed.
-  if [ ! -d "$ANDROID_HOME/platforms/$PLATFORM" ] || [ ! -d "$ANDROID_HOME/ndk/$NDK_VERSION" ]; then
+  if ! sdk_packages_present; then
     INSTALLED_SOMETHING=1
-    echo "==> Installing platform-tools, $PLATFORM, build-tools $BUILD_TOOLS, NDK $NDK_VERSION"
+    echo "==> Installing the Android SDK packages: ${SDK_PACKAGES[*]}"
     yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
-    "$SDKMANAGER" --install \
-      "platform-tools" \
-      "platforms;$PLATFORM" \
-      "build-tools;$BUILD_TOOLS" \
-      "ndk;$NDK_VERSION"
+    "$SDKMANAGER" --install "${SDK_PACKAGES[@]}" </dev/null
   else
-    note "==> Android platform, build-tools and NDK already installed, skipping"
+    note "==> Android SDK packages already installed, skipping"
   fi
 fi
 
@@ -452,11 +495,7 @@ component_present() {
         { [ "$HOST_OS" != windows ] || [ -x "$MINGW_DIR/bin/gcc.exe" ]; }
       ;;
     node) [ -x "$NODE_BIN/node" ] ;;
-    android)
-      [ -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ] &&
-        [ -d "$ANDROID_HOME/platforms/$PLATFORM" ] &&
-        [ -d "$ANDROID_HOME/ndk/$NDK_VERSION" ]
-      ;;
+    android) have_sdkmanager && sdk_packages_present ;;
     *) return 1 ;;
   esac
 }
@@ -487,7 +526,9 @@ component_present() {
   fi
   if component_present android; then
     echo "export ANDROID_HOME=\"$ANDROID_HOME\""
-    echo "export ANDROID_NDK_HOME=\"$ANDROID_HOME/ndk/$NDK_VERSION\""
+    if [ -d "$ANDROID_HOME/ndk/$NDK_VERSION" ]; then
+      echo "export ANDROID_NDK_HOME=\"$ANDROID_HOME/ndk/$NDK_VERSION\""
+    fi
     path_prefix="$path_prefix\$ANDROID_HOME/cmdline-tools/latest/bin:\$ANDROID_HOME/platform-tools:"
   fi
   echo "export PATH=\"${path_prefix}\$PATH\""

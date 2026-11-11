@@ -107,6 +107,14 @@ android {
             // returning Android's default value instead of throwing is what
             // lets a class that logs still be exercised by a plain JVM test.
             isReturnDefaultValues = true
+            // The app formats numbers for the phone's locale ("9,120
+            // installs"), and in a unit test that is the locale of whoever
+            // runs it: a snapshot recorded on one machine would differ on
+            // another by a thousands separator. The tests get one locale.
+            all {
+                it.systemProperty("user.language", "en")
+                it.systemProperty("user.country", "US")
+            }
         }
     }
 

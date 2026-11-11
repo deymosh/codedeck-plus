@@ -23,6 +23,12 @@ cd "$(git rev-parse --show-toplevel)"
 # apps/android) and this script's own files are still theirs to reach.
 REPO_ROOT="$PWD"
 
+# The vendored toolchain's directory: the main checkout's, for every checkout
+# of this repository (scripts/lib/toolchain-dir.sh says why).
+# shellcheck source=scripts/lib/toolchain-dir.sh
+. scripts/lib/toolchain-dir.sh
+TOOLCHAIN="$(toolchain_dir)"
+
 # Git Bash (MSYS) on Windows rewrites leading-/ arguments as if they were
 # Windows paths before docker.exe sees them — breaks `docker exec -w /path`.
 # Scoped (not exported globally): doing that also breaks docker cp's HOST-side
@@ -67,14 +73,17 @@ require_docker() {
 }
 
 # Whether this host can run a command that needs these components (node,
-# rust, java, android; none named = all of them) without Docker. Linux: yes,
-# scripts/install-toolchain.sh vendors every one. Windows (Git Bash): Node —
-# the agent host, as CI tests it on Windows — and Rust, as the GNU toolchain
-# with a GCC unpacked beside it. That one is not what CI builds with on
+# rust, java, android, ndk; none named = all of them) without Docker. Linux:
+# yes, scripts/install-toolchain.sh vendors every one. Windows (Git Bash):
+# Node — the agent host, as CI tests it on Windows; Rust, as the GNU toolchain
+# with a GCC unpacked beside it; and the JDK and Android SDK the app's tests,
+# snapshots and lint run on. The Rust one is not what CI builds with on
 # Windows (MSVC, a system install this script will not make), and a Windows
 # build never compiles the `cfg(unix)` code: it is the loop's engine, and the
-# Linux and MSVC runs in CI stay the judge. The Android toolchain is Docker's
-# there.
+# Linux and MSVC runs in CI stay the judge. `ndk` is the one thing Windows
+# lacks: an APK links through the NDK's Linux toolchain, so `apk` is Docker's
+# there. (It is a need, not a component of its own: the installer brings the
+# NDK with `android` where it installs one.)
 host_local_supports() {
   local component
   case "$(uname -s)" in
@@ -83,7 +92,7 @@ host_local_supports() {
       [ $# -gt 0 ] || return 1
       for component in "$@"; do
         case "$component" in
-          node | rust) ;;
+          node | rust | java | android) ;;
           *) return 1 ;;
         esac
       done
@@ -136,24 +145,46 @@ native_path() {
 # touching the network when its target is present, so the check costs a shell
 # startup — and says nothing unless it installs something. Sources env.sh into THIS shell so cargo/node/pnpm/java stay on PATH
 # for the rest of the script. What a host can run locally is
-# host_local_supports' to say: all of it on Linux, Node and Rust on Windows.
+# host_local_supports' to say: all of it on Linux, all but an APK on Windows.
 ensure_toolchain() {
   if ! host_local_supports "$@"; then
     echo "Docker is unavailable, and this host has no local toolchain for" >&2
-    echo "this command (scripts/install-toolchain.sh: everything on Linux, Node" >&2
-    echo "and Rust on Windows). Install and start Docker (Docker Desktop on" >&2
-    echo "Windows/macOS), then re-run it. See CLAUDE.md, \"Commands\"." >&2
+    echo "this command (scripts/install-toolchain.sh: everything on Linux," >&2
+    echo "everything but the APK build on Windows). Install and start Docker" >&2
+    echo "(Docker Desktop on Windows/macOS), then re-run it. See CLAUDE.md," >&2
+    echo "\"Commands\"." >&2
     exit 1
   fi
-  if [ ! -f toolchain/env.sh ]; then
-    echo "==> No ./toolchain yet — installing what this needs"
+  # `ndk` says what a command needs; the installer has no component by that
+  # name (see host_local_supports).
+  local component components=()
+  for component in "$@"; do
+    [ "$component" = ndk ] || components+=("$component")
+  done
+  set -- ${components[@]+"${components[@]}"}
+  if [ ! -f "$TOOLCHAIN/env.sh" ]; then
+    echo "==> No toolchain at $TOOLCHAIN yet — installing what this needs"
     [ $# -gt 0 ] && echo "    (${*})"
     echo "    one-time; Ctrl-C to abort"
   fi
   INSTALL_TOOLCHAIN_QUIET=1 bash scripts/install-toolchain.sh "$@"
   # shellcheck source=/dev/null
-  . toolchain/env.sh
+  . "$TOOLCHAIN/env.sh"
   apply_local_limits
+  share_cargo_target
+}
+
+# A linked worktree builds into the main checkout's target directory. Cargo
+# keys what it builds by package, features, profile and — for the workspace's
+# own crates — the path they were built from, so two checkouts share every
+# dependency (most of a build, and gigabytes on disk) and never each other's
+# crates. The one thing shared is the build lock: two builds at once queue. A
+# CARGO_TARGET_DIR the caller set is left alone.
+share_cargo_target() {
+  if [ -z "${CARGO_TARGET_DIR:-}" ] && [ -n "${DEV_WORKTREE:-}" ]; then
+    CARGO_TARGET_DIR="$(native_path "$(main_checkout)/target")"
+    export CARGO_TARGET_DIR
+  fi
 }
 
 # CODEDECK_CPUS on the local engine. There is no container to put in a cpuset
@@ -207,11 +238,14 @@ locally is required; without Docker, or with CODEDECK_ENGINE=local, these run
 on the vendored toolchain instead, installed on first use):
   check                    The bar for a change: the agent host's typecheck,
                            tests and build; clippy, tests and docs for every
-                           crate. Every step runs and is listed at the end
+                           crate, and the host's generated types. Every step
+                           runs and is listed at the end, with its duration
   typecheck                typecheck only (agent host + cargo clippy)
   test                     test only
-    --changed              Only the half (agent host, crates) that differs
-                           from master, by the path rules CI uses
+    --changed              Only the parts that differ from master, by the
+                           path rules CI uses: the agent host, the crates,
+                           and the app (its bindings, tests, snapshots and
+                           lint — which only this option runs)
     --verbose | --quiet    Stream every step's output, or one line per step
                            and the tail of a failure (full output in
                            dist/logs/). Default: stream on a terminal only
@@ -239,11 +273,10 @@ Engine — Docker runs everything when its daemon answers; without Docker the
 local toolchain does (scripts/install-toolchain.sh, into ./toolchain):
   CODEDECK_ENGINE=local    Prefer the local toolchain even with Docker up, for
                            what this host has one for: everything on Linux;
-                           on Windows the agent host and the crates (check,
-                           e2e, dev, live, regen) — the crates on the GNU
-                           toolchain, where CI's Windows job uses MSVC. The
-                           rest (android, apk) still runs in Docker, and
-                           says so
+                           on Windows everything but the APK build (check,
+                           e2e, dev, live, regen, android) — the crates on
+                           the GNU toolchain, where CI's Windows job uses
+                           MSVC. `apk` still runs in Docker, and says so
   CODEDECK_ENGINE=docker   For one command: run it in the Linux container,
                            which is what CI's bar is
 
@@ -301,8 +334,9 @@ a Docker-less host:
                            Docker engine it is copied back to
                            dist/live-<agent>-dump/ afterwards)
 
-Android tests and lint (same idea, in the Android container — a subcommand
-maps to its Gradle task; anything else is passed to Gradle as it is):
+Android tests and lint (same idea, in the Android container, or in this tree
+on the local engine — a subcommand maps to its Gradle task; anything else is
+passed to Gradle as it is):
   android [test]           app:testDebugUnitTest, then the counts and failures
   android lint             app:lintDebug, then what the report says
   android paparazzi        app:verifyPaparazziDebug (the snapshot tests)
@@ -410,12 +444,12 @@ cmd_tor() {
 cmd_apk() {
   # args pass through, e.g. `./codedeck apk --target aarch64-linux-android`
   local state=0
-  engine_state rust java android || state=$?
+  engine_state rust java android ndk || state=$?
   case $state in
     0) exec ./apps/android/docker/build-apk.sh "$@" ;;
     2) fail_docker_down ;;
   esac
-  ensure_toolchain rust java android
+  ensure_toolchain rust java android ndk
   # Sources toolchain/env.sh itself when present.
   exec ./apps/android/scripts/build-apk-local.sh "$@"
 }
@@ -440,8 +474,8 @@ cmd_apk() {
 #                    container too, so this also bounds what the VM holds on to.
 #
 # Unset means no limit of this script's making. A long-lived container picks a
-# changed value up on the next command (docker update); one that had a limit
-# keeps it until `dev --reset` once the variable is unset again.
+# changed value up on the next command, and a limit that is no longer asked
+# for is lifted then too (see ensure_container).
 CPU_LIMIT=()
 case "${CODEDECK_CPUS:-}" in
   '') ;;
@@ -529,6 +563,21 @@ ensure_container() {
     echo "==> Replacing $name (not this script's, or its image changed)"
     docker rm -f "$name" >/dev/null
   fi
+  # A container created with a memory limit of its own (the Android one:
+  # Gradle is sized to it) keeps that one — only its cores are bounded here.
+  local own_memory=0
+  case " $* " in
+    *" -m "* | *" --memory "*) own_memory=1 ;;
+  esac
+  # A memory limit an earlier command set and this one does not ask for.
+  # Docker cannot take a memory limit off a running container (an update to
+  # 0 is "no change", and one to the engine's whole memory is refused), so
+  # the container is replaced: it is disposable, and its caches are volumes.
+  if [ "$own_memory" = 0 ] && [ -z "${CODEDECK_MEMORY:-}" ] && container_exists "$name" &&
+    [ "$(docker inspect -f '{{.HostConfig.Memory}}' "$name" 2>/dev/null)" != 0 ]; then
+    echo "==> Replacing $name (it was limited by a CODEDECK_MEMORY that is no longer set)"
+    docker rm -f "$name" >/dev/null
+  fi
   if ! container_exists "$name"; then
     echo "==> Creating $name (kept between commands)"
     MSYS_NO_PATHCONV=1 docker create --name "$name" --label "$label=1" "$@" "$image" sleep infinity >/dev/null
@@ -536,13 +585,19 @@ ensure_container() {
   # Already running is fine: this is "make sure it is up", not "start it".
   docker start "$name" >/dev/null 2>&1 || true
   # On every command, not only at creation: the container outlives the shell
-  # that made it, and the limit in force should be the one asked for now. A
-  # container created with a memory limit of its own (the Android one: Gradle
-  # is sized to it) keeps that one — only its cores are bounded here.
+  # that made it, and the limit in force should be the one asked for now.
   local limits=(${RESOURCE_LIMITS[@]+"${RESOURCE_LIMITS[@]}"})
-  case " $* " in
-    *" -m "* | *" --memory "*) limits=(${CPU_LIMIT[@]+"${CPU_LIMIT[@]}"}) ;;
-  esac
+  if [ "$own_memory" = 1 ]; then limits=(${CPU_LIMIT[@]+"${CPU_LIMIT[@]}"}); fi
+  # A cpuset an earlier command set and this one does not ask for is widened
+  # back to every core (an empty cpuset is "no change" to docker update).
+  if [ ${#CPU_LIMIT[@]} -eq 0 ]; then
+    local cpuset every_core
+    cpuset="$(docker inspect -f '{{.HostConfig.CpusetCpus}}' "$name" 2>/dev/null)"
+    if [ -n "$cpuset" ]; then
+      every_core="0-$(($(docker info -f '{{.NCPU}}') - 1))"
+      if [ "$cpuset" != "$every_core" ]; then limits+=(--cpuset-cpus "$every_core"); fi
+    fi
+  fi
   if [ ${#limits[@]} -gt 0 ]; then
     docker update "${limits[@]}" "$name" >/dev/null ||
       echo "==> Could not apply CODEDECK_CPUS/CODEDECK_MEMORY to $name (it keeps its previous limits)" >&2
@@ -784,6 +839,46 @@ detect_changes() {
   done <<<"$(git diff --name-only "$base"; git ls-files --others --exclude-standard)"
   [ "$CHANGED_HOST" = 1 ] || echo "==> --changed: nothing under the agent host differs from master — skipped"
   [ "$CHANGED_RUST" = 1 ] || echo "==> --changed: no crate differs from master — skipped"
+  [ "$CHANGED_ANDROID" = 1 ] || echo "==> --changed: nothing the app is built from differs from master — skipped"
+}
+
+# One of CI's drift checks, as a step: regenerate <kind> and fail when that
+# changed anything under <path>. The regenerated files stay — they are what
+# the tree should hold — so the failure is one to read, review and commit,
+# and the same step passes on the next run.
+# (Run through `step`, by name: ShellCheck cannot see that call.)
+# shellcheck disable=SC2329
+generated_current() {
+  local kind="$1" path="$2" before after
+  before="$(tree_digest "$path")"
+  (cmd_regen "$kind")
+  after="$(tree_digest "$path")"
+  if [ "$before" != "$after" ]; then
+    echo "$path was stale and has been regenerated: review the change and commit it."
+    return 1
+  fi
+}
+
+# What the files under a path hold, as one comparable string.
+# shellcheck disable=SC2329
+tree_digest() {
+  if [ -e "$1" ]; then find "$1" -type f -exec git hash-object {} + | LC_ALL=C sort; fi
+}
+
+# The app's bar, for a sweep that found its inputs changed: the bindings CI
+# regenerates and compares, then one Gradle run for the mode's tasks (one run,
+# because Gradle's start-up is most of a small task's time).
+android_steps() {
+  local tasks=()
+  case "$1" in
+    typecheck) tasks=(compileDebugUnitTestKotlin) ;;
+    test) tasks=(test verifyPaparazziDebug) ;;
+    check)
+      tasks=(test verifyPaparazziDebug lintDebug)
+      step "android: bindings" generated_current bindings apps/android/app/src/main/java/uniffi || true
+      ;;
+  esac
+  step "android: gradle" bash "$REPO_ROOT/codedeck" android "${tasks[@]}" || true
 }
 
 # Each Docker check in a subshell: start_throwaway's EXIT trap removes that
@@ -806,14 +901,18 @@ run_checks() {
   done
   [ "$changed" = 1 ] && detect_changes
 
-  # Each half on the engine that can run it: a host may have the agent host's
-  # toolchain locally and not the crates' (Windows with CODEDECK_ENGINE=local).
-  # Both are asked before either runs, so a daemon that is down stops the
-  # sweep at the start rather than after its first half.
-  local host_state=0 rust_state=0
+  # Each part on the engine that can run it: a host may have a local toolchain
+  # for one and not for another. All are asked before any runs, so a daemon
+  # that is down stops the sweep at the start rather than part of the way in.
+  # The app is part of a sweep only under `--changed`, when its inputs
+  # differ: its bar is minutes of Gradle, which a plain `check` of a change
+  # that cannot reach the app should not pay.
+  local host_state=0 rust_state=0 android_state=0 with_android=0
+  if [ "$changed" = 1 ] && [ "$CHANGED_ANDROID" = 1 ]; then with_android=1; fi
   if [ "$CHANGED_HOST" = 1 ]; then engine_state node || host_state=$?; fi
   if [ "$CHANGED_RUST" = 1 ]; then engine_state rust || rust_state=$?; fi
-  if [ "$host_state" = 2 ] || [ "$rust_state" = 2 ]; then fail_docker_down; fi
+  if [ "$with_android" = 1 ]; then engine_state android || android_state=$?; fi
+  if [ "$host_state" = 2 ] || [ "$rust_state" = 2 ] || [ "$android_state" = 2 ]; then fail_docker_down; fi
 
   if [ "$CHANGED_HOST" = 1 ]; then
     if [ "$host_state" = 0 ]; then
@@ -830,14 +929,15 @@ run_checks() {
       ensure_toolchain rust
       rust_steps "$mode"
     fi
+    # The host's protocol types are generated from crates/agent-protocol, and
+    # CI fails on a stale copy.
+    if [ "$mode" = check ]; then
+      step "crates: host types" generated_current ts packages/agent-host/src/generated/protocol.ts || true
+    fi
   fi
+  if [ "$with_android" = 1 ]; then android_steps "$mode"; fi
 
-  local code=0
-  check_summary || code=$?
-  if [ "$CHANGED_ANDROID" = 1 ]; then
-    echo "    the app's inputs changed too: ./codedeck android test verifyPaparazziDebug lintDebug"
-  fi
-  return "$code"
+  check_summary
 }
 
 # --- The dev container: what the throwaway checks are too slow for. ---
@@ -908,17 +1008,25 @@ ensure_dev_deps() {
   have="$(dexec "$DEV_CONTAINER" cat "$DEV_LOCK_STAMP" 2>/dev/null || true)"
   [ "$want" = "$have" ] && return 0
   echo "==> Installing the workspace's Node dependencies"
-  dexec -w "$DEV_ROOT" "$DEV_CONTAINER" pnpm install --frozen-lockfile
+  # Its output is a page of progress and a notice about build scripts: shown
+  # for a failure, which is the only time anyone reads it.
+  local output
+  if ! output="$(dexec -w "$DEV_ROOT" "$DEV_CONTAINER" pnpm install --frozen-lockfile 2>&1)"; then
+    printf '%s\n' "$output" >&2
+    return 1
+  fi
   dexec "$DEV_CONTAINER" sh -c "printf '%s' '$want' > $DEV_LOCK_STAMP"
 }
 
-# The same "install when the lockfile moved" rule for a host that has the tree
-# itself (a Docker-less Linux host): the stamp goes in the toolchain directory,
-# which is gitignored and only exists for that path.
+# The same "install when the lockfile moved" rule for the local engine, where
+# the tree is this one: the stamp goes in node_modules, which it describes —
+# gitignored, and each checkout's own (the toolchain directory is shared).
+# The packages themselves are hard links into pnpm's store, so a second
+# checkout's install downloads nothing and costs little disk.
 ensure_local_deps() {
-  local want have
+  local want have output
   want="$(git hash-object pnpm-lock.yaml)"
-  have="$(cat toolchain/.codedeck-dev-lock 2>/dev/null || true)"
+  have="$(cat node_modules/.codedeck-lock 2>/dev/null || true)"
   [ "$want" = "$have" ] && return 0
   echo "==> Installing the workspace's Node dependencies"
   # NODE_ENV=production would make pnpm skip devDependencies — which is where
@@ -926,8 +1034,14 @@ ensure_local_deps() {
   # CI=true and no stdin: pnpm asks before it replaces a node_modules it did
   # not make (another store, another version), and a prompt nobody is there
   # to answer holds the command for ever.
-  (unset NODE_ENV; CI=true pnpm install --frozen-lockfile </dev/null)
-  printf '%s' "$want" > toolchain/.codedeck-dev-lock
+  # Its output is a page of progress and a notice about build scripts: shown
+  # for a failure, which is the only time anyone reads it.
+  if ! output="$(unset NODE_ENV; CI=true pnpm install --frozen-lockfile </dev/null 2>&1)"; then
+    printf '%s\n' "$output" >&2
+    return 1
+  fi
+  mkdir -p node_modules
+  printf '%s' "$want" > node_modules/.codedeck-lock
 }
 
 # One command in the dev container, with the tree in step first.
@@ -1299,10 +1413,15 @@ ensure_android_container() {
 # and a failure alike, because a failure is when it is worth most. The tree is
 # already synced into the container, so both engines run the same file: one in
 # the container at the app's directory, one in this tree from the app's.
+#
+# ANDROID_REPORT_SINCE names a file made just before the task ran (in the
+# container, on the Docker engine): the report then speaks only of what this
+# run wrote, and not of a lint verdict a task from yesterday left behind.
 android_report() {
   local container="${1:-}"
   if [ -n "$container" ]; then
-    dexec -w "$ANDROID_ROOT/$ANDROID_PROJECT" "$container"       sh "$ANDROID_ROOT/scripts/lib/android-report.sh"
+    dexec -w "$ANDROID_ROOT/$ANDROID_PROJECT" -e "ANDROID_REPORT_SINCE=${ANDROID_REPORT_SINCE:-}" \
+      "$container" sh "$ANDROID_ROOT/scripts/lib/android-report.sh"
   else
     sh "$REPO_ROOT/scripts/lib/android-report.sh"
   fi
@@ -1346,20 +1465,39 @@ cmd_android() {
     # other two branches never return.
     0) ;;
     2) fail_docker_down ;;
-    # No Docker: the Gradle wrapper runs against this tree directly. java and
-    # the SDK come from wherever this host has them — a system install, or
-    # the vendored toolchain — and only a host with neither installs the
-    # toolchain's own (java comes with android). Asking for the components is
-    # also the check: a toolchain directory that exists may hold only some of
-    # them, and `android` alone would not find java in it.
+    # No Docker: the Gradle wrapper runs against this tree directly. On Linux
+    # java and the SDK come from wherever this host has them — a system
+    # install, or the vendored toolchain — and only a host with neither
+    # installs the toolchain's own (java comes with android). Asking for the
+    # components is also the check: a toolchain directory that exists may
+    # hold only some of them, and `android` alone would not find java in it.
+    # On Windows it is always the vendored JDK and SDK: a java that happens
+    # to be on PATH there is whatever another program installed, at whatever
+    # version.
     *)
-      if ! command -v java >/dev/null 2>&1 || [ -z "${ANDROID_HOME:-}" ]; then
-        ensure_toolchain android
-      fi
+      case "$(uname -s)" in
+        MINGW* | MSYS*) ensure_toolchain android ;;
+        *)
+          if ! command -v java >/dev/null 2>&1 || [ -z "${ANDROID_HOME:-}" ]; then
+            ensure_toolchain android
+          fi
+          ;;
+      esac
       cd "$ANDROID_PROJECT"
-      local code=0
-      ./gradlew "$task" "$@" --console=plain || code=$?
-      android_report
+      if [ "$task" = shell ]; then exec "${SHELL:-bash}"; fi
+      # Gradle's own home (its distribution, the dependency cache, the
+      # daemon's files) beside the rest of the toolchain rather than in the
+      # user's: what this build downloads and caches is then the checkout's
+      # own to keep or delete. A GRADLE_USER_HOME already set is left alone.
+      export GRADLE_USER_HOME="${GRADLE_USER_HOME:-$(native_path "$TOOLCHAIN/gradle")}"
+      # CODEDECK_CPUS, for Gradle: its workers, test forks included.
+      local limit=()
+      if [ -n "${CODEDECK_CPUS:-}" ]; then limit=(--max-workers "$CODEDECK_CPUS"); fi
+      local code=0 since
+      since="$(mktemp)"
+      ./gradlew "$task" "$@" ${limit[@]+"${limit[@]}"} --console=plain </dev/null || code=$?
+      ANDROID_REPORT_SINCE="$since" android_report
+      rm -f "$since"
       # Recording writes the goldens straight into the tree here, which is
       # the whole of what the Docker path has to copy back.
       return "$code"
@@ -1376,11 +1514,12 @@ cmd_android() {
       "$ANDROID_CONTAINER" sh
   fi
 
-  local code=0
+  local code=0 since=/tmp/codedeck-android-run
+  dexec "$ANDROID_CONTAINER" touch "$since"
   dexec -w "$ANDROID_ROOT/$ANDROID_PROJECT" "$ANDROID_CONTAINER" \
     gradle "$task" "$@" --console=plain || code=$?
 
-  android_report "$ANDROID_CONTAINER"
+  ANDROID_REPORT_SINCE="$since" android_report "$ANDROID_CONTAINER"
 
   # The goldens are recorded inside the container; they are only useful on the
   # host, where a person can look at each image before it is committed.
@@ -1471,7 +1610,7 @@ cmd_live() {
       workdir="$(native_path "$(mktemp -d)")"
       local code=0
       # The agents an install fetches are kept where this engine keeps
-      # everything else it installs (./toolchain, gitignored) — the local
+      # everything else it installs (the toolchain directory) — the local
       # counterpart of the agents volume the Docker path mounts, so a run is
       # the only one that downloads. An explicit CODEDECK_AGENT_CACHE wins.
       #
@@ -1481,7 +1620,7 @@ cmd_live() {
       # passes are therefore converted by hand (native_path); a --cwd, --dump
       # or --env path given on the command line is taken as written.
       MSYS_NO_PATHCONV=1 env ${pairs[@]+"${pairs[@]}"} CODEDECK_AGENT_HOST_DRIVERS="$agent" \
-        CODEDECK_AGENT_CACHE="${CODEDECK_AGENT_CACHE:-$(native_path "$PWD/toolchain/agents")}" \
+        CODEDECK_AGENT_CACHE="${CODEDECK_AGENT_CACHE:-$(native_path "$TOOLCHAIN/agents")}" \
         timeout "${timeout}s" node packages/agent-host/tools/live-probe.mjs \
         --host packages/agent-host/dist/main.js --agent "$agent" --cwd "$workdir" \
         --timeout "$timeout" ${probe[@]+"${probe[@]}"} || code=$?
@@ -1661,16 +1800,16 @@ cmd_clean() {
 # missing rather than failing on it — that is the point of it.
 # What ./toolchain holds, by the binary that does each component's work.
 local_toolchain_summary() {
-  if [ ! -f toolchain/env.sh ]; then
-    echo "absent"
+  if [ ! -f "$TOOLCHAIN/env.sh" ]; then
+    echo "absent ($TOOLCHAIN)"
     return 0
   fi
   local have=""
-  if [ -x toolchain/node/bin/node ] || [ -x toolchain/node/node ]; then have="$have node"; fi
-  if [ -x toolchain/cargo/bin/cargo ]; then have="$have rust"; fi
-  if [ -x toolchain/jdk/bin/java ]; then have="$have java"; fi
-  if [ -d toolchain/android-sdk/platforms ]; then have="$have android"; fi
-  echo "./toolchain:${have:- nothing yet} (the local engine)"
+  if [ -x "$TOOLCHAIN/node/bin/node" ] || [ -x "$TOOLCHAIN/node/node" ]; then have="$have node"; fi
+  if [ -x "$TOOLCHAIN/cargo/bin/cargo" ]; then have="$have rust"; fi
+  if [ -x "$TOOLCHAIN/jdk/bin/java" ]; then have="$have java"; fi
+  if [ -d "$TOOLCHAIN/android-sdk/platforms" ]; then have="$have android"; fi
+  echo "$TOOLCHAIN:${have:- nothing yet} (the local engine)"
 }
 
 cmd_doctor() {
@@ -1756,9 +1895,10 @@ cmd_doctor() {
 # temp dir. The Docker variant below copies only the cargo workspace in; the
 # cargo registry and target dir live in cached volumes.
 gen_android_bindings_local() {
-  local out dest library=target/debug/libclient_ffi.so
+  local out dest library
   # The host's own name for a cdylib; the Kotlin it describes is the same.
-  case "$(uname -s)" in MINGW* | MSYS*) library=target/debug/client_ffi.dll ;; esac
+  library="${CARGO_TARGET_DIR:-target}/debug/libclient_ffi.so"
+  case "$(uname -s)" in MINGW* | MSYS*) library="${CARGO_TARGET_DIR:-target}/debug/client_ffi.dll" ;; esac
   out="$(native_path "$(mktemp -d)")"
   dest="apps/android/app/src/main/java/uniffi"
   echo "==> Building crates/client-ffi (host target)"

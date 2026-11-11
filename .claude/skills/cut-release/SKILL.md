@@ -39,7 +39,7 @@ Packages write enabled for Actions in repo settings.
    - `package.json` (root) and `packages/agent-host/package.json`
    - `[workspace.package] version` in the root `Cargo.toml` (every crate
      inherits it), then refresh the workspace entries in `Cargo.lock` with
-     `cargo update -w --offline` — CI's `cargo test --locked` fails if they
+     `./codedeck regen cargo-lock` — CI's `cargo test --locked` fails if they
      disagree
 
    - `versionCode` in `apps/android/app/build.gradle.kts`: **+1** over the
