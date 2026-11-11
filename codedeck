@@ -10,6 +10,14 @@
 # that have a local form fall back to the vendored toolchain
 # (scripts/install-toolchain.sh, installed on first use).
 set -euo pipefail
+
+# Everything below is one brace group, closed on the last line. Bash reads a
+# script as it executes it, so a file that changes underneath a command that
+# takes minutes — a branch switched, this file edited — is carried on from the
+# wrong offset and runs whatever it finds there. A group is parsed whole
+# before any of it runs, and the `exit` that ends it keeps bash from reading
+# on afterwards.
+{
 cd "$(git rev-parse --show-toplevel)"
 # Absolute, because some commands change directory (the Android ones work in
 # apps/android) and this script's own files are still theirs to reach.
@@ -125,9 +133,41 @@ apps/android/scripts/build-apk-local.sh — see those files for details):
 Workspace checks (throwaway Node and Rust containers — nothing installed
 locally is required; on a Docker-less Linux host these run locally through
 the vendored toolchain instead, installed on first use):
-  check                    typecheck + test: the agent host and every crate
-  typecheck                typecheck only (agent host + cargo check)
+  check                    The bar for a change: the agent host's typecheck,
+                           tests and build; clippy, tests and docs for every
+                           crate. Every step runs and is listed at the end
+  typecheck                typecheck only (agent host + cargo clippy)
   test                     test only
+    --changed              Only the half (agent host, crates) that differs
+                           from master, by the path rules CI uses
+    --verbose | --quiet    Stream every step's output, or one line per step
+                           and the tail of a failure (full output in
+                           dist/logs/). Default: stream on a terminal only
+  e2e                      The two tests that drive a built agent host from
+                           Rust (driver protocol, bridge end to end), which
+                           `check` leaves out and CI runs
+
+Generated files — produced where the toolchain is and written back to this
+tree; CI fails when one is stale:
+  regen cargo-lock         Cargo.lock, after any Cargo.toml change
+  regen ts                 The agent host's protocol types, after a change to
+                           crates/agent-protocol
+  regen pins               pnpm-lock.yaml and the agents' install pins, after
+                           a change to a package.json
+  regen bindings           The UniFFI Kotlin bindings (gen-android-bindings)
+  regen all                cargo-lock, ts and bindings
+
+Pull request:
+  ci [PR] [--watch] [--lines N]
+                           The checks of this branch's pull request (or of
+                           PR, a number or a branch), and the end of the log
+                           of each one that failed (needs the GitHub CLI)
+
+Limits, for a machine that is also being used (any command above or below
+that runs a container; unset = no limit):
+  CODEDECK_CPUS=8          Cores a container may use — builds and test runners
+                           size themselves to it
+  CODEDECK_MEMORY=12g      Memory a container may use, page cache included
 
 The dev container — one long-lived container with node_modules and the caches
 kept warm, for the loop between checks (editing a driver, running one test
@@ -160,7 +200,8 @@ a Docker-less host:
                            --persona ID, --cwd DIR, --env K=V (agent paths and keys),
                            --timeout SECONDS (default 300), --no-sync
                            agents: claude-code, opencode, deepseek-harness,
-                           and `fake` for the driver-protocol test agent
+                           qwen-code, and `fake` for the driver-protocol
+                           test agent
   live <agent> --fake-model
                            Point the agent at a local model server instead
                            (tools/fake-model.mjs): no account, no network,
@@ -296,6 +337,41 @@ cmd_apk() {
 # shellcheck source=scripts/lib/pack-repo.sh
 . scripts/lib/pack-repo.sh
 
+# --- How much of the machine a container may take. ---
+#
+# A build takes every core it is shown, and on Docker Desktop the VM behind it
+# keeps whatever memory its page cache grew into — fine for a machine that is
+# only building, not for one somebody is also working on. Two optional
+# variables bound every container this script runs (the checks, the dev and
+# Android containers; the deployed bridge is Compose's, not touched here):
+#
+#   CODEDECK_CPUS    a number of cores. Applied as a cpuset rather than a CPU
+#                    quota: a quota only throttles, and cargo, vitest and
+#                    Gradle would still start one worker per core of the
+#                    machine and fight over the slice. Inside a cpuset the
+#                    core count they read is the limit, so each sizes itself.
+#   CODEDECK_MEMORY  docker's own form (8g, 12g). Page cache is charged to the
+#                    container too, so this also bounds what the VM holds on to.
+#
+# Unset means no limit of this script's making. A long-lived container picks a
+# changed value up on the next command (docker update); one that had a limit
+# keeps it until `dev --reset` once the variable is unset again.
+CPU_LIMIT=()
+case "${CODEDECK_CPUS:-}" in
+  '') ;;
+  *[!0-9]* | 0)
+    echo "CODEDECK_CPUS must be a number of cores (1 or more), not '$CODEDECK_CPUS'" >&2
+    exit 2
+    ;;
+  *) CPU_LIMIT=(--cpuset-cpus "0-$((CODEDECK_CPUS - 1))") ;;
+esac
+RESOURCE_LIMITS=(${CPU_LIMIT[@]+"${CPU_LIMIT[@]}"})
+if [ -n "${CODEDECK_MEMORY:-}" ]; then
+  # Swap equal to memory: without it Docker allows as much swap again, and a
+  # build that swaps is the slow machine this limit is meant to prevent.
+  RESOURCE_LIMITS+=(--memory "$CODEDECK_MEMORY" --memory-swap "$CODEDECK_MEMORY")
+fi
+
 # Start a throwaway container that is removed when the script exits, whether
 # it succeeds, fails or is interrupted. Extra args go to `docker create`
 # (volumes, limits); MSYS path conversion is off so `-v vol:/path` survives.
@@ -303,7 +379,8 @@ start_throwaway() {
   local name="$1" image="$2"
   shift 2
   docker rm -f "$name" >/dev/null 2>&1 || true
-  MSYS_NO_PATHCONV=1 docker create --name "$name" "$@" "$image" sleep infinity >/dev/null
+  MSYS_NO_PATHCONV=1 docker create --name "$name" ${RESOURCE_LIMITS[@]+"${RESOURCE_LIMITS[@]}"} \
+    "$@" "$image" sleep infinity >/dev/null
   docker start "$name" >/dev/null
   # Double-quoted so $name is baked in NOW, as a literal — the trap fires
   # after the calling function has returned (its locals are gone by then), so
@@ -371,6 +448,18 @@ ensure_container() {
   fi
   # Already running is fine: this is "make sure it is up", not "start it".
   docker start "$name" >/dev/null 2>&1 || true
+  # On every command, not only at creation: the container outlives the shell
+  # that made it, and the limit in force should be the one asked for now. A
+  # container created with a memory limit of its own (the Android one: Gradle
+  # is sized to it) keeps that one — only its cores are bounded here.
+  local limits=(${RESOURCE_LIMITS[@]+"${RESOURCE_LIMITS[@]}"})
+  case " $* " in
+    *" -m "* | *" --memory "*) limits=(${CPU_LIMIT[@]+"${CPU_LIMIT[@]}"}) ;;
+  esac
+  if [ ${#limits[@]} -gt 0 ]; then
+    docker update "${limits[@]}" "$name" >/dev/null ||
+      echo "==> Could not apply CODEDECK_CPUS/CODEDECK_MEMORY to $name (it keeps its previous limits)" >&2
+  fi
 }
 
 # Mirror the working tree into <container>:<dest>. The file list comes from git
@@ -432,14 +521,15 @@ check_typescript() {
   start_throwaway "$name" codedeck-node -v codedeck-pnpm-store:/pnpm-store
 
   pack_repo_into "$name" /app package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json packages
-  echo "==> Installing dependencies"
-  dexec -w /app "$name" pnpm install --frozen-lockfile
+  # Nothing after a failed install can pass, and each would only repeat it.
+  step "host: install" dexec -w /app "$name" pnpm install --frozen-lockfile || return 0
   case "$1" in
-    typecheck) dexec -w /app "$name" pnpm -r --no-bail run typecheck ;;
-    test) dexec -w /app "$name" pnpm -r --no-bail run test ;;
+    typecheck) step "host: typecheck" dexec -w /app "$name" pnpm -r --no-bail run typecheck || true ;;
+    test) step "host: test" dexec -w /app "$name" pnpm -r --no-bail run test || true ;;
     check)
-      dexec -w /app "$name" pnpm -r --no-bail run typecheck
-      dexec -w /app "$name" pnpm -r --no-bail run test
+      step "host: typecheck" dexec -w /app "$name" pnpm -r --no-bail run typecheck || true
+      step "host: test" dexec -w /app "$name" pnpm -r --no-bail run test || true
+      step "host: build" dexec -w /app "$name" pnpm -r --no-bail run build || true
       ;;
   esac
 }
@@ -456,12 +546,23 @@ check_rust() {
   # and client-ffi's corpus test the Android copy of the display corpus.
   pack_repo_into "$name" /repo crates Cargo.toml Cargo.lock config.example.json \
     apps/android/app/src/test/resources/display_entries_corpus.json
-  case "$1" in
-    typecheck) dexec -w /repo "$name" cargo clippy --locked --workspace --all-targets -- -D warnings ;;
-    test) dexec -w /repo "$name" cargo test --locked --workspace ;;
+  rust_steps "$1" dexec -w /repo "$name"
+}
+
+# The crate steps, behind whatever prefix runs a command where the crates are
+# (`dexec … <container>` on the Docker engine, nothing locally). `cargo doc`
+# is part of the bar: crates/protocol's docs are the spec other clients read,
+# and CI fails on a broken intra-doc link.
+rust_steps() {
+  local mode="$1"
+  shift
+  case "$mode" in
+    typecheck) step "crates: clippy" "$@" cargo clippy --locked --workspace --all-targets -- -D warnings || true ;;
+    test) step "crates: test" "$@" cargo test --locked --workspace || true ;;
     check)
-      dexec -w /repo "$name" cargo clippy --locked --workspace --all-targets -- -D warnings
-      dexec -w /repo "$name" cargo test --locked --workspace
+      step "crates: clippy" "$@" cargo clippy --locked --workspace --all-targets -- -D warnings || true
+      step "crates: test" "$@" cargo test --locked --workspace || true
+      step "crates: doc" "$@" env "RUSTDOCFLAGS=-D warnings" cargo doc --locked --workspace --no-deps || true
       ;;
   esac
 }
@@ -475,46 +576,167 @@ check_typescript_local() {
   # Docker containers never set it. The containers run with it unset, so
   # unset it here too: same repo, same result either way.
   unset NODE_ENV
-  echo "==> Installing dependencies (local toolchain)"
-  pnpm install --frozen-lockfile
+  step "host: install" pnpm install --frozen-lockfile || return 0
   case "$1" in
-    typecheck) pnpm -r --no-bail run typecheck ;;
-    test) pnpm -r --no-bail run test ;;
+    typecheck) step "host: typecheck" pnpm -r --no-bail run typecheck || true ;;
+    test) step "host: test" pnpm -r --no-bail run test || true ;;
     check)
-      pnpm -r --no-bail run typecheck
-      pnpm -r --no-bail run test
+      step "host: typecheck" pnpm -r --no-bail run typecheck || true
+      step "host: test" pnpm -r --no-bail run test || true
+      step "host: build" pnpm -r --no-bail run build || true
       ;;
   esac
 }
 
-check_rust_local() {
-  case "$1" in
-    typecheck) cargo clippy --locked --workspace --all-targets -- -D warnings ;;
-    test) cargo test --locked --workspace ;;
-    check)
-      cargo clippy --locked --workspace --all-targets -- -D warnings
-      cargo test --locked --workspace
-      ;;
-  esac
+# --- One step of a check: run it, remember how it ended, go on to the next. ---
+#
+# A sweep reports every step, not the first failure — a red clippy says nothing
+# about the tests, and finding that out should not cost a second run. With a
+# terminal the output streams as it always did. Without one (a script, an
+# agent) each step's output goes to dist/logs/ and the step prints one line,
+# plus the tail of its log when it failed: a green sweep is then a dozen lines
+# rather than several thousand, and the full output is one file away.
+CHECK_LOG_DIR=dist/logs
+CHECK_RESULTS=""
+CHECK_STREAM=0
+CHECK_TAIL=60
+
+step() {
+  local label="$1" slug log code=0
+  shift
+  if [ "$CHECK_STREAM" = 1 ]; then
+    echo "==> $label"
+    "$@" || code=$?
+  else
+    slug="$(printf '%s' "$label" | tr -cs 'a-z0-9' '-')"
+    log="$CHECK_LOG_DIR/${slug%-}.log"
+    printf '==> %-18s ' "$label"
+    "$@" >"$log" 2>&1 </dev/null || code=$?
+    if [ "$code" = 0 ]; then
+      echo "ok"
+    else
+      echo "FAILED (exit $code) — the end of $log:"
+      tail -n "$CHECK_TAIL" "$log" | sed 's/^/    /'
+    fi
+  fi
+  printf '%s\t%s\n' "$code" "$label" >>"$CHECK_RESULTS"
+  return "$code"
+}
+
+# Every step that ran, and one exit code for the lot.
+check_summary() {
+  local code label failed=0
+  if [ ! -s "$CHECK_RESULTS" ]; then
+    rm -f "$CHECK_RESULTS"
+    echo "==> Nothing to run."
+    return 0
+  fi
+  echo
+  echo "==> Summary"
+  while IFS=$'\t' read -r code label; do
+    if [ "$code" = 0 ]; then
+      printf '    ok      %s\n' "$label"
+    else
+      printf '    FAILED  %s\n' "$label"
+      failed=1
+    fi
+  done <"$CHECK_RESULTS"
+  rm -f "$CHECK_RESULTS"
+  [ "$CHECK_STREAM" = 1 ] || echo "    full output: $CHECK_LOG_DIR/"
+  return "$failed"
+}
+
+begin_steps() {
+  mkdir -p "$CHECK_LOG_DIR"
+  CHECK_RESULTS="$(mktemp)"
+  if [ -t 1 ]; then CHECK_STREAM=1; fi
+}
+
+# Which parts of the tree differ from master, for `--changed`: what the branch
+# committed, what is staged or edited, and what is new and not ignored. The
+# path lists are the `changes` job's filters in .github/workflows/ci.yml —
+# keep the two in step, or a sweep here skips what CI then runs.
+CHANGED_HOST=1
+CHANGED_RUST=1
+CHANGED_ANDROID=0
+
+detect_changes() {
+  local base path
+  if ! base="$(git merge-base HEAD origin/master 2>/dev/null)"; then
+    echo "==> --changed: no origin/master to compare with — running everything"
+    return 0
+  fi
+  CHANGED_HOST=0
+  CHANGED_RUST=0
+  while IFS= read -r path; do
+    # The workflow itself counts for every part, as it does there.
+    case "$path" in
+      .github/workflows/ci.yml)
+        CHANGED_HOST=1
+        CHANGED_RUST=1
+        CHANGED_ANDROID=1
+        ;;
+    esac
+    case "$path" in
+      packages/* | package.json | pnpm-lock.yaml | pnpm-workspace.yaml | tsconfig.base.json) CHANGED_HOST=1 ;;
+    esac
+    case "$path" in
+      crates/* | Cargo.toml | Cargo.lock | config.example.json | \
+        apps/android/app/src/test/resources/display_entries_corpus.json) CHANGED_RUST=1 ;;
+    esac
+    case "$path" in
+      apps/android/* | crates/protocol/* | crates/nostr-transport/* | crates/client-core/* | \
+        crates/client-runtime/* | crates/client-ffi/* | Cargo.toml | Cargo.lock) CHANGED_ANDROID=1 ;;
+    esac
+  done <<<"$(git diff --name-only "$base"; git ls-files --others --exclude-standard)"
+  [ "$CHANGED_HOST" = 1 ] || echo "==> --changed: nothing under the agent host differs from master — skipped"
+  [ "$CHANGED_RUST" = 1 ] || echo "==> --changed: no crate differs from master — skipped"
 }
 
 # Each Docker check in a subshell: start_throwaway's EXIT trap removes that
 # container. The local path needs no cleanup.
 run_checks() {
+  local mode="$1" changed=0
+  shift
+  begin_steps
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --changed) changed=1 ;;
+      --verbose) CHECK_STREAM=1 ;;
+      --quiet) CHECK_STREAM=0 ;;
+      *)
+        echo "usage: $0 $mode [--changed] [--verbose|--quiet]" >&2
+        exit 2
+        ;;
+    esac
+    shift
+  done
+  [ "$changed" = 1 ] && detect_changes
+
   local state=0
   docker_state || state=$?
   case $state in
     0)
-      (check_typescript "$1")
-      (check_rust "$1")
+      if [ "$CHANGED_HOST" = 1 ]; then (check_typescript "$mode"); fi
+      if [ "$CHANGED_RUST" = 1 ]; then (check_rust "$mode"); fi
       ;;
     2) fail_docker_down ;;
     *)
-      ensure_toolchain node rust
-      check_typescript_local "$1"
-      check_rust_local "$1"
+      local parts=()
+      [ "$CHANGED_HOST" = 1 ] && parts+=(node)
+      [ "$CHANGED_RUST" = 1 ] && parts+=(rust)
+      [ ${#parts[@]} -gt 0 ] && ensure_toolchain "${parts[@]}"
+      if [ "$CHANGED_HOST" = 1 ]; then check_typescript_local "$mode"; fi
+      if [ "$CHANGED_RUST" = 1 ]; then rust_steps "$mode"; fi
       ;;
   esac
+
+  local code=0
+  check_summary || code=$?
+  if [ "$CHANGED_ANDROID" = 1 ]; then
+    echo "    the app's inputs changed too: ./codedeck android test verifyPaparazziDebug lintDebug"
+  fi
+  return "$code"
 }
 
 # --- The dev container: what the throwaway checks are too slow for. ---
@@ -714,6 +936,204 @@ cmd_dev() {
   MSYS_NO_PATHCONV=1 docker exec -i -w "$DEV_ROOT${workdir:+/$workdir}" "$DEV_CONTAINER" \
     timeout --kill-after=15s "${limit}s" "$@" || code=$?
   report_timeout "$code" "$limit"
+}
+
+# --- The bridge end to end: the two ignored tests that need a built host. ---
+#
+# The driver-protocol spawn test and the bridge end-to-end test drive the real
+# host bundle from Rust, so they are #[ignore]d for a plain `cargo test` and
+# CI runs them as a job of their own. This is that job: build the bundle, then
+# both tests, in the dev container (or in this tree, without Docker).
+cmd_e2e() {
+  begin_steps
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --verbose) CHECK_STREAM=1 ;;
+      --quiet) CHECK_STREAM=0 ;;
+      *) echo "usage: $0 e2e [--verbose|--quiet]" >&2; exit 2 ;;
+    esac
+    shift
+  done
+
+  local run=()
+  local state=0
+  docker_state || state=$?
+  case $state in
+    0)
+      ensure_dev_container
+      sync_tree "$DEV_CONTAINER" "$DEV_ROOT"
+      ensure_dev_deps
+      run=(dexec -w "$DEV_ROOT" "$DEV_CONTAINER")
+      ;;
+    2) fail_docker_down ;;
+    *)
+      ensure_toolchain node rust
+      ensure_local_deps
+      ;;
+  esac
+
+  # Without the bundle both tests fail for a reason that is not theirs.
+  if step "host: build" ${run[@]+"${run[@]}"} pnpm --filter "@codedeck/agent-host" run build; then
+    step "driver protocol" ${run[@]+"${run[@]}"} \
+      cargo test --locked -p agent-protocol --test agent_host -- --ignored || true
+    step "bridge end to end" ${run[@]+"${run[@]}"} \
+      cargo test --locked -p bridge-runtime --test e2e -- --ignored || true
+  fi
+  check_summary
+}
+
+# --- The files a tool writes, regenerated and brought back. ---
+#
+# Four kinds of file in the tree are generated, and CI fails when one is stale:
+# Cargo.lock (builds run --locked), the host's TypeScript protocol types, the
+# agents' install pins (with pnpm-lock.yaml), and the UniFFI Kotlin bindings.
+# On the Docker engine each is produced inside a container, whose tree the next
+# sync overwrites — so every one of them used to be a command plus a
+# `docker cp` to remember. This is both, for each.
+REGEN_KINDS="cargo-lock, ts, pins, bindings, all (cargo-lock + ts + bindings)"
+
+# Copy <path> (a file, or a directory's contents) out of the dev container's
+# tree into this one. A relative host path on purpose: with MSYS path
+# conversion off for the container side, an absolute one would be read as a
+# Windows path.
+copy_back() {
+  local path
+  for path in "$@"; do
+    if dexec "$DEV_CONTAINER" test -d "$DEV_ROOT/$path"; then
+      MSYS_NO_PATHCONV=1 docker cp "$DEV_CONTAINER:$DEV_ROOT/$path/." "$path/"
+    else
+      MSYS_NO_PATHCONV=1 docker cp "$DEV_CONTAINER:$DEV_ROOT/$path" "$path"
+    fi
+  done
+  # What the regeneration changed, which is the answer to "was it stale?".
+  local changed
+  changed="$(git status --short -- "$@")"
+  if [ -n "$changed" ]; then printf '%s\n' "$changed"; else echo "==> Already current: $*"; fi
+}
+
+regen_one() {
+  local kind="$1" docker="$2" run=()
+  if [ "$docker" = 1 ]; then run=(dexec -w "$DEV_ROOT" "$DEV_CONTAINER"); fi
+  case "$kind" in
+    cargo-lock)
+      echo "==> Cargo.lock"
+      # The cheapest command that resolves the workspace: it rewrites the lock
+      # for what Cargo.toml now asks and leaves every other entry where it was.
+      ${run[@]+"${run[@]}"} sh -c 'cargo metadata --format-version 1 >/dev/null'
+      [ "$docker" = 1 ] && copy_back Cargo.lock
+      ;;
+    ts)
+      echo "==> The agent host's protocol types"
+      ${run[@]+"${run[@]}"} cargo test --locked -p agent-protocol --test gen_ts_bindings -- --ignored
+      [ "$docker" = 1 ] && copy_back packages/agent-host/src/generated/protocol.ts
+      ;;
+    pins)
+      echo "==> pnpm-lock.yaml and the agents' install pins"
+      ${run[@]+"${run[@]}"} pnpm install --no-frozen-lockfile
+      ${run[@]+"${run[@]}"} pnpm --filter "@codedeck/agent-host" run gen:platform-packages
+      if [ "$docker" = 1 ]; then
+        copy_back pnpm-lock.yaml packages/agent-host/src/generated
+        # The container's install is the one this lockfile describes: say so,
+        # or the next `dev` would reinstall what is already there.
+        dexec "$DEV_CONTAINER" sh -c "printf '%s' '$(git hash-object pnpm-lock.yaml)' > $DEV_LOCK_STAMP"
+      fi
+      ;;
+  esac
+  return 0
+}
+
+cmd_regen() {
+  local kinds=()
+  case "${1:-}" in
+    cargo-lock | ts | pins | bindings) kinds=("$1") ;;
+    all) kinds=(cargo-lock ts bindings) ;;
+    *)
+      echo "usage: $0 regen <kind>" >&2
+      echo "  kinds: $REGEN_KINDS" >&2
+      exit 2
+      ;;
+  esac
+
+  local state=0 docker=1 synced=0 kind
+  docker_state || state=$?
+  case $state in
+    0) ;;
+    2) fail_docker_down ;;
+    *) docker=0 ;;
+  esac
+
+  for kind in "${kinds[@]}"; do
+    # The bindings have a container and a command of their own.
+    if [ "$kind" = bindings ]; then
+      (cmd_gen_android_bindings)
+      continue
+    fi
+    if [ "$docker" = 1 ] && [ "$synced" = 0 ]; then
+      ensure_dev_container
+      # No dependency install here: `pins` exists for the lockfile that no
+      # longer matches package.json, which a frozen install refuses.
+      sync_tree "$DEV_CONTAINER" "$DEV_ROOT"
+      synced=1
+    elif [ "$docker" = 0 ]; then
+      case "$kind" in
+        pins) ensure_toolchain node ;;
+        *) ensure_toolchain rust ;;
+      esac
+    fi
+    regen_one "$kind" "$docker"
+  done
+}
+
+# --- What CI says about this branch's pull request. ---
+#
+# The checks of the pull request's head commit, and for each run that failed
+# the end of the failing step's log — which is the part worth reading, and
+# otherwise three `gh` calls and a page of timestamps away.
+cmd_ci() {
+  local watch=0 lines=80 pr=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --watch) watch=1; shift ;;
+      --lines)
+        case "${2:-}" in
+          '' | *[!0-9]*) echo "ci --lines needs a number" >&2; exit 2 ;;
+        esac
+        lines="$2"; shift 2 ;;
+      -*) echo "usage: $0 ci [PR] [--watch] [--lines N]" >&2; exit 2 ;;
+      # A number or a branch, as `gh pr` takes it; none means this branch's.
+      *) pr=("$1"); shift ;;
+    esac
+  done
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "The GitHub CLI (gh) is not installed: https://cli.github.com" >&2
+    exit 1
+  fi
+
+  local code=0
+  if [ "$watch" = 1 ]; then
+    gh pr checks ${pr[@]+"${pr[@]}"} --watch --interval 30 || code=$?
+  else
+    gh pr checks ${pr[@]+"${pr[@]}"} || code=$?
+  fi
+
+  local sha ids id
+  sha="$(gh pr view ${pr[@]+"${pr[@]}"} --json headRefOid --jq .headRefOid)" || return "$code"
+  ids="$(gh run list --commit "$sha" --json databaseId,conclusion \
+    --jq '.[] | select(.conclusion == "failure") | .databaseId')"
+  for id in $ids; do
+    echo
+    echo "==> Failed: $(gh run view "$id" --json jobs \
+      --jq '[.jobs[] | select(.conclusion == "failure") | .name] | join(", ")') (gh run view $id --log-failed)"
+    # A log line is "job<TAB>step<TAB>timestamp text": the job is named above,
+    # and the timestamp and the colour codes are noise next to the text. The log runs on past the
+    # failing step into the job's cleanup, so it is cut where the step ended
+    # (by a sed that reads to the end: one that quit early would leave gh
+    # killed by SIGPIPE, and pipefail would report that as a failure here).
+    gh run view "$id" --log-failed | cut -f3- | sed -E 's/^[0-9T:.-]+Z //; s/\x1b\[[0-9;]*m//g' |
+      sed -n '1,/^##\[error\]Process completed with exit code/p' | tail -n "$lines" ||
+      echo "    (its log could not be read — GitHub drops logs after a while)"
+  done
+  return "$code"
 }
 
 # --- The Android container: the phone's tests, lint and snapshots. ---
@@ -1122,6 +1542,7 @@ cmd_doctor() {
     2) printf '  %-14s %s\n' "docker" "installed, but its daemon is not answering — start it"
        return 0 ;;
   esac
+  printf '  %-14s %s\n' "limits" "CODEDECK_CPUS=${CODEDECK_CPUS:-unset (every core)}, CODEDECK_MEMORY=${CODEDECK_MEMORY:-unset (all the engine has)}"
 
   local tag size
   echo
@@ -1242,9 +1663,10 @@ case "${1:-help}" in
   live) shift; cmd_live "$@" ;;
   android) shift; cmd_android "$@" ;;
   doctor) shift; cmd_doctor "$@" ;;
-  check) run_checks check ;;
-  typecheck) run_checks typecheck ;;
-  test) run_checks test ;;
+  check | typecheck | test) run_checks "$@" ;;
+  e2e) shift; cmd_e2e "$@" ;;
+  regen) shift; cmd_regen "$@" ;;
+  ci) shift; cmd_ci "$@" ;;
   gen-android-bindings) cmd_gen_android_bindings ;;
   help|-h|--help) usage ;;
   *)
@@ -1254,3 +1676,5 @@ case "${1:-help}" in
     exit 1
     ;;
 esac
+exit
+}
