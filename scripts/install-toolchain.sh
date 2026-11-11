@@ -38,13 +38,15 @@
 # everything else in this repo (crates/*, apps/android, the TS workspace)
 # does not need them.
 #
-# Linux only. On Windows, Docker is the supported path (see
-# apps/android/docker/build-apk.sh, apps/mobile/docker/build-apk.sh) —
-# installing this toolchain directly on Windows without Android Studio's own
-# installer is its own can of worms this script doesn't attempt. macOS
-# likely works too (Adoptium/rustup/Node/cmdline-tools all publish macOS
-# binaries) but is untested — the NDK clang triples build-apk-local.sh uses
-# are Linux-host-specific (`linux-x86_64` prebuilt dir) either way.
+# Linux, and on Windows (Git Bash) the `node` component alone: the agent host
+# is tested on Windows by CI, and Node there is a zip with nothing to link.
+# The rest stays with Docker on Windows — the crates compile C (ring,
+# secp256k1, sqlite), which needs the MSVC build tools, a system install this
+# script will not make; and the Android toolchain without Android Studio's
+# own installer is its own can of worms. macOS likely works too
+# (Adoptium/rustup/Node/cmdline-tools all publish macOS binaries) but is
+# untested — the NDK clang triples build-apk-local.sh uses are
+# Linux-host-specific (`linux-x86_64` prebuilt dir) either way.
 #
 # Idempotent, and cheap enough to run as a check: every step asks whether its
 # target is already here before it touches the network, and a later run for
@@ -62,16 +64,24 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
-if [ "$(uname -s)" != "Linux" ]; then
-  echo "This script installs a Linux toolchain. On Windows, use the Docker" >&2
-  echo "path instead: apps/android/docker/build-apk.sh." >&2
-  exit 1
-fi
+HOST_OS=linux
+case "$(uname -s)" in
+  Linux) ;;
+  MINGW* | MSYS*) HOST_OS=windows ;;
+  *)
+    echo "This script installs a toolchain on Linux, and Node on Windows (Git" >&2
+    echo "Bash). On this system use Docker: ./codedeck does, when it is running." >&2
+    exit 1
+    ;;
+esac
 
 # What was asked for, as a space-delimited set to match against. `android`
 # implies `java` and `rust` implies `zig`, resolved here so each section below
-# only has to ask for its own name.
+# only has to ask for its own name. On Windows there is one component, so
+# "everything" is that one and asking for another is an error, not a skip:
+# the caller would otherwise go on to run a tool that is not there.
 ALL_COMPONENTS=(java rust node android)
+if [ "$HOST_OS" = windows ]; then ALL_COMPONENTS=(node); fi
 WANTED=("$@")
 if [ ${#WANTED[@]} -eq 0 ]; then
   WANTED=("${ALL_COMPONENTS[@]}")
@@ -80,7 +90,7 @@ else
     case " ${ALL_COMPONENTS[*]} " in
       *" $component "*) ;;
       *)
-        echo "unknown component: $component" >&2
+        echo "unknown component on $HOST_OS: $component" >&2
         echo "components: ${ALL_COMPONENTS[*]} (none = all of them)" >&2
         exit 2
         ;;
@@ -244,30 +254,50 @@ fi
 NODE_MAJOR="22"
 PNPM_VERSION="10.8.0"
 NODE_DIR="$TOOLCHAIN_DIR/node"
+# Where the binaries are inside it: the Linux tarball has a bin/, the Windows
+# zip keeps node.exe at its root.
+NODE_BIN="$NODE_DIR/bin"
+if [ "$HOST_OS" = windows ]; then NODE_BIN="$NODE_DIR"; fi
 if wants node; then
-  if [ ! -x "$NODE_DIR/bin/node" ]; then
+  if [ ! -x "$NODE_BIN/node" ]; then
     echo "==> Installing Node.js $NODE_MAJOR.x"
     arch="$(uname -m)"; case "$arch" in x86_64) arch=x64 ;; aarch64) arch=arm64 ;; esac
-    node_file="$(curl -fsSL "https://nodejs.org/dist/latest-v${NODE_MAJOR}.x/SHASUMS256.txt" \
-      | grep -o "node-v${NODE_MAJOR}\.[0-9.]*-linux-${arch}\.tar\.xz" | head -1 || true)"
+    node_suffix="linux-${arch}.tar.xz"
+    if [ "$HOST_OS" = windows ]; then node_suffix="win-${arch}.zip"; fi
+    node_sums="$(curl -fsSL "https://nodejs.org/dist/latest-v${NODE_MAJOR}.x/SHASUMS256.txt")"
+    node_file="$(printf '%s\n' "$node_sums" \
+      | grep -o "node-v${NODE_MAJOR}\.[0-9.]*-${node_suffix//./\\.}" | head -1 || true)"
     if [ -z "$node_file" ]; then
-      echo "error: could not resolve a Node ${NODE_MAJOR}.x download for linux-$arch" >&2
+      echo "error: could not resolve a Node ${NODE_MAJOR}.x download for $node_suffix" >&2
       exit 1
     fi
     tmp="$(mktemp -d)"
-    curl -fsSL -o "$tmp/node.tar.xz" "https://nodejs.org/dist/latest-v${NODE_MAJOR}.x/$node_file"
+    curl -fsSL -o "$tmp/$node_file" "https://nodejs.org/dist/latest-v${NODE_MAJOR}.x/$node_file"
+    # The archive against the release's own checksum list: what is unpacked
+    # here goes on PATH and runs every test.
+    if ! (cd "$tmp" && printf '%s\n' "$node_sums" | grep " $node_file\$" | sha256sum -c - >/dev/null); then
+      echo "error: $node_file does not match its SHA-256 in SHASUMS256.txt" >&2
+      exit 1
+    fi
+    rm -rf "$NODE_DIR"
     mkdir -p "$NODE_DIR"
-    extract_tar_xz "$tmp/node.tar.xz" "$NODE_DIR"
+    if [ "$HOST_OS" = windows ]; then
+      # The zip holds one directory, node-v<version>-win-<arch>.
+      extract_zip "$tmp/$node_file" "$tmp/unpacked"
+      mv "$tmp/unpacked"/node-v*/* "$NODE_DIR"/
+    else
+      extract_tar_xz "$tmp/$node_file" "$NODE_DIR"
+    fi
     rm -rf "$tmp"
   else
     echo "==> Node.js already installed, skipping"
   fi
-  export PATH="$NODE_DIR/bin:$PATH"
+  export PATH="$NODE_BIN:$PATH"
 
-  if [ ! -x "$NODE_DIR/bin/pnpm" ]; then
+  if [ ! -x "$NODE_BIN/pnpm" ]; then
     echo "==> Installing pnpm $PNPM_VERSION via corepack"
     export COREPACK_HOME="$TOOLCHAIN_DIR/corepack"
-    corepack enable --install-directory "$NODE_DIR/bin"
+    corepack enable --install-directory "$NODE_BIN"
     corepack prepare "pnpm@$PNPM_VERSION" --activate
   else
     echo "==> pnpm already installed, skipping"
@@ -327,7 +357,7 @@ component_present() {
   case "$1" in
     java) [ -x "$JDK_DIR/bin/java" ] ;;
     rust) [ -x "$CARGO_HOME/bin/cargo" ] ;;
-    node) [ -x "$NODE_DIR/bin/node" ] ;;
+    node) [ -x "$NODE_BIN/node" ] ;;
     android)
       [ -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ] &&
         [ -d "$ANDROID_HOME/platforms/$PLATFORM" ] &&
@@ -354,7 +384,7 @@ component_present() {
   fi
   if component_present node; then
     echo "export COREPACK_HOME=\"$TOOLCHAIN_DIR/corepack\""
-    path_prefix="$path_prefix$NODE_DIR/bin:"
+    path_prefix="$path_prefix$NODE_BIN:"
   fi
   if component_present android; then
     echo "export ANDROID_HOME=\"$ANDROID_HOME\""

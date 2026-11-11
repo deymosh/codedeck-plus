@@ -66,6 +66,56 @@ require_docker() {
   exit 1
 }
 
+# Whether this host can run a command that needs these components (node,
+# rust, java, android; none named = all of them) without Docker. Linux: yes,
+# scripts/install-toolchain.sh vendors every one. Windows (Git Bash): the Node
+# half only — the agent host, which CI tests on Windows too. The crates
+# compile C and want the MSVC build tools, and the Android toolchain is its
+# own install; neither is something this script puts on a machine.
+host_local_supports() {
+  local component
+  case "$(uname -s)" in
+    Linux) return 0 ;;
+    MINGW* | MSYS*)
+      [ $# -gt 0 ] || return 1
+      for component in "$@"; do
+        [ "$component" = node ] || return 1
+      done
+      return 0
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+# Which engine runs a command that needs these components — docker_state's
+# three answers (0 Docker, 1 local, 2 Docker's daemon is down), after asking
+# what the caller prefers. CODEDECK_ENGINE=local runs on the local toolchain
+# whatever this host has one for, with Docker still running: a container is a
+# VM's worth of memory and a tree to sync on Windows and macOS, and the agent
+# host needs neither. What the host cannot run locally still goes to Docker,
+# and says so. Unset (or `docker`), Docker runs everything when it answers.
+engine_state() {
+  case "${CODEDECK_ENGINE:-docker}" in
+    docker) ;;
+    local)
+      if host_local_supports "$@"; then return 1; fi
+      echo "==> CODEDECK_ENGINE=local, but this host has no local toolchain for: $* — using Docker" >&2
+      ;;
+    *)
+      echo "CODEDECK_ENGINE must be 'local' or 'docker', not '$CODEDECK_ENGINE'" >&2
+      exit 2
+      ;;
+  esac
+  docker_state
+}
+
+# A path as a native program reads it. Git Bash shows the tree as /c/…, which
+# only programs built for it understand; node.exe wants C:/…. Elsewhere a path
+# is already what it is.
+native_path() {
+  if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi
+}
+
 # The local engine: the vendored toolchain from scripts/install-toolchain.sh.
 # Takes the components the command being run actually needs — `node` for the
 # TypeScript workspace, `rust` for the crates, `android` for apps/android — so
@@ -79,18 +129,18 @@ require_docker() {
 # that landed cmdline-tools and nothing else). Every step of it skips without
 # touching the network when its target is present, so the check costs a shell
 # startup. Sources env.sh into THIS shell so cargo/node/pnpm/java stay on PATH
-# for the rest of the script. Non-Linux hosts have no supported Docker-free
-# path — scripts/install-toolchain.sh is Linux-only by design.
+# for the rest of the script. What a host can run locally is
+# host_local_supports' to say: all of it on Linux, the Node half on Windows.
 ensure_toolchain() {
-  if [ "$(uname -s)" != Linux ]; then
-    echo "Docker is unavailable and this host cannot use the local toolchain" >&2
-    echo "instead (scripts/install-toolchain.sh is Linux-only). Install and" >&2
-    echo "start Docker (Docker Desktop on Windows/macOS), then re-run this" >&2
-    echo "command. See CLAUDE.md, \"Commands\"." >&2
+  if ! host_local_supports "$@"; then
+    echo "Docker is unavailable, and this host has no local toolchain for" >&2
+    echo "this command (scripts/install-toolchain.sh: everything on Linux, the" >&2
+    echo "agent host's Node on Windows). Install and start Docker (Docker" >&2
+    echo "Desktop on Windows/macOS), then re-run it. See CLAUDE.md, \"Commands\"." >&2
     exit 1
   fi
   if [ ! -f toolchain/env.sh ]; then
-    echo "==> No Docker and no ./toolchain yet — installing what this needs"
+    echo "==> No ./toolchain yet — installing what this needs"
     [ $# -gt 0 ] && echo "    (${*})"
     echo "    one-time; Ctrl-C to abort"
   fi
@@ -162,6 +212,14 @@ Pull request:
                            The checks of this branch's pull request (or of
                            PR, a number or a branch), and the end of the log
                            of each one that failed (needs the GitHub CLI)
+
+Engine — Docker runs everything when its daemon answers; without Docker the
+local toolchain does (scripts/install-toolchain.sh, into ./toolchain):
+  CODEDECK_ENGINE=local    Prefer the local toolchain even with Docker up, for
+                           what this host has one for: everything on Linux,
+                           the agent host (check's host half, dev vitest/
+                           pnpm/node, live, regen pins) on Windows. The rest
+                           still runs in Docker, and says so
 
 Limits, for a machine that is also being used (any command above or below
 that runs a container; unset = no limit):
@@ -324,7 +382,7 @@ cmd_tor() {
 cmd_apk() {
   # args pass through, e.g. `./codedeck apk --target aarch64-linux-android`
   local state=0
-  docker_state || state=$?
+  engine_state rust java android || state=$?
   case $state in
     0) exec ./apps/android/docker/build-apk.sh "$@" ;;
     2) fail_docker_down ;;
@@ -576,7 +634,7 @@ check_typescript_local() {
   # Docker containers never set it. The containers run with it unset, so
   # unset it here too: same repo, same result either way.
   unset NODE_ENV
-  step "host: install" pnpm install --frozen-lockfile || return 0
+  step "host: install" env CI=true pnpm install --frozen-lockfile || return 0
   case "$1" in
     typecheck) step "host: typecheck" pnpm -r --no-bail run typecheck || true ;;
     test) step "host: test" pnpm -r --no-bail run test || true ;;
@@ -713,23 +771,31 @@ run_checks() {
   done
   [ "$changed" = 1 ] && detect_changes
 
-  local state=0
-  docker_state || state=$?
-  case $state in
-    0)
-      if [ "$CHANGED_HOST" = 1 ]; then (check_typescript "$mode"); fi
-      if [ "$CHANGED_RUST" = 1 ]; then (check_rust "$mode"); fi
-      ;;
-    2) fail_docker_down ;;
-    *)
-      local parts=()
-      [ "$CHANGED_HOST" = 1 ] && parts+=(node)
-      [ "$CHANGED_RUST" = 1 ] && parts+=(rust)
-      [ ${#parts[@]} -gt 0 ] && ensure_toolchain "${parts[@]}"
-      if [ "$CHANGED_HOST" = 1 ]; then check_typescript_local "$mode"; fi
-      if [ "$CHANGED_RUST" = 1 ]; then rust_steps "$mode"; fi
-      ;;
-  esac
+  # Each half on the engine that can run it: a host may have the agent host's
+  # toolchain locally and not the crates' (Windows with CODEDECK_ENGINE=local).
+  # Both are asked before either runs, so a daemon that is down stops the
+  # sweep at the start rather than after its first half.
+  local host_state=0 rust_state=0
+  if [ "$CHANGED_HOST" = 1 ]; then engine_state node || host_state=$?; fi
+  if [ "$CHANGED_RUST" = 1 ]; then engine_state rust || rust_state=$?; fi
+  if [ "$host_state" = 2 ] || [ "$rust_state" = 2 ]; then fail_docker_down; fi
+
+  if [ "$CHANGED_HOST" = 1 ]; then
+    if [ "$host_state" = 0 ]; then
+      (check_typescript "$mode")
+    else
+      ensure_toolchain node
+      check_typescript_local "$mode"
+    fi
+  fi
+  if [ "$CHANGED_RUST" = 1 ]; then
+    if [ "$rust_state" = 0 ]; then
+      (check_rust "$mode")
+    else
+      ensure_toolchain rust
+      rust_steps "$mode"
+    fi
+  fi
 
   local code=0
   check_summary || code=$?
@@ -822,7 +888,10 @@ ensure_local_deps() {
   echo "==> Installing the workspace's Node dependencies"
   # NODE_ENV=production would make pnpm skip devDependencies — which is where
   # everything this runs (typescript, vitest) lives.
-  (unset NODE_ENV; pnpm install --frozen-lockfile)
+  # CI=true and no stdin: pnpm asks before it replaces a node_modules it did
+  # not make (another store, another version), and a prompt nobody is there
+  # to answer holds the command for ever.
+  (unset NODE_ENV; CI=true pnpm install --frozen-lockfile </dev/null)
   printf '%s' "$want" > toolchain/.codedeck-dev-lock
 }
 
@@ -876,6 +945,14 @@ cmd_dev() {
   # command: it belongs where vitest expects to be (the agent host's package),
   # and without an explicit run/watch word it runs once, rather than opening a
   # watch UI no session can answer.
+  # What the command needs, for the engine: the Node tools run wherever the
+  # agent host's toolchain is; anything else (cargo, a shell, a script that
+  # may call either) is assumed to want the whole container.
+  local needs=(node rust)
+  case "${1:-}" in
+    vitest | pnpm | node | npx | tsc) needs=(node) ;;
+  esac
+
   local workdir="" vitest=()
   if [ "${1:-}" = vitest ]; then
     shift
@@ -889,7 +966,7 @@ cmd_dev() {
   set -- ${vitest[@]+"${vitest[@]}"} "$@"
 
   local state=0
-  docker_state || state=$?
+  engine_state "${needs[@]}" || state=$?
   case $state in
     # Docker answers: the container path below is the one that runs. The
     # other two branches never return.
@@ -899,7 +976,10 @@ cmd_dev() {
     # toolchain, with no container in the way at all. `--sync-only` has done
     # its work once the dependencies are in, and must not open a shell.
     *)
-      ensure_toolchain node
+      # Node is what this installs. A host that cannot run the rest of what
+      # the command needs locally (cargo, on Windows) is told so here, by
+      # asking for it, rather than left to a "command not found".
+      if host_local_supports "${needs[@]}"; then ensure_toolchain node; else ensure_toolchain "${needs[@]}"; fi
       ensure_local_deps
       [ "$only_sync" = 1 ] && return 0
       cd "${workdir:-.}"
@@ -957,7 +1037,7 @@ cmd_e2e() {
 
   local run=()
   local state=0
-  docker_state || state=$?
+  engine_state node rust || state=$?
   case $state in
     0)
       ensure_dev_container
@@ -1054,20 +1134,24 @@ cmd_regen() {
       ;;
   esac
 
-  local state=0 docker=1 synced=0 kind
-  docker_state || state=$?
-  case $state in
-    0) ;;
-    2) fail_docker_down ;;
-    *) docker=0 ;;
-  esac
-
+  local state docker synced=0 kind needs
   for kind in "${kinds[@]}"; do
     # The bindings have a container and a command of their own.
     if [ "$kind" = bindings ]; then
       (cmd_gen_android_bindings)
       continue
     fi
+    # The pins are pnpm's work, the rest cargo's — and a host may have only
+    # one of the two toolchains locally.
+    needs=rust
+    [ "$kind" = pins ] && needs=node
+    state=0
+    engine_state "$needs" || state=$?
+    case $state in
+      0) docker=1 ;;
+      2) fail_docker_down ;;
+      *) docker=0 ;;
+    esac
     if [ "$docker" = 1 ] && [ "$synced" = 0 ]; then
       ensure_dev_container
       # No dependency install here: `pins` exists for the lockfile that no
@@ -1075,10 +1159,7 @@ cmd_regen() {
       sync_tree "$DEV_CONTAINER" "$DEV_ROOT"
       synced=1
     elif [ "$docker" = 0 ]; then
-      case "$kind" in
-        pins) ensure_toolchain node ;;
-        *) ensure_toolchain rust ;;
-      esac
+      ensure_toolchain "$needs"
     fi
     regen_one "$kind" "$docker"
   done
@@ -1214,7 +1295,7 @@ cmd_android() {
   shift
 
   local state=0
-  docker_state || state=$?
+  engine_state android || state=$?
   case $state in
     # Docker answers: the container path below is the one that runs. The
     # other two branches never return.
@@ -1329,7 +1410,7 @@ cmd_live() {
   esac
 
   local state=0
-  docker_state || state=$?
+  engine_state node || state=$?
   case $state in
     # Docker answers: the container path below is the one that runs. The
     # other two branches never return.
@@ -1342,14 +1423,20 @@ cmd_live() {
       echo "==> Building the agent host"
       pnpm --filter "@codedeck/agent-host" run build
       local workdir
-      workdir="$(mktemp -d)"
+      workdir="$(native_path "$(mktemp -d)")"
       local code=0
       # The agents an install fetches are kept where this engine keeps
       # everything else it installs (./toolchain, gitignored) — the local
       # counterpart of the agents volume the Docker path mounts, so a run is
       # the only one that downloads. An explicit CODEDECK_AGENT_CACHE wins.
-      env ${pairs[@]+"${pairs[@]}"} CODEDECK_AGENT_HOST_DRIVERS="$agent" \
-        CODEDECK_AGENT_CACHE="${CODEDECK_AGENT_CACHE:-$PWD/toolchain/agents}" \
+      #
+      # MSYS path conversion is off for this one command: a prompt such as
+      # `/tool` is an argument that starts with a slash, and Git Bash would
+      # hand node "C:/Program Files/Git/tool". The two paths this script
+      # passes are therefore converted by hand (native_path); a --cwd, --dump
+      # or --env path given on the command line is taken as written.
+      MSYS_NO_PATHCONV=1 env ${pairs[@]+"${pairs[@]}"} CODEDECK_AGENT_HOST_DRIVERS="$agent" \
+        CODEDECK_AGENT_CACHE="${CODEDECK_AGENT_CACHE:-$(native_path "$PWD/toolchain/agents")}" \
         timeout "${timeout}s" node packages/agent-host/tools/live-probe.mjs \
         --host packages/agent-host/dist/main.js --agent "$agent" --cwd "$workdir" \
         --timeout "$timeout" ${probe[@]+"${probe[@]}"} || code=$?
@@ -1531,7 +1618,8 @@ cmd_doctor() {
   echo "host"
   printf '  %-14s %s\n' "repo" "$(pwd)"
   printf '  %-14s %s\n' "os" "$(uname -s)"
-  printf '  %-14s %s\n' "toolchain" "$([ -f toolchain/env.sh ] && echo 'present (./toolchain, for Docker-less Linux)' || echo 'absent')"
+  printf '  %-14s %s\n' "toolchain" "$([ -f toolchain/env.sh ] && echo 'present (./toolchain — the local engine)' || echo 'absent')"
+  printf '  %-14s %s\n' "engine" "CODEDECK_ENGINE=${CODEDECK_ENGINE:-unset (Docker when it answers; 'local' prefers ./toolchain)}"
 
   local state=0
   docker_state || state=$?
@@ -1627,7 +1715,7 @@ gen_android_bindings_local() {
 
 cmd_gen_android_bindings() {
   local state=0
-  docker_state || state=$?
+  engine_state rust || state=$?
   if [ "$state" -ne 0 ]; then
     [ "$state" -eq 2 ] && fail_docker_down
     ensure_toolchain rust
