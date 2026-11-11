@@ -41,12 +41,14 @@ files you touch; the ones below are the contract.
 - `app/src/test/.../ui/DesignSnapshotTest.kt` renders pages from
   `DesignFixtures.kt`; add a page there for new UI. Goldens live in
   `app/src/test/snapshots/images/`.
-- Run Gradle from `apps/android` in the Android toolchain (Linux:
-  `source toolchain/env.sh`; Windows: the long-lived container, see
-  CLAUDE.md "Commands"):
-  `./gradlew --offline testDebugUnitTest verifyPaparazziDebug`.
+- Gradle runs through `./codedeck android`, which finds the toolchain (a
+  container, or `./toolchain`) and ends with the counts, the failing classes
+  and lint's verdict: `./codedeck android test --tests '*DesignSnapshotTest'`
+  while iterating, `./codedeck android test verifyPaparazziDebug lintDebug`
+  before the PR (lint must say "No issues found"). Never `--offline`: AGP
+  downloads its platform.
 - A refactor must pass `verifyPaparazziDebug` **without** re-recording. For an
-  intended visual change run `recordPaparazziDebug`, look at the changed PNGs,
-  and commit them with the code.
-- After an FFI change regenerate bindings first: `./codedeck gen-android-bindings`
+  intended visual change run `./codedeck android snapshot`, look at every
+  changed PNG, and commit them with the code.
+- After an FFI change regenerate bindings first: `./codedeck regen bindings`
   (CI fails on drift).

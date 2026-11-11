@@ -56,21 +56,21 @@ the vendored toolchain — the caller does not have to choose.
 for whatever this host has one for.
 
 - **Windows (the maintainer's usual host):** no toolchain on the host at
-  all. Everything runs through Docker via the `./codedeck` script (Git Bash).
-  The commands that hold a container open (`dev`, `android`, `live`) keep ONE
-  long-lived container and sync the tree into it, so nothing re-tars the repo
-  per command — that is what makes them fast enough for a loop of edits.
-  A git worktree gets a `dev`/`live` container of its own
-  (`codedeck-dev-<worktree>`, caches shared), so checkouts never take turns.
-  With `CODEDECK_ENGINE=local` the agent host and the crates skip Docker:
-  Node with the pinned pnpm, and Rust's GNU toolchain with a GCC beside it,
-  go into `./toolchain/` (`scripts/install-toolchain.sh node rust`), and
-  `check`, `e2e`, `dev`, `live` and `regen` run in this tree. The agent host
-  then runs as the Windows CI job runs it. The crates do not: CI builds them
-  with MSVC on Windows, and its bar is the Linux job, which also compiles
-  the `cfg(unix)` code a Windows build never sees — so CI stays the judge,
-  and `CODEDECK_ENGINE=docker ./codedeck check` is that Linux run on this
-  machine. The app still runs in Docker there.
+  all; the `./codedeck` script (Git Bash) finds one. By default that is
+  Docker: the commands that hold a container open (`dev`, `android`, `live`)
+  keep ONE long-lived container and sync the tree into it, so nothing
+  re-tars the repo per command, and a git worktree gets a `dev`/`live`
+  container of its own (`codedeck-dev-<worktree>`, caches shared).
+  With `CODEDECK_ENGINE=local` everything but the APK build runs in this
+  tree instead, on a toolchain vendored into `./toolchain/` (Node, Rust's
+  GNU toolchain with a GCC beside it, a JDK and the Android SDK; nothing
+  system-wide): `check`, `e2e`, `dev`, `live`, `regen` and `android`, with
+  no container and no sync. The agent host and the app's checks then run
+  as CI runs them. The crates do not: CI builds them with MSVC on Windows,
+  and its bar is the Linux job, which also compiles the `cfg(unix)` code a
+  Windows build never sees — so CI stays the judge, and
+  `CODEDECK_ENGINE=docker ./codedeck check` is that Linux run on this
+  machine.
 - **Linux (e.g. inside a container that doesn't itself have Docker-in-Docker,
   or any bare Linux machine):** `scripts/install-toolchain.sh` installs the
   toolchain into `./toolchain/` (gitignored), independent of anything already
@@ -83,6 +83,11 @@ for whatever this host has one for.
   installed on `PATH`. A docker binary that is present but whose daemon is
   down is an error to fix, not a trigger for the local path.
 
+The toolchain belongs to the repository, not to a checkout: a git worktree
+uses the main checkout's `./toolchain/` and, on the local engine, builds
+into its cargo target directory (dependencies shared, each checkout's own
+crates kept apart).
+
 ```bash
 # What exists right now — Docker, images, volumes, containers, the agent
 # cache, the Android SDK. Start here when something looks wrong.
@@ -90,13 +95,15 @@ for whatever this host has one for.
 
 # Workspace verification, in throwaway containers (nothing installed locally
 # is required). A change is not done until `check` is green — plus, for a
-# change the app sees, `./codedeck android test verifyPaparazziDebug lintDebug`.
+# change the app sees, `./codedeck android test verifyPaparazziDebug lintDebug`
+# (`check --changed` runs both, by what differs from master).
 # Every step runs and the last lines list each one; without a terminal a step
 # prints one line (and the tail of its log if it failed), the rest is in
 # dist/logs/ — so the output is read whole, never redirected and tailed.
 ./codedeck check         # agent host typecheck + test + build; cargo clippy,
                          # test and doc (-D warnings) for every crate
-./codedeck check --changed  # only the half that differs from master
+./codedeck check --changed  # only the parts that differ from master — and the
+                         # app's bar too, when its inputs do
 ./codedeck typecheck     # typecheck / clippy only
 ./codedeck test          # tests only
 ./codedeck e2e           # the ignored tests that drive a built agent host
@@ -156,7 +163,9 @@ pass `--offline` to the Android build (AGP downloads its platform).
 A build takes every core it is shown. On a machine that is also being used,
 `CODEDECK_CPUS=<cores>` and `CODEDECK_MEMORY=<12g>` bound every container the
 script runs (a cpuset, so cargo, vitest and Gradle size themselves to it);
-set them in the environment the agent runs with, not in the repository.
+on the local engine `CODEDECK_CPUS` becomes the jobs and workers those
+tools start, and there is no memory bound. Set them in the environment the
+agent runs with, not in the repository.
 
 ### Asking an agent a question — three tiers, cheapest first
 

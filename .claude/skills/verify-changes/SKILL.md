@@ -17,7 +17,9 @@ same either way. Paths below are relative to the repo root.
 ```bash
 ./codedeck check            # the bar: agent host typecheck + test + build; cargo
                             # clippy, test and doc (-D warnings) for every crate
-./codedeck check --changed  # the same, for the half that differs from master
+./codedeck check --changed  # the same, for the parts that differ from master —
+                            # and the app's bar (bindings, tests, snapshots,
+                            # lint) when its inputs do
 ./codedeck typecheck        # typecheck / clippy only — fastest signal while iterating
 ./codedeck test             # tests only
 ./codedeck e2e              # the two ignored tests that drive a built host from Rust
@@ -43,9 +45,9 @@ What to run for what changed:
 | a crate | `dev cargo test -p <crate> [name]` | `check --changed` |
 | a `Cargo.toml` | `regen cargo-lock` | `check` |
 | a driver-protocol type (`crates/agent-protocol`) | `regen ts` | `check`, `e2e` |
-| an FFI type (`crates/client-ffi`), even a doc comment | `regen bindings` | `check`, the Android bar |
+| an FFI type (`crates/client-ffi`), even a doc comment | `regen bindings` | `check --changed` |
 | a `package.json` | `regen pins` | `check` |
-| `apps/android` | `android test --tests <Class>` | `android test verifyPaparazziDebug lintDebug` |
+| `apps/android` | `android test --tests <Class>` | `check --changed` (or `android test verifyPaparazziDebug lintDebug`) |
 | the bridge ⇄ host seam, process spawning | `e2e` | `check`, `e2e` |
 | `codedeck`, a script | `bash -n <file>`, then the command itself | the command on both a pass and a failure |
 
@@ -58,15 +60,18 @@ What to run for what changed:
 
 - `CODEDECK_ENGINE=local` runs a command without Docker where the host has a
   toolchain for it, installed into `./toolchain/` on first use. On Windows
-  that is Node and Rust: `check`, `e2e`, `dev`, `live` and `regen` then run
-  in this tree, natively — no container, no tree to sync. The agent host
-  runs as the Windows CI job runs it, which is also how to reproduce a
-  failure only that job shows. The crates are built with Rust's GNU
+  that is everything but the APK build: `check`, `e2e`, `dev`, `live`,
+  `regen` and `android` then run in this tree, natively — no container, no
+  tree to sync. The agent host runs as the Windows CI job runs it, which is
+  also how to reproduce a failure only that job shows. The crates are built with Rust's GNU
   toolchain, where CI's Windows job uses MSVC and CI's bar is Linux: a
   Windows build never compiles `cfg(unix)` code (the terminal, mostly), so
   after touching it run `CODEDECK_ENGINE=docker ./codedeck check --changed`
-  once before the PR. Everything else (`android`, `apk`) still goes to
-  Docker and says so. `./codedeck doctor` shows which is in force.
+  once before the PR. `apk` still goes to Docker and says so.
+  `./codedeck doctor` shows which is in force.
+- Every step of a sweep prints how long it took, and a stale generated file
+  (the host's protocol types, the UniFFI bindings) fails its step once and
+  is left regenerated: review it, commit it, run again.
 
 To iterate on one piece without the full sweep, use the dev container — one
 long-lived container that keeps its `node_modules` and the caches, with the
