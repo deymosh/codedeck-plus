@@ -471,6 +471,7 @@ start_throwaway() {
   # Double-quoted so $name is baked in NOW, as a literal — the trap fires
   # after the calling function has returned (its locals are gone by then), so
   # a single-quoted trap referencing $name would fail under `set -u`.
+  # shellcheck disable=SC2064
   trap "docker rm -f '$name' >/dev/null 2>&1 || true" EXIT
 }
 
@@ -498,7 +499,7 @@ ensure_tool_image() {
 # failure for a name that was found.
 container_named() {
   local names
-  names="$(docker ps $1 --format '{{.Names}}')"
+  names="$(docker ps ${1:+"$1"} --format '{{.Names}}')"
   case $'\n'"$names"$'\n' in
     *$'\n'"$2"$'\n'*) return 0 ;;
     *) return 1 ;;
@@ -566,6 +567,8 @@ sync_tree() {
   echo "==> Syncing the working tree into $container"
   dexec "$container" sh -c 'rm -rf /tmp/codedeck-tree && mkdir -p /tmp/codedeck-tree'
   pack_repo_into "$container" /tmp/codedeck-tree
+  # The script is the container's shell's to expand, not this one's.
+  # shellcheck disable=SC2016
   dexec "$container" sh -c '
     set -e
     dest="$1"
@@ -1520,7 +1523,7 @@ cmd_live() {
     esac
     local i
     for i in "${!probe[@]}"; do
-      if [ "${probe[$i]}" = "--dump" ]; then probe[$((i + 1))]="$dump"; fi
+      if [ "${probe[$i]}" = "--dump" ]; then probe[i + 1]="$dump"; fi
     done
   fi
 
