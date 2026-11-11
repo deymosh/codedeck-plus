@@ -15,8 +15,16 @@
 
 set -e
 
+# With ANDROID_REPORT_SINCE (a file made just before the task ran), a report
+# older than that is not this run's and is not spoken of: a lint verdict left
+# by an earlier task would otherwise be printed under a run that never linted.
+since="${ANDROID_REPORT_SINCE:-}"
+fresh() {
+  [ -z "$since" ] || [ ! -e "$since" ] || [ -n "$(find "$1" -newer "$since" -type f 2>/dev/null | head -n 1)" ]
+}
+
 results=app/build/test-results/testDebugUnitTest
-if [ -d "$results" ]; then
+if [ -d "$results" ] && fresh "$results"; then
   # One `find` per count, summed: the XML has one <testsuite> per test class.
   count() {
     grep -h -o "$1=\"[0-9]*\"" "$results"/*.xml 2>/dev/null | awk -F'"' '{n+=$2} END{print n+0}'
@@ -31,7 +39,7 @@ if [ -d "$results" ]; then
 fi
 
 lint=app/build/reports/lint-results-debug.txt
-if [ -f "$lint" ]; then
+if [ -f "$lint" ] && fresh "$lint"; then
   # A report with findings ends in "N errors, M warnings", with ", K hints"
   # after it when there are hints; a clean one holds only "No issues found."
   # and no counts at all, so the verdict falls back to the report's last

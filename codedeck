@@ -67,14 +67,17 @@ require_docker() {
 }
 
 # Whether this host can run a command that needs these components (node,
-# rust, java, android; none named = all of them) without Docker. Linux: yes,
-# scripts/install-toolchain.sh vendors every one. Windows (Git Bash): Node —
-# the agent host, as CI tests it on Windows — and Rust, as the GNU toolchain
-# with a GCC unpacked beside it. That one is not what CI builds with on
+# rust, java, android, ndk; none named = all of them) without Docker. Linux:
+# yes, scripts/install-toolchain.sh vendors every one. Windows (Git Bash):
+# Node — the agent host, as CI tests it on Windows; Rust, as the GNU toolchain
+# with a GCC unpacked beside it; and the JDK and Android SDK the app's tests,
+# snapshots and lint run on. The Rust one is not what CI builds with on
 # Windows (MSVC, a system install this script will not make), and a Windows
 # build never compiles the `cfg(unix)` code: it is the loop's engine, and the
-# Linux and MSVC runs in CI stay the judge. The Android toolchain is Docker's
-# there.
+# Linux and MSVC runs in CI stay the judge. `ndk` is the one thing Windows
+# lacks: an APK links through the NDK's Linux toolchain, so `apk` is Docker's
+# there. (It is a need, not a component of its own: the installer brings the
+# NDK with `android` where it installs one.)
 host_local_supports() {
   local component
   case "$(uname -s)" in
@@ -83,7 +86,7 @@ host_local_supports() {
       [ $# -gt 0 ] || return 1
       for component in "$@"; do
         case "$component" in
-          node | rust) ;;
+          node | rust | java | android) ;;
           *) return 1 ;;
         esac
       done
@@ -136,15 +139,23 @@ native_path() {
 # touching the network when its target is present, so the check costs a shell
 # startup — and says nothing unless it installs something. Sources env.sh into THIS shell so cargo/node/pnpm/java stay on PATH
 # for the rest of the script. What a host can run locally is
-# host_local_supports' to say: all of it on Linux, Node and Rust on Windows.
+# host_local_supports' to say: all of it on Linux, all but an APK on Windows.
 ensure_toolchain() {
   if ! host_local_supports "$@"; then
     echo "Docker is unavailable, and this host has no local toolchain for" >&2
-    echo "this command (scripts/install-toolchain.sh: everything on Linux, Node" >&2
-    echo "and Rust on Windows). Install and start Docker (Docker Desktop on" >&2
-    echo "Windows/macOS), then re-run it. See CLAUDE.md, \"Commands\"." >&2
+    echo "this command (scripts/install-toolchain.sh: everything on Linux," >&2
+    echo "everything but the APK build on Windows). Install and start Docker" >&2
+    echo "(Docker Desktop on Windows/macOS), then re-run it. See CLAUDE.md," >&2
+    echo "\"Commands\"." >&2
     exit 1
   fi
+  # `ndk` says what a command needs; the installer has no component by that
+  # name (see host_local_supports).
+  local component components=()
+  for component in "$@"; do
+    [ "$component" = ndk ] || components+=("$component")
+  done
+  set -- ${components[@]+"${components[@]}"}
   if [ ! -f toolchain/env.sh ]; then
     echo "==> No ./toolchain yet — installing what this needs"
     [ $# -gt 0 ] && echo "    (${*})"
@@ -239,11 +250,10 @@ Engine — Docker runs everything when its daemon answers; without Docker the
 local toolchain does (scripts/install-toolchain.sh, into ./toolchain):
   CODEDECK_ENGINE=local    Prefer the local toolchain even with Docker up, for
                            what this host has one for: everything on Linux;
-                           on Windows the agent host and the crates (check,
-                           e2e, dev, live, regen) — the crates on the GNU
-                           toolchain, where CI's Windows job uses MSVC. The
-                           rest (android, apk) still runs in Docker, and
-                           says so
+                           on Windows everything but the APK build (check,
+                           e2e, dev, live, regen, android) — the crates on
+                           the GNU toolchain, where CI's Windows job uses
+                           MSVC. `apk` still runs in Docker, and says so
   CODEDECK_ENGINE=docker   For one command: run it in the Linux container,
                            which is what CI's bar is
 
@@ -301,8 +311,9 @@ a Docker-less host:
                            Docker engine it is copied back to
                            dist/live-<agent>-dump/ afterwards)
 
-Android tests and lint (same idea, in the Android container — a subcommand
-maps to its Gradle task; anything else is passed to Gradle as it is):
+Android tests and lint (same idea, in the Android container, or in this tree
+on the local engine — a subcommand maps to its Gradle task; anything else is
+passed to Gradle as it is):
   android [test]           app:testDebugUnitTest, then the counts and failures
   android lint             app:lintDebug, then what the report says
   android paparazzi        app:verifyPaparazziDebug (the snapshot tests)
@@ -410,12 +421,12 @@ cmd_tor() {
 cmd_apk() {
   # args pass through, e.g. `./codedeck apk --target aarch64-linux-android`
   local state=0
-  engine_state rust java android || state=$?
+  engine_state rust java android ndk || state=$?
   case $state in
     0) exec ./apps/android/docker/build-apk.sh "$@" ;;
     2) fail_docker_down ;;
   esac
-  ensure_toolchain rust java android
+  ensure_toolchain rust java android ndk
   # Sources toolchain/env.sh itself when present.
   exec ./apps/android/scripts/build-apk-local.sh "$@"
 }
@@ -1299,10 +1310,15 @@ ensure_android_container() {
 # and a failure alike, because a failure is when it is worth most. The tree is
 # already synced into the container, so both engines run the same file: one in
 # the container at the app's directory, one in this tree from the app's.
+#
+# ANDROID_REPORT_SINCE names a file made just before the task ran (in the
+# container, on the Docker engine): the report then speaks only of what this
+# run wrote, and not of a lint verdict a task from yesterday left behind.
 android_report() {
   local container="${1:-}"
   if [ -n "$container" ]; then
-    dexec -w "$ANDROID_ROOT/$ANDROID_PROJECT" "$container"       sh "$ANDROID_ROOT/scripts/lib/android-report.sh"
+    dexec -w "$ANDROID_ROOT/$ANDROID_PROJECT" -e "ANDROID_REPORT_SINCE=${ANDROID_REPORT_SINCE:-}" \
+      "$container" sh "$ANDROID_ROOT/scripts/lib/android-report.sh"
   else
     sh "$REPO_ROOT/scripts/lib/android-report.sh"
   fi
@@ -1346,20 +1362,39 @@ cmd_android() {
     # other two branches never return.
     0) ;;
     2) fail_docker_down ;;
-    # No Docker: the Gradle wrapper runs against this tree directly. java and
-    # the SDK come from wherever this host has them — a system install, or
-    # the vendored toolchain — and only a host with neither installs the
-    # toolchain's own (java comes with android). Asking for the components is
-    # also the check: a toolchain directory that exists may hold only some of
-    # them, and `android` alone would not find java in it.
+    # No Docker: the Gradle wrapper runs against this tree directly. On Linux
+    # java and the SDK come from wherever this host has them — a system
+    # install, or the vendored toolchain — and only a host with neither
+    # installs the toolchain's own (java comes with android). Asking for the
+    # components is also the check: a toolchain directory that exists may
+    # hold only some of them, and `android` alone would not find java in it.
+    # On Windows it is always the vendored JDK and SDK: a java that happens
+    # to be on PATH there is whatever another program installed, at whatever
+    # version.
     *)
-      if ! command -v java >/dev/null 2>&1 || [ -z "${ANDROID_HOME:-}" ]; then
-        ensure_toolchain android
-      fi
+      case "$(uname -s)" in
+        MINGW* | MSYS*) ensure_toolchain android ;;
+        *)
+          if ! command -v java >/dev/null 2>&1 || [ -z "${ANDROID_HOME:-}" ]; then
+            ensure_toolchain android
+          fi
+          ;;
+      esac
       cd "$ANDROID_PROJECT"
-      local code=0
-      ./gradlew "$task" "$@" --console=plain || code=$?
-      android_report
+      if [ "$task" = shell ]; then exec "${SHELL:-bash}"; fi
+      # Gradle's own home (its distribution, the dependency cache, the
+      # daemon's files) beside the rest of the toolchain rather than in the
+      # user's: what this build downloads and caches is then the checkout's
+      # own to keep or delete. A GRADLE_USER_HOME already set is left alone.
+      export GRADLE_USER_HOME="${GRADLE_USER_HOME:-$(native_path "$REPO_ROOT/toolchain/gradle")}"
+      # CODEDECK_CPUS, for Gradle: its workers, test forks included.
+      local limit=()
+      if [ -n "${CODEDECK_CPUS:-}" ]; then limit=(--max-workers "$CODEDECK_CPUS"); fi
+      local code=0 since
+      since="$(mktemp)"
+      ./gradlew "$task" "$@" ${limit[@]+"${limit[@]}"} --console=plain </dev/null || code=$?
+      ANDROID_REPORT_SINCE="$since" android_report
+      rm -f "$since"
       # Recording writes the goldens straight into the tree here, which is
       # the whole of what the Docker path has to copy back.
       return "$code"
@@ -1376,11 +1411,12 @@ cmd_android() {
       "$ANDROID_CONTAINER" sh
   fi
 
-  local code=0
+  local code=0 since=/tmp/codedeck-android-run
+  dexec "$ANDROID_CONTAINER" touch "$since"
   dexec -w "$ANDROID_ROOT/$ANDROID_PROJECT" "$ANDROID_CONTAINER" \
     gradle "$task" "$@" --console=plain || code=$?
 
-  android_report "$ANDROID_CONTAINER"
+  ANDROID_REPORT_SINCE="$since" android_report "$ANDROID_CONTAINER"
 
   # The goldens are recorded inside the container; they are only useful on the
   # host, where a person can look at each image before it is committed.
