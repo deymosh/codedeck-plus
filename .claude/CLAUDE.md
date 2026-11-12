@@ -131,7 +131,7 @@ crates kept apart).
 # The deployed bridge service (Docker Compose)
 ./codedeck bridge up     # build if needed and start
 ./codedeck bridge logs   # follow logs
-./codedeck bridge pair   # print the most recent pairing QR/URL
+./codedeck bridge pair   # open a pairing window on the running bridge (QR + URL)
 ./codedeck bridge down
 
 # The Android app — Windows: Docker (its own toolchain image, several GB

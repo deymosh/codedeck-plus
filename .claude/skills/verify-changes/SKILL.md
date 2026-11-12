@@ -198,7 +198,7 @@ proof.
                            # dist/codedeck-plus-<rev>-debug-arm64-v8a.apk
 ./codedeck bridge up       # build + start the bridge service (Docker Compose)
 ./codedeck bridge logs     # follow its logs
-./codedeck bridge pair     # print the most recent pairing QR / URL
+./codedeck bridge pair     # open a pairing window on the running bridge: QR + URL
 ./codedeck bridge down
 ```
 

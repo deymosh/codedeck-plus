@@ -220,7 +220,7 @@ Bridge (the deployed Docker service):
   bridge build            Rebuild the bridge image only
   bridge logs             Follow the bridge's logs (Ctrl-C to stop)
   bridge status           Show what's running
-  bridge pair             Print the most recent pairing QR/URL from the logs
+  bridge pair [--json]    Open a pairing window on the running bridge, show its QR
   bridge shell            Open a shell inside the running bridge container
 
 Tor (optional codedeck-tor service, Compose `tor` profile):
@@ -395,29 +395,22 @@ cmd_bridge() {
       ;;
     pair)
       require_running_bridge
-      # The bridge process itself owns bridge.lock (CDX-033) — a second
-      # `pair` invocation inside the same container would just fail to
-      # acquire it, so this reads the QR the running `run` command already
-      # printed (it opens a pairing window on its own whenever nothing's
-      # paired) rather than trying to trigger a new one.
-      #
-      # The logs are read once, into a variable, and searched here: under
-      # `set -o pipefail`, piping them into `grep -q` makes the search exit
-      # at its first match, which can leave `docker compose logs` killed by
-      # SIGPIPE — and the pipeline then reports failure for logs that do hold
-      # the QR, so a bridge that is plainly paired answers "no pairing QR".
-      local bridge_logs
-      bridge_logs="$(docker compose logs --no-log-prefix codedeck-bridge 2>&1 || true)"
-      case "$bridge_logs" in
-        *"Pairing URL"*) ;;
-        *)
-          echo "No pairing QR found in the logs yet. If the window already" >&2
-          echo "expired, restart the bridge for a fresh one: ./codedeck bridge restart" >&2
-          exit 1
-          ;;
-      esac
-      # The QR is printed just above its URL line.
-      printf '%s\n' "$bridge_logs" | grep -B 32 -A 1 "Pairing URL" | tail -34
+      shift
+      # `codedeck-bridge pair` shows a running bridge's open window, or asks
+      # it for one (docs/BRIDGE.md, Commands), so this runs that inside the
+      # container: a QR on demand, whether or not a phone is paired already.
+      # A terminal is attached only when there is one, so `--json` can be
+      # read by a program.
+      # Only once the bridge holds its lock: while the entrypoint is still
+      # setting up (cloning repositories can take minutes), `pair` would find
+      # no bridge, run one itself, and the real one would then fail to start.
+      if ! dexec codedeck-bridge /app/codedeck-bridge status 2>/dev/null | grep -q 'bridge: *running'; then
+        echo "The bridge in the container is still starting — try again in a moment (./codedeck bridge logs)." >&2
+        exit 1
+      fi
+      local tty=()
+      if [ -t 0 ] && [ -t 1 ]; then tty=(-t); fi
+      dexec -i ${tty[@]+"${tty[@]}"} codedeck-bridge /app/codedeck-bridge pair "$@"
       ;;
     shell)
       require_running_bridge
