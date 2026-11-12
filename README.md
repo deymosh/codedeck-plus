@@ -26,7 +26,7 @@ your sessions, and no account or CodeDeck-run service sits in between.
 
 - **The bridge** — `codedeck-bridge`, a headless service that runs agent
   sessions on the machine where your code lives and exposes them over encrypted
-  Nostr. It ships as a Docker image and as Linux and Windows archives
+  Nostr. It ships as a Docker image and as Linux, Windows and macOS archives
   ([`docs/BRIDGE.md`](docs/BRIDGE.md)).
 - **The Android app** — drives those sessions from your phone: review plans,
   approve tool permissions, answer the agent's questions, switch models, and
@@ -215,6 +215,7 @@ which publishes one GitHub Release with every artifact of that version:
 | Android app | `codedeck-vX.Y.Z.apk` — release aarch64 build, signed |
 | Bridge for Linux (binary + agent host + Node; glibc ≥ 2.35) | `codedeck-bridge-vX.Y.Z-linux-x86_64.tar.xz`, `…-linux-aarch64.tar.xz` |
 | Bridge for Windows (the same, zipped) | `codedeck-bridge-vX.Y.Z-windows-x86_64.zip` |
+| Bridge for macOS on Apple silicon (the same; not notarized) | `codedeck-bridge-vX.Y.Z-macos-aarch64.tar.xz` |
 | Bridge container image | `ghcr.io/deymosh/codedeck-plus-bridge:vX.Y.Z` (and `:latest`) |
 
 The archives and the image leave out the agents' own binaries: OpenCode, the
