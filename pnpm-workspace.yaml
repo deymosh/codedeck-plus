@@ -1,10 +1,11 @@
 packages:
   - packages/*
-# The only TypeScript left is where an agent SDK must be called:
-# packages/agent-host, the Node sidecar the Rust bridge runs. apps/mobile (the
-# Tauri app) is frozen on protocol v10 and deliberately not a member: its
-# sources are kept for a future desktop client, but it is not installed,
-# type-checked, tested or built. apps/android is the phone client.
+# The TypeScript left: packages/agent-host, the Node sidecar the Rust bridge
+# runs the agent SDKs in, and packages/vscode-extension, which installs, runs
+# and pairs the bridge from VS Code. apps/mobile (the Tauri app) is frozen on
+# protocol v10 and deliberately not a member: its sources are kept for a
+# future desktop client, but it is not installed, type-checked, tested or
+# built. apps/android is the phone client.
 
 onlyBuiltDependencies:
   - esbuild

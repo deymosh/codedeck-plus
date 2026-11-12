@@ -10,6 +10,11 @@ pnpm-debug.log*
 # Build outputs
 apps/mobile/dist/
 packages/agent-host/dist/
+packages/vscode-extension/dist/
+# Copied in from the repository root by the extension's tools/package.mjs.
+packages/vscode-extension/LICENSE
+packages/vscode-extension/media/
+*.vsix
 **/target/
 **/*.tsbuildinfo
 
