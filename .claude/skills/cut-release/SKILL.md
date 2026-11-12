@@ -36,7 +36,8 @@ Packages write enabled for Actions in repo settings.
    version N, even a component unchanged since N-1 — the version is a
    compatibility snapshot, not a per-component changelog; wire compatibility is
    `protocolVersion`, tracked separately). Set `X.Y.Z` in:
-   - `package.json` (root) and `packages/agent-host/package.json`
+   - `package.json` (root), `packages/agent-host/package.json` and
+     `packages/vscode-extension/package.json`
    - `[workspace.package] version` in the root `Cargo.toml` (every crate
      inherits it), then refresh the workspace entries in `Cargo.lock` with
      `./codedeck regen cargo-lock` — CI's `cargo test --locked` fails if they
@@ -89,8 +90,10 @@ Packages write enabled for Actions in repo settings.
 
 7. **Watch the run:** `gh run watch` (or `gh run list --workflow=release.yml`).
    Jobs: `meta` → `prior-ci` → `verify` (the full CI) → (`bridge-binary`
-   (x86_64 + aarch64), `bridge-windows`, `bridge-image`, `android-apk` in
-   parallel) → `release`. `verify` is skipped when `prior-ci` finds a `ci.yml`
+   (x86_64 + aarch64), `bridge-windows`, `bridge-macos`, `bridge-image`,
+   `android-apk` in parallel; `vscode-extension` once the three archive jobs
+   are done, since it bakes in their sha256) → `release`, which also writes
+   `SHA256SUMS` over every file it attaches. `verify` is skipped when `prior-ci` finds a `ci.yml`
    run on the tagged commit in which all four test jobs (Rust + e2e, agent
    host, Android, Windows) ran and passed — which the version-bump commit's
    own CI on `master` normally is, since it touches all four areas. So tag
@@ -107,7 +110,8 @@ Packages write enabled for Actions in repo settings.
    convention: `codedeck-vX.Y.Z.apk`, `codedeck-bridge-vX.Y.Z-linux-x86_64.tar.xz`,
    `codedeck-bridge-vX.Y.Z-linux-aarch64.tar.xz`,
    `codedeck-bridge-vX.Y.Z-windows-x86_64.zip`,
-   `codedeck-bridge-vX.Y.Z-macos-aarch64.tar.xz` attached, and the
+   `codedeck-bridge-vX.Y.Z-macos-aarch64.tar.xz`,
+   `codedeck-plus-vscode-vX.Y.Z.vsix` and `SHA256SUMS` attached, and the
    `ghcr.io/<owner>/codedeck-plus-bridge:vX.Y.Z` image pushed (+ `:latest` for a
    non-prerelease).
 

@@ -9,6 +9,10 @@ name: Release
 #   - the bridge for Windows x86_64        (codedeck-bridge-vX.Y.Z-windows-x86_64.zip, the same)
 #   - the bridge for macOS aarch64         (codedeck-bridge-vX.Y.Z-macos-aarch64.tar.xz, the same)
 #   - the bridge container image           (ghcr.io/<owner>/codedeck-plus-bridge:vX.Y.Z + :latest)
+#   - the VS Code extension                (codedeck-plus-vscode-vX.Y.Z.vsix: installs the
+#                                           archives above, checked against the sha256 of
+#                                           each that it was built with)
+#   - SHA256SUMS                           (every file above, for checking one by hand)
 #
 # A tag with a hyphen (v1.2.3-rc1) is published as a prerelease and does NOT
 # move the `:latest` image tag. `workflow_dispatch` runs the same pipeline
@@ -421,6 +425,61 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # The VS Code extension, built once every archive is: it carries their
+  # sha256 (tools/manifest.mjs), so it installs only the archives of this
+  # very run, whatever the server hands it. The trust root is then the .vsix
+  # itself, which is attached to the same release.
+  vscode-extension:
+    name: VS Code extension
+    needs: [meta, bridge-binary, bridge-windows, bridge-macos]
+    if: >-
+      ${{ !cancelled() && needs.bridge-binary.result == 'success'
+          && needs.bridge-windows.result == 'success' && needs.bridge-macos.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: bridge-*
+          merge-multiple: true
+          path: archives
+
+      - name: Build and pack
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+          NUMBER: ${{ needs.meta.outputs.number }}
+        run: |
+          pnpm install --frozen-lockfile --filter codedeck-plus-vscode...
+          mkdir -p dist
+          VSIX="$PWD/dist/codedeck-plus-vscode-$VERSION.vsix"
+          cd packages/vscode-extension
+          node tools/manifest.mjs "$VERSION" "$GITHUB_REPOSITORY" "$GITHUB_WORKSPACE/archives" "$RUNNER_TEMP/release.json"
+          CODEDECK_RELEASE_MANIFEST="$RUNNER_TEMP/release.json" node build.mjs
+          node tools/package.mjs "$VSIX" "$NUMBER"
+          # The bundle in the .vsix must carry every archive's hash.
+          unzip -p "$VSIX" extension/dist/extension.js > "$RUNNER_TEMP/extension.js"
+          for sha in $(jq -r '.assets[].sha256' "$RUNNER_TEMP/release.json"); do
+            grep -q "$sha" "$RUNNER_TEMP/extension.js" || { echo "::error::$sha is not in the packed extension" >&2; exit 1; }
+          done
+          unzip -p "$VSIX" extension/package.json | jq -e --arg v "$NUMBER" '.version == $v' >/dev/null
+          ls -la "$GITHUB_WORKSPACE/dist"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: vscode-extension
+          path: dist/*.vsix
+          if-no-files-found: error
+          retention-days: 1
+
   bridge-image:
     name: Bridge — container image
     needs: [meta, verify]
@@ -585,13 +644,13 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    needs: [meta, bridge-binary, bridge-windows, bridge-macos, bridge-image, android-apk]
+    needs: [meta, bridge-binary, bridge-windows, bridge-macos, vscode-extension, bridge-image, android-apk]
     # Every artifact built, spelled out: with verify possibly skipped, the
     # implicit "all dependencies succeeded" check cannot be relied on.
     if: >-
       ${{ !cancelled() && needs.meta.outputs.publish == 'true'
           && needs.bridge-binary.result == 'success' && needs.bridge-windows.result == 'success'
-          && needs.bridge-macos.result == 'success'
+          && needs.bridge-macos.result == 'success' && needs.vscode-extension.result == 'success'
           && needs.bridge-image.result == 'success' && needs.android-apk.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
@@ -611,7 +670,15 @@ jobs:
           merge-multiple: true
           path: dist
 
-      - run: ls -la dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: vscode-extension
+          path: dist
+
+      - name: Checksums
+        run: |
+          (cd dist && sha256sum -- * > "$RUNNER_TEMP/SHA256SUMS" && mv "$RUNNER_TEMP/SHA256SUMS" .)
+          cat dist/SHA256SUMS
 
       - name: Create the release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
@@ -634,11 +701,17 @@ jobs:
             | Bridge for Windows x86_64 (binary + agent host + Node) | `codedeck-bridge-${{ needs.meta.outputs.version }}-windows-x86_64.zip` |
             | Bridge for macOS on Apple silicon (binary + agent host + Node) | `codedeck-bridge-${{ needs.meta.outputs.version }}-macos-aarch64.tar.xz` |
             | Bridge image | `ghcr.io/${{ github.repository }}-bridge:${{ needs.meta.outputs.version }}` |
+            | VS Code extension (installs the bridge archive for its platform) | `codedeck-plus-vscode-${{ needs.meta.outputs.version }}.vsix` |
+            | Checksums of every file above | `SHA256SUMS` |
 
             The archives and the image carry no agent binaries: OpenCode, the default agent, is installed when the bridge first starts, and any other agent when it is installed from the phone (or `codedeck-bridge agents install`); see docs/BRIDGE.md.
+
+            The VS Code extension is installed from the file (Extensions → `…` → Install from VSIX). It downloads this release's bridge archive for its platform and refuses one whose sha256 differs from the one it was built with.
 
             Auto-generated changelog below.
           files: |
             dist/*.apk
             dist/*.tar.xz
             dist/*.zip
+            dist/*.vsix
+            dist/SHA256SUMS
