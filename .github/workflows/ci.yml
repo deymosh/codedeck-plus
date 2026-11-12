@@ -104,7 +104,9 @@ jobs:
               - '.dockerignore'
               - '.github/workflows/ci.yml'
 
-  # The agent host: the only TypeScript left (agent SDKs are JavaScript).
+  # The pnpm workspace: the agent host (agent SDKs are JavaScript) and the VS
+  # Code extension. The job keeps its name: release.yml's prior-ci looks it
+  # up by name.
   agent-host:
     name: agent host — typecheck + test + build
     needs: changes
@@ -242,11 +244,14 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      - name: Agent host test + build
+      # The extension's tests too: on Windows it unpacks the .zip archive
+      # with System32's tar, which only this runner has.
+      - name: Agent host test + build, VS Code extension test
         run: |
           pnpm install --frozen-lockfile
           pnpm --filter @codedeck/agent-host run test
           pnpm --filter @codedeck/agent-host run build
+          pnpm --filter codedeck-plus-vscode run test
 
       - name: cargo test (bridge crates), driver protocol, bridge end to end
         run: |

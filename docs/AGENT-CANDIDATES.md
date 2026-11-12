@@ -9,8 +9,7 @@ date and should be re-checked before an agent is implemented.
 Today the host runs four drivers: OpenCode (its server SDK; the default
 agent), Claude Code (Agent SDK), the DeepSeek Harness and Qwen Code — the
 last two over the Agent Client Protocol (ACP), Qwen Code on the base
-extracted from the harness's driver. Other planned work is in
-[`ROADMAP.md`](ROADMAP.md).
+extracted from the harness's driver.
 
 ## How agents can be integrated
 

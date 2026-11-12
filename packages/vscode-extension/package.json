@@ -1,0 +1,92 @@
+{
+  "name": "codedeck-plus-vscode",
+  "displayName": "CodeDeck+",
+  "description": "Run the CodeDeck+ bridge for this workspace and pair a phone, so the coding agents on this machine can be driven from the CodeDeck+ Android app.",
+  "version": "1.3.1",
+  "private": true,
+  "publisher": "codedeck",
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/deymosh/codedeck-plus.git"
+  },
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "codedeck.start",
+        "title": "Start the bridge",
+        "category": "CodeDeck+"
+      },
+      {
+        "command": "codedeck.stop",
+        "title": "Stop the bridge",
+        "category": "CodeDeck+"
+      },
+      {
+        "command": "codedeck.pair",
+        "title": "Pair a phone",
+        "category": "CodeDeck+"
+      },
+      {
+        "command": "codedeck.showLogs",
+        "title": "Show the bridge's log",
+        "category": "CodeDeck+"
+      },
+      {
+        "command": "codedeck.menu",
+        "title": "Bridge actions",
+        "category": "CodeDeck+"
+      }
+    ],
+    "configuration": {
+      "title": "CodeDeck+",
+      "properties": {
+        "codedeck.autoStart": {
+          "type": "boolean",
+          "default": false,
+          "description": "Start the bridge when a folder is opened."
+        },
+        "codedeck.bridgePath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "A codedeck-bridge binary to run instead of the release this extension downloads (its agent-host/ must sit beside it, as in a release archive)."
+        },
+        "codedeck.home": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "The bridge's state and config directory (--home). Empty: the bridge's default, ~/.codedeck, shared with the command line."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "package": "node build.mjs && node tools/package.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/vscode": "1.100.0",
+    "@vscode/vsce": "^4.1.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

@@ -386,7 +386,7 @@ fn pair_running(config: &Config, json: bool) -> Result<ExitCode, String> {
         || lock_holder(&home).is_some(),
         |status| {
             if json {
-                println!("{}", serde_json::to_string(status).expect("a pairing status serializes"));
+                println!("{}", status.json_line());
                 return;
             }
             match (status.state, &status.url, &status.phone) {

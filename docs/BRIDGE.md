@@ -64,6 +64,32 @@ The agents the bridge installs later are fetched by the agent host, not a
 browser, and need nothing of the kind. There is no service unit: run it in a
 terminal, or start it at login with a `launchd` agent.
 
+**VS Code** — `codedeck-plus-vscode-vX.Y.Z.vsix`, installed from the file
+(Extensions → `…` → *Install from VSIX…*; it is not on the Marketplace). It
+runs the bridge for the open workspace, with no terminal:
+
+- *CodeDeck+: Start the bridge* (or the status bar entry) downloads the
+  release archive for this platform on first use, refuses it unless its
+  sha256 is the one the extension was built with (the release run builds the
+  `.vsix` from the archives it has just made), unpacks it with the system
+  `tar` into the extension's storage and runs
+  `codedeck-bridge run --workspace <each workspace folder>`. A new release's
+  extension installs its own bridge and removes the old one.
+- *CodeDeck+: Pair a phone* shows the QR from `codedeck-bridge pair --json`
+  (see [Commands](#commands)).
+- *CodeDeck+: Show the bridge's log* — everything the bridge prints.
+
+The bridge lives as long as the window. Its home is `~/.codedeck`, shared
+with the command line, so a bridge already running there (a service, a
+terminal, another window) is left alone and used for pairing. Settings:
+`codedeck.autoStart`, `codedeck.home`, and `codedeck.bridgePath` to run a
+bridge of your own instead (with its `agent-host/` beside it, as in an
+archive) — the only way on a platform no release is built for, macOS on
+Intel among them. In a Remote SSH or WSL window the extension runs on the
+remote side, so the bridge does too. The download from GitHub is not Nostr
+traffic and does not use the Tor proxy. Every `SHA256SUMS` of a release
+lists all its files, for checking one by hand.
+
 Claude Code authenticates with `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`,
 an existing `claude` login, or a key set from the phone; see
 [`CLAUDE-CODE.md`](CLAUDE-CODE.md). The DeepSeek Harness
@@ -149,7 +175,7 @@ install runbook.
 |---|---|
 | `run` | Connect to the relays and serve paired phones (the default). While no phone is paired it keeps a pairing window open and prints its QR. |
 | `pair` | Open one 10-minute pairing window: terminal QR + pairing URL; exits 0 once a phone pairs, 1 when the window expires. With a bridge running, it shows that bridge's open window, or asks it for a new one when none is open or the open one has under a minute left (picked up within a second; its sessions keep running). Otherwise it runs a bridge just for the window. |
-| `pair --json` | The same against a running bridge, for programs: one JSON line per state — `{"state":"open","url":…,"displayUrl":…,"expiresAtMs":…}`, then `paired` (with `phone: {label, npub}`), `expired` or `closed`. |
+| `pair --json` | The same against a running bridge, for programs: one JSON line per state — `{"state":"open","url":…,"displayUrl":…,"expiresAtMs":…,"qrSvg":…}` (`qrSvg`: the QR of `url` as an SVG document), then `paired` (with `phone: {label, npub}`), `expired` or `closed`. |
 | `status` | Config, identity (npub), paired phones, whether a bridge is running. |
 | `unpair <npub\|hex\|label>` / `unpair --all` | Remove pairings (with the bridge stopped). |
 | `folders` | The project folders a phone can start sessions in. |

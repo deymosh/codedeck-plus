@@ -9,8 +9,9 @@ agents (Claude Code, OpenCode, DeepSeek Harness, Qwen Code) on a laptop/VPS ("th
 from an Android phone over end-to-end-encrypted Nostr. It started as a merge of
 the two upstream projects (`codedeck-next-bridge`, `codedeck-next-mobile`) and
 has since been rebuilt: the protocol, the bridge and the phone's core are Rust;
-the only TypeScript left runs the agent SDKs. It adds infrastructure the
-upstream did not design for:
+the TypeScript left runs the agent SDKs (`packages/agent-host`) and launches
+the bridge from VS Code (`packages/vscode-extension`). It adds infrastructure
+the upstream did not design for:
 
 - a Nostr relay that requires **NIP-42 `AUTH`** (e.g. a self-hosted Haven relay),
 - a bridge that only reaches its relays over **Tor** (SOCKS5),
@@ -21,7 +22,8 @@ upstream did not design for:
 - **No upstream tracking.** The protocol and both halves have been rewritten,
   so upstream changes are not pulled in mechanically; an idea worth taking from
   upstream is re-implemented here as an ordinary change.
-- The **editable** code is `crates/*`, `packages/agent-host` and `apps/android`.
+- The **editable** code is `crates/*`, `packages/agent-host`,
+  `packages/vscode-extension` and `apps/android`.
   `apps/mobile` (the Tauri app) is frozen on protocol v10, outside the pnpm
   workspace and CI; it is kept as the base of a future desktop client.
 - **`crates/protocol` is the single source of truth for the phone wire**, and
@@ -325,6 +327,9 @@ crates/protocol          the phone wire: messages, total codec, kinds, ranges,
     │                            packages/agent-host   Node: one driver per agent
     │                            (opencode, claude, deepseek, qwen, fake) around
     │                            its SDK.
+    │                            packages/vscode-extension   installs a release's
+    │                            bridge (sha256 baked in at release), runs it on
+    │                            the workspace, pairs through `pair --json`.
     │
     └── crates/client-core       the phone's pure core: stores, connection FSM,
              │                   sync/merge, presentation.
