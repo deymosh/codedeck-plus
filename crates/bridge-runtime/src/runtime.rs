@@ -35,7 +35,7 @@ use crate::terminal_allow::{self, Cache as AllowlistCache};
 use crate::transcripts::FileTranscripts;
 use crate::workspace::FsWorkspace;
 use crate::uploads::{self, Uploads};
-use crate::{audit, qr, work};
+use crate::{audit, pairing, qr, work};
 
 /// The real clock, ids and environment.
 pub struct RealSystem;
@@ -125,6 +125,9 @@ struct Runtime {
     /// Writes the allowlist file, on a thread of its own: the runtime's single
     /// thread never writes it.
     allowlist_writer: terminal_allow::Writer,
+    /// Which pairing window answers which `codedeck-bridge pair`, and
+    /// `<home>/pairing.json`.
+    windows: pairing::Windows,
 }
 
 fn say(line: &str) {
@@ -136,6 +139,9 @@ fn say(line: &str) {
 /// Run the bridge until it is stopped (a signal, or the pairing outcome in
 /// [`Mode::Pair`]). Must be called inside a `LocalSet`.
 pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Options) -> Result<Outcome, String> {
+    // First: a `pairing.json` left open by a bridge that was killed must not
+    // be shown as a live QR while this one starts its relays and host.
+    let windows = pairing::Windows::start(&config.home);
     let transcripts_dir = options.transcripts_dir.unwrap_or_else(|| config.home.join("sessions").join("transcripts"));
     let mut engine_config = EngineConfig::new(keys.clone(), config.machine.clone());
     engine_config.host_kind = Some(config.host_kind);
@@ -226,12 +232,19 @@ pub async fn run(config: Config, state: StateFile, keys: Keypair, options: Optio
         audit,
         allowlist: Rc::new(RefCell::new(allowlist_cache)),
         allowlist_writer,
+        windows,
     };
     // The periodic half of the allowlist check: a `terminal disallow` with no
     // terminal message arriving still closes a terminal, within a few seconds.
     // With terminals off there is no terminal to close.
     if rt.config.terminal.enabled {
         watch_allowlist(Rc::clone(&rt.allowlist), rt.inputs.clone());
+    }
+
+    // A running bridge opens a window when `codedeck-bridge pair` asks. One
+    // started by `pair` does not: its own window's end is its exit.
+    if rt.mode == Mode::Run {
+        rt.windows.watch(rt.inputs.clone(), rt.pairing_window_ms);
     }
 
     rt.step(Input::Start).await;
@@ -293,7 +306,7 @@ fn watch_signals(inputs: mpsc::UnboundedSender<Input>) {
 
 impl Runtime {
     fn open_pairing(&mut self) {
-        let _ = self.inputs.send(Input::OpenPairing { duration_ms: self.pairing_window_ms });
+        self.windows.open(&self.inputs, self.pairing_window_ms);
     }
 
     /// Handle one input; true once the engine has stopped and everything is
@@ -425,12 +438,16 @@ impl Runtime {
             Effect::OpenPairingSubscription { since } => self.relays.open_pairing(since),
             Effect::ClosePairingSubscription => self.relays.close_pairing(),
             Effect::PresentPairing(info) => {
+                self.windows.presented(&info);
                 present_pairing(&info);
                 if let Some(urls) = &self.pairing_urls {
                     let _ = urls.send(info.url);
                 }
             }
-            Effect::PairingClosed { reason, phone } => self.pairing_closed(reason, phone.map(|p| format!("\"{}\" ({})", p.label, p.npub))),
+            Effect::PairingClosed { reason, phone } => {
+                self.windows.closed(reason, phone.as_ref());
+                self.pairing_closed(reason, phone.map(|p| format!("\"{}\" ({})", p.label, p.npub)));
+            }
             Effect::Notify { level, text } => match level {
                 NotifyLevel::Info => {
                     log::info!("{text}");

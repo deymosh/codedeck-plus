@@ -32,14 +32,29 @@ pub fn restrict(path: &Path, mode: u32) {
     let _ = (path, mode);
 }
 
-/// Write `content` to `path` atomically, owner-only.
+/// Write `content` to `path` atomically, owner-only, and durably: the data is
+/// on disk before the rename makes it visible.
 pub fn write_private(path: &Path, content: &[u8]) -> std::io::Result<()> {
+    write_via_temp(path, content, true)
+}
+
+/// Write `content` to `path` atomically and owner-only, without waiting for
+/// the disk: a reader sees the old file or the new one, never half of one, but
+/// a crash may lose the write. For files that only mean something while the
+/// process runs, which a slow fsync must not hold up.
+pub fn replace_private(path: &Path, content: &[u8]) -> std::io::Result<()> {
+    write_via_temp(path, content, false)
+}
+
+fn write_via_temp(path: &Path, content: &[u8], durable: bool) -> std::io::Result<()> {
     let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
     {
         let mut f = File::create(&tmp)?;
         restrict(&tmp, 0o600);
         f.write_all(content)?;
-        f.sync_all()?;
+        if durable {
+            f.sync_all()?;
+        }
     }
     fs::rename(&tmp, path)
 }

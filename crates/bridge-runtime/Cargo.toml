@@ -67,6 +67,8 @@ nix = { version = "0.28", features = ["term", "user"] }
 
 [dev-dependencies]
 tempfile = "3"
+# Paused time for the tests that wait on timers (`start_paused`).
+tokio = { version = "1", features = ["test-util"] }
 # The phone side of the end-to-end test, and the loopback relay it runs.
 client-runtime = { path = "../client-runtime" }
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "handshake"] }
