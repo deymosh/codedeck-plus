@@ -90,13 +90,14 @@ codedeck-plus/
 │   ├── client-runtime/    #   the phone's async host
 │   └── client-ffi/        #   UniFFI surface for the Android app
 ├── packages/
-│   └── agent-host/        # Node sidecar running the agent SDKs (one driver per agent)
+│   ├── agent-host/        # Node sidecar running the agent SDKs (one driver per agent)
+│   └── vscode-extension/  # VS Code extension: installs, runs and pairs the bridge
 ├── apps/
 │   ├── android/           # the native Android app (Kotlin + the Rust client core)
 │   └── mobile/            # the former Tauri app — frozen (future desktop client)
 ├── docker/              # the bridge image (Dockerfile, entrypoint, helpers)
 ├── deploy/              # systemd unit for the bridge
-├── docs/                # PROTOCOL.md (contract), BRIDGE.md, CLIENT.md, one per agent, ROADMAP.md
+├── docs/                # PROTOCOL.md (contract), BRIDGE.md, CLIENT.md, one per agent
 ├── scripts/             # toolchain installer (Linux), shared shell helpers
 ├── .github/workflows/   # ci.yml · release.yml (tag → release)
 ├── .claude/             # CLAUDE.md + skills for Claude Code
@@ -120,7 +121,7 @@ codedeck-plus/
 
 ## Running the bridge with Docker
 
-Other ways to run it (release archives, systemd, from source) are in
+Other ways to run it (release archives, the VS Code extension, systemd, from source) are in
 [`docs/BRIDGE.md`](docs/BRIDGE.md).
 
 Two files configure it:
@@ -217,6 +218,8 @@ which publishes one GitHub Release with every artifact of that version:
 | Bridge for Windows (the same, zipped) | `codedeck-bridge-vX.Y.Z-windows-x86_64.zip` |
 | Bridge for macOS on Apple silicon (the same; not notarized) | `codedeck-bridge-vX.Y.Z-macos-aarch64.tar.xz` |
 | Bridge container image | `ghcr.io/deymosh/codedeck-plus-bridge:vX.Y.Z` (and `:latest`) |
+| VS Code extension (installs and runs the archive for its platform) | `codedeck-plus-vscode-vX.Y.Z.vsix` |
+| Checksums of every file above | `SHA256SUMS` |
 
 The archives and the image leave out the agents' own binaries: OpenCode, the
 default agent, is installed when the bridge first starts, and any other agent
@@ -246,7 +249,6 @@ the full runbook.
 - [`docs/DEEPSEEK.md`](docs/DEEPSEEK.md) — the DeepSeek Harness: API key, models and reasoning, gateways, MCP servers and plugins
 - [`docs/QWEN.md`](docs/QWEN.md) — Qwen Code: install, OpenAI-compatible providers, its home, modes, MCP servers and extensions
 - [`docs/AGENT-CANDIDATES.md`](docs/AGENT-CANDIDATES.md) — which agents to add next and how
-- [`docs/ROADMAP.md`](docs/ROADMAP.md) — work decided but not built yet
 - [`.claude/skills/cut-release/SKILL.md`](.claude/skills/cut-release/SKILL.md) — the release runbook
 
 ## Upstream
