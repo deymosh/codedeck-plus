@@ -11,7 +11,8 @@ use bridge_runtime::config::{self, Config, Flags};
 use bridge_runtime::runtime::{self, Mode, Options, Outcome};
 use bridge_runtime::state::{acquire_lock, lock_holder, StateFile};
 use bridge_runtime::workspace::FsWorkspace;
-use bridge_runtime::{audit, terminal_allow};
+use bridge_runtime::pairing::{self, WindowState};
+use bridge_runtime::{audit, qr, terminal_allow};
 use clap::{Parser, Subcommand};
 use protocol::capabilities::PROTOCOL_VERSION;
 
@@ -82,8 +83,15 @@ struct Cli {
 enum Command {
     /// Run the bridge (default); opens a pairing window while no phone is paired
     Run,
-    /// Show a pairing QR and wait for a phone to pair
-    Pair,
+    /// Show a pairing QR and wait for a phone to pair. With a bridge running,
+    /// it shows that bridge's open window or asks it for one (its sessions
+    /// keep running)
+    Pair {
+        /// Print the window's states as JSON lines (open, then paired, expired
+        /// or closed), for programs; needs a running bridge
+        #[arg(long)]
+        json: bool,
+    },
     /// Show configuration, identity, paired phones and whether a bridge runs
     Status,
     /// Remove a paired phone (by npub, hex pubkey or label), or all of them
@@ -187,7 +195,14 @@ fn main() -> ExitCode {
     };
     let result = match command {
         Command::Run => serve(config, Mode::Run),
-        Command::Pair => serve(config, Mode::Pair),
+        Command::Pair { json } => match lock_holder(&config.home) {
+            Some(_) => pair_running(&config, json),
+            None if json => Err(format!(
+                "no bridge is running on {}: `pair --json` asks a running bridge for a window. Start one with `codedeck-bridge run`.",
+                config.home.display()
+            )),
+            None => serve(config, Mode::Pair),
+        },
         Command::Status => status(&config),
         Command::Unpair { target, all } => unpair(&config, target, all),
         Command::Folders => {
@@ -353,6 +368,50 @@ fn serve(config: Config, mode: Mode) -> Result<ExitCode, String> {
         Outcome::Stopped | Outcome::Paired => ExitCode::SUCCESS,
         Outcome::PairingFailed => ExitCode::FAILURE,
     })
+}
+
+/// `pair` while a bridge runs: show its open pairing window, or ask it for
+/// one (see `bridge_runtime::pairing`), show the QR, and exit 0 once a phone pairs, 1
+/// when the window expires or closes first. With `--json`, each state is one
+/// line of JSON on stdout instead, for a program driving the bridge (an
+/// editor extension, say).
+fn pair_running(config: &Config, json: bool) -> Result<ExitCode, String> {
+    if !json {
+        println!("A bridge is running on {}: pairing through it...", config.home.display());
+    }
+    let tokio = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+    let home = config.home.clone();
+    let last = tokio.block_on(pairing::pair(
+        &config.home,
+        || lock_holder(&home).is_some(),
+        |status| {
+            if json {
+                println!("{}", serde_json::to_string(status).expect("a pairing status serializes"));
+                return;
+            }
+            match (status.state, &status.url, &status.phone) {
+                (WindowState::Open, Some(url), _) => {
+                    let minutes = status.expires_at_ms.unwrap_or_default().saturating_sub(now_ms()) / 60_000;
+                    println!("{}", qr::render(url));
+                    println!("Pairing URL (valid for {minutes} min):
+{}
+", status.display_url.as_deref().unwrap_or(url));
+                    println!("Scan the QR with the CodeDeck app. Waiting for a phone...");
+                }
+                (WindowState::Paired, _, Some(phone)) => println!("Phone \"{}\" ({}) paired.", phone.label, phone.npub),
+                (WindowState::Expired, _, _) => println!("The pairing window expired with no phone paired."),
+                (WindowState::Closed, _, _) => {
+                    println!("The pairing window closed before a phone paired (the bridge stopped, or another `pair` replaced it).")
+                }
+                _ => {}
+            }
+        },
+    ))?;
+    Ok(if last.state == WindowState::Paired { ExitCode::SUCCESS } else { ExitCode::FAILURE })
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
 fn status(config: &Config) -> Result<ExitCode, String> {

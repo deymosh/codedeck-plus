@@ -130,7 +130,8 @@ install runbook.
 | Command | What it does |
 |---|---|
 | `run` | Connect to the relays and serve paired phones (the default). While no phone is paired it keeps a pairing window open and prints its QR. |
-| `pair` | Open one 10-minute pairing window: terminal QR + pairing URL. |
+| `pair` | Open one 10-minute pairing window: terminal QR + pairing URL; exits 0 once a phone pairs, 1 when the window expires. With a bridge running, it shows that bridge's open window, or asks it for a new one when none is open or the open one has under a minute left (picked up within a second; its sessions keep running). Otherwise it runs a bridge just for the window. |
+| `pair --json` | The same against a running bridge, for programs: one JSON line per state — `{"state":"open","url":…,"displayUrl":…,"expiresAtMs":…}`, then `paired` (with `phone: {label, npub}`), `expired` or `closed`. |
 | `status` | Config, identity (npub), paired phones, whether a bridge is running. |
 | `unpair <npub\|hex\|label>` / `unpair --all` | Remove pairings (with the bridge stopped). |
 | `folders` | The project folders a phone can start sessions in. |
@@ -334,6 +335,12 @@ In `<home>`:
   the next heartbeat.
 - `terminal-allow.json` — the devices approved for a terminal, and the ones
   refused (0600). See [Terminal](#terminal).
+- `pairing.json`, `pair-request` — how `pair` works with a running bridge.
+  The bridge writes each window's state to `pairing.json` under the window's
+  id (0600, the same JSON `pair --json` prints). `pair` shows the window open
+  there, or writes a new id to `pair-request`; the bridge (which checks every
+  second) removes it and opens a window under that id. A starting bridge
+  removes both.
 - `audit/` — the terminal audit: `terminal.jsonl` and the `term-*.cast`
   recordings (0700, files 0600).
 
