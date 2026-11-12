@@ -1,6 +1,6 @@
 ---
 name: cut-release
-description: Cut a CodeDeck+ release — a single vMAJOR.MINOR.PATCH tag that publishes one GitHub Release with the signed APK, the bridge for Linux x86_64/aarch64 and Windows x86_64, and the bridge container image. Use when asked to cut, tag, or ship a release.
+description: Cut a CodeDeck+ release — a single vMAJOR.MINOR.PATCH tag that publishes one GitHub Release with the signed APK, the bridge for Linux x86_64/aarch64, Windows x86_64 and macOS aarch64, and the bridge container image. Use when asked to cut, tag, or ship a release.
 ---
 
 # Cutting a CodeDeck+ release
@@ -106,7 +106,8 @@ Packages write enabled for Actions in repo settings.
 8. **Confirm the release** has all its artifacts, each on the `vX.Y.Z`
    convention: `codedeck-vX.Y.Z.apk`, `codedeck-bridge-vX.Y.Z-linux-x86_64.tar.xz`,
    `codedeck-bridge-vX.Y.Z-linux-aarch64.tar.xz`,
-   `codedeck-bridge-vX.Y.Z-windows-x86_64.zip` attached, and the
+   `codedeck-bridge-vX.Y.Z-windows-x86_64.zip`,
+   `codedeck-bridge-vX.Y.Z-macos-aarch64.tar.xz` attached, and the
    `ghcr.io/<owner>/codedeck-plus-bridge:vX.Y.Z` image pushed (+ `:latest` for a
    non-prerelease).
 

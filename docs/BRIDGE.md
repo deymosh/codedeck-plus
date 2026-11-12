@@ -46,6 +46,24 @@ Upgrading is extracting the new archive over the old one.
 - There is no service unit: run it in a terminal, or start it at logon with
   Task Scheduler. Under WSL2, the Linux archive works as on Linux.
 
+**macOS (Apple silicon)** — `codedeck-bridge-vX.Y.Z-macos-aarch64.tar.xz`,
+the same bundle, used as on Linux; state lives in `~/.codedeck`. The binary
+is not notarized by Apple, so macOS refuses to open it when the archive was
+downloaded by a browser, which marks downloads as quarantined. Either
+download it with `curl`, which does not, or clear the mark once after
+extracting:
+
+```sh
+curl -fLO https://github.com/deymosh/codedeck-plus/releases/download/vX.Y.Z/codedeck-bridge-vX.Y.Z-macos-aarch64.tar.xz
+tar -xJf codedeck-bridge-vX.Y.Z-macos-aarch64.tar.xz
+# only for a browser download:
+xattr -dr com.apple.quarantine codedeck-bridge-vX.Y.Z-macos-aarch64
+```
+
+The agents the bridge installs later are fetched by the agent host, not a
+browser, and need nothing of the kind. There is no service unit: run it in a
+terminal, or start it at login with a `launchd` agent.
+
 Claude Code authenticates with `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`,
 an existing `claude` login, or a key set from the phone; see
 [`CLAUDE-CODE.md`](CLAUDE-CODE.md). The DeepSeek Harness

@@ -250,7 +250,7 @@ update the fake's "verified against" header only for what was re-checked.
   that PR and would only crowd the 10 GB quota).
 - `.github/workflows/release.yml` runs on a `vMAJOR.MINOR.PATCH` tag: it builds
   and publishes one GitHub Release with the signed APK, the bridge for Linux
-  x86_64 and aarch64 and for Windows x86_64 (archives: binary + agent host +
+  x86_64 and aarch64, Windows x86_64 and macOS aarch64 (archives: binary + agent host +
   Node; the agents' own binaries are installed on demand, pinned to
   pnpm-lock.yaml's sha512),
   and the bridge container image (`ghcr.io/<owner>/codedeck-plus-bridge`). A
