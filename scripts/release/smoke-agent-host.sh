@@ -10,11 +10,19 @@ set -euo pipefail
 node="$1"
 main="$2"
 
+# GNU `timeout` where there is one. macOS has none; there perl's alarm
+# outlives the exec and kills a host that never exits the same way.
+if command -v timeout >/dev/null; then
+  with_timeout() { timeout "$@"; }
+else
+  with_timeout() { perl -e 'alarm shift; exec @ARGV or die "exec $ARGV[0]: $!\n"' "$@"; }
+fi
+
 # stdin stays open for a while after the request: closing it is the host's
 # signal to shut down, which could otherwise beat the reply.
 reply="$(
   { echo '{"v":1,"id":"smoke","kind":"initialize","payload":{"bridgeVersion":"smoke"}}'; sleep 10; } |
-    CODEDECK_TEST_MODE=1 CODEDECK_AGENT_HOST_DRIVERS=claude-code timeout 30 "$node" "$main" |
+    CODEDECK_TEST_MODE=1 CODEDECK_AGENT_HOST_DRIVERS=claude-code with_timeout 30 "$node" "$main" |
     head -n 1
 )" || true
 

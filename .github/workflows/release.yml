@@ -7,6 +7,7 @@ name: Release
 #                                           binary + agent host + Node; the agents'
 #                                           own binaries are installed on demand)
 #   - the bridge for Windows x86_64        (codedeck-bridge-vX.Y.Z-windows-x86_64.zip, the same)
+#   - the bridge for macOS aarch64         (codedeck-bridge-vX.Y.Z-macos-aarch64.tar.xz, the same)
 #   - the bridge container image           (ghcr.io/<owner>/codedeck-plus-bridge:vX.Y.Z + :latest)
 #
 # A tag with a hyphen (v1.2.3-rc1) is published as a prerelease and does NOT
@@ -338,6 +339,88 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # The same archive for macOS on Apple silicon, as a .tar.xz like Linux's.
+  # Not notarized: the linker signs an arm64 binary ad hoc, which is what
+  # macOS requires to run it at all; a browser download is quarantined and
+  # needs the flag cleared once (docs/BRIDGE.md).
+  bridge-macos:
+    name: Bridge — macOS aarch64
+    needs: [meta, verify]
+    # verify is skipped when prior-ci found the commit already verified.
+    if: ${{ !cancelled() && needs.meta.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.verify.result) }}
+    runs-on: macos-latest
+    timeout-minutes: 40
+    env:
+      # Same Node as the other archives and the image.
+      NODE_BUNDLE_VERSION: v24.20.0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+
+      - name: Build the binary
+        env:
+          CODEDECK_VERSION: ${{ needs.meta.outputs.number }}
+        run: |
+          cargo build --release --locked -p bridge-runtime
+          ./target/release/codedeck-bridge version
+          # An unsigned arm64 binary is killed on launch; the linker's ad hoc
+          # signature is what lets it run.
+          codesign --verify --verbose target/release/codedeck-bridge
+
+      - name: Build and deploy the agent host
+        run: |
+          pnpm install --frozen-lockfile --filter @codedeck/agent-host...
+          pnpm --filter @codedeck/agent-host run build
+          pnpm --filter @codedeck/agent-host deploy --prod --legacy "$RUNNER_TEMP/agent-host"
+          rm -rf "$RUNNER_TEMP"/agent-host/node_modules/.pnpm/@anthropic-ai+claude-agent-sdk-*@* \
+                 "$RUNNER_TEMP"/agent-host/src "$RUNNER_TEMP"/agent-host/tsconfig.json "$RUNNER_TEMP"/agent-host/build.mjs
+
+      - name: Package
+        run: |
+          NAME="codedeck-bridge-${{ needs.meta.outputs.version }}-macos-aarch64"
+          STAGE="$RUNNER_TEMP/$NAME"
+          mkdir -p "$STAGE" dist
+          cp target/release/codedeck-bridge "$STAGE/"
+          mv "$RUNNER_TEMP/agent-host" "$STAGE/agent-host"
+          # A node beside the binary: the archive needs nothing installed.
+          NODE_DIST="node-${NODE_BUNDLE_VERSION}-darwin-arm64"
+          curl -fsSL -o "$RUNNER_TEMP/$NODE_DIST.tar.gz" \
+            "https://nodejs.org/dist/${NODE_BUNDLE_VERSION}/$NODE_DIST.tar.gz"
+          curl -fsSL -o "$RUNNER_TEMP/SHASUMS256.txt" \
+            "https://nodejs.org/dist/${NODE_BUNDLE_VERSION}/SHASUMS256.txt"
+          (cd "$RUNNER_TEMP" && grep " $NODE_DIST.tar.gz\$" SHASUMS256.txt | shasum -a 256 -c -)
+          tar -xzf "$RUNNER_TEMP/$NODE_DIST.tar.gz" -C "$STAGE" \
+            --strip-components=2 "$NODE_DIST/bin/node"
+          test -x "$STAGE/node"
+          codesign --verify --verbose "$STAGE/node"
+          "$STAGE/codedeck-bridge" version
+          "$STAGE/codedeck-bridge" status --home "$RUNNER_TEMP/smoke-home" | tee "$RUNNER_TEMP/status.txt"
+          if grep -q MISSING "$RUNNER_TEMP/status.txt"; then exit 1; fi
+          if find "$STAGE" -path '*claude-agent-sdk-*' -type f | grep -q .; then
+            echo "::error::an agent platform binary is in the archive" >&2; exit 1
+          fi
+          scripts/release/smoke-agent-host.sh "$STAGE/node" "$STAGE/agent-host/dist/main.js"
+          # bsdtar: COPYFILE_DISABLE keeps macOS metadata (._* files) out.
+          COPYFILE_DISABLE=1 tar -C "$RUNNER_TEMP" --options xz:compression-level=6,xz:threads=0 \
+            -cJf "dist/$NAME.tar.xz" "$NAME"
+          ls -la dist
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: bridge-macos-aarch64
+          path: dist/*.tar.xz
+          if-no-files-found: error
+          retention-days: 1
+
   bridge-image:
     name: Bridge — container image
     needs: [meta, verify]
@@ -502,12 +585,13 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    needs: [meta, bridge-binary, bridge-windows, bridge-image, android-apk]
+    needs: [meta, bridge-binary, bridge-windows, bridge-macos, bridge-image, android-apk]
     # Every artifact built, spelled out: with verify possibly skipped, the
     # implicit "all dependencies succeeded" check cannot be relied on.
     if: >-
       ${{ !cancelled() && needs.meta.outputs.publish == 'true'
           && needs.bridge-binary.result == 'success' && needs.bridge-windows.result == 'success'
+          && needs.bridge-macos.result == 'success'
           && needs.bridge-image.result == 'success' && needs.android-apk.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
@@ -548,6 +632,7 @@ jobs:
             | Bridge for Linux x86_64 (binary + agent host + Node) | `codedeck-bridge-${{ needs.meta.outputs.version }}-linux-x86_64.tar.xz` |
             | Bridge for Linux aarch64 (binary + agent host + Node) | `codedeck-bridge-${{ needs.meta.outputs.version }}-linux-aarch64.tar.xz` |
             | Bridge for Windows x86_64 (binary + agent host + Node) | `codedeck-bridge-${{ needs.meta.outputs.version }}-windows-x86_64.zip` |
+            | Bridge for macOS on Apple silicon (binary + agent host + Node) | `codedeck-bridge-${{ needs.meta.outputs.version }}-macos-aarch64.tar.xz` |
             | Bridge image | `ghcr.io/${{ github.repository }}-bridge:${{ needs.meta.outputs.version }}` |
 
             The archives and the image carry no agent binaries: OpenCode, the default agent, is installed when the bridge first starts, and any other agent when it is installed from the phone (or `codedeck-bridge agents install`); see docs/BRIDGE.md.
