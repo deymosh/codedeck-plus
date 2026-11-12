@@ -105,6 +105,20 @@ impl Status {
     pub fn is_final(&self) -> bool {
         self.state != WindowState::Open
     }
+
+    /// The line `pair --json` prints for this status: its JSON, plus the QR
+    /// as an SVG (`qrSvg`) while the window is open, so a program shows the
+    /// same code the bridge would without a QR encoder of its own. The SVG is
+    /// left out of `pairing.json`: only the printed line needs it.
+    pub fn json_line(&self) -> String {
+        let mut value = serde_json::to_value(self).expect("a pairing status serializes");
+        if let (WindowState::Open, Some(url), Some(fields)) = (self.state, &self.url, value.as_object_mut()) {
+            if let Some(svg) = crate::qr::svg(url) {
+                fields.insert("qrSvg".into(), serde_json::Value::String(svg));
+            }
+        }
+        value.to_string()
+    }
 }
 
 /// The bridge's side: which request each window answers, and the status file.
@@ -622,6 +636,54 @@ mod tests {
                 assert!(!home.join(REQUEST_FILE).exists());
             })
             .await;
+    }
+
+    /// The lines `pair --json` prints, one per state, as a program reads
+    /// them. The extension's parser test reads the same file, so the two
+    /// sides cannot drift apart.
+    const JSON_FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/pair-json.jsonl");
+
+    fn fixture_statuses() -> Vec<Status> {
+        let window = |state| Status { id: "w1".into(), state, url: None, display_url: None, expires_at_ms: None, phone: None };
+        let url = "nostr+codedeck://pair?token=tok1".to_string();
+        vec![
+            Status { url: Some(url.clone()), display_url: Some(url), expires_at_ms: Some(1_700_000_600_000), ..window(WindowState::Open) },
+            Status { phone: Some(Phone { label: "Pixel 8".into(), npub: "npub1phone".into() }), ..window(WindowState::Paired) },
+            window(WindowState::Expired),
+            window(WindowState::Closed),
+        ]
+    }
+
+    fn fixture_lines() -> String {
+        fixture_statuses().iter().map(|s| s.json_line() + "\n").collect()
+    }
+
+    #[test]
+    fn pair_json_lines_match_the_fixture() {
+        let lines = fixture_lines();
+        assert!(lines.lines().next().unwrap().contains(r#""qrSvg":"<svg"#), "an open window carries its QR");
+        assert_eq!(lines.matches("qrSvg").count(), 1, "only the open window does");
+        let fixture = fs::read_to_string(JSON_FIXTURE).unwrap().replace("\r\n", "\n");
+        assert_eq!(
+            lines, fixture,
+            "`pair --json` changed: regenerate with `cargo test -p bridge-runtime --lib regenerate_pair_json_fixture -- --ignored`"
+        );
+    }
+
+    #[test]
+    #[ignore = "writes the fixture"]
+    fn regenerate_pair_json_fixture() {
+        fs::write(JSON_FIXTURE, fixture_lines()).unwrap();
+    }
+
+    #[test]
+    fn the_status_file_leaves_the_qr_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut windows = Windows::start(dir.path());
+        windows.asked.borrow_mut().push_back(None);
+        windows.presented(&info("tok"));
+        let file = fs::read_to_string(dir.path().join(STATUS_FILE)).unwrap();
+        assert!(file.contains("\"url\"") && !file.contains("qrSvg"), "{file}");
     }
 
     #[cfg(unix)]
