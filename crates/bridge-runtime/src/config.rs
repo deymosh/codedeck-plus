@@ -358,8 +358,23 @@ pub fn proxy_host_port(url: &str) -> Result<String, String> {
 fn hostname() -> String {
     env("HOSTNAME")
         .or_else(|| fs::read_to_string("/etc/hostname").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()))
+        .or_else(system_hostname)
         .or_else(|| env("COMPUTERNAME"))
         .unwrap_or_else(|| "bridge".into())
+}
+
+/// The kernel's host name. macOS has no `/etc/hostname` and its shells do not
+/// export `HOSTNAME`; its name carries the `.local` of Bonjour, dropped here.
+#[cfg(unix)]
+fn system_hostname() -> Option<String> {
+    let name = nix::unistd::gethostname().ok()?.into_string().ok()?;
+    let name = name.trim().trim_end_matches(".local");
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+#[cfg(not(unix))]
+fn system_hostname() -> Option<String> {
+    None
 }
 
 /// The directory the running binary sits in (None when it cannot be resolved).

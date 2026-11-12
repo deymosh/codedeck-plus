@@ -57,13 +57,13 @@ httparse = "1"
 # over ssh. The runtime owns it; the engine only decides.
 portable-pty = "0.9"
 
-# The pty's termios, to tell whether the shell is echoing what is typed
-# (a password prompt): input typed with echo off is recorded as its byte
+# The host name (the default machine name on macOS), and the pty's termios,
+# to tell whether the shell is echoing what is typed (a password prompt): input typed with echo off is recorded as its byte
 # count, never its bytes. Pinned to the nix portable-pty 0.9 builds against:
 # `get_termios` returns *its* `Termios`, and a different nix would be a
 # different type.
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.28", features = ["term", "user"] }
+nix = { version = "0.28", features = ["hostname", "term", "user"] }
 
 [dev-dependencies]
 tempfile = "3"
