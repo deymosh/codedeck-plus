@@ -75,6 +75,7 @@ describe('firstSupportedModels (CDX-022)', () => {
 
 import {
   buildQueryOptions,
+  decodeRouterId,
   DEFAULT_MODEL,
   fetchGatewayModels,
   isProviderBoundSession,
@@ -552,8 +553,43 @@ describe('fetchGatewayModels', () => {
 
 const hex = (text: string): string => Buffer.from(text, 'utf8').toString('hex');
 
+describe('parseProviderModels', () => {
+  it("decodes claude-code-router's ids for Claude Code and reads what it says about context", () => {
+    expect(
+      parseProviderModels(
+        {
+          data: [
+            {
+              id: `anthropic/claude-ccr-h${hex('Z.ai (Global) - Coding Plan/glm-5.3-flash')}[1m]`,
+              display_name: 'Z.ai (Global) - Coding Plan/GLM-5.3-Flash (1M context)',
+              max_input_tokens: 1_310_720,
+              capabilities: { context_window: { max_input_tokens: 1_310_720, supports_1m_context: true } },
+            },
+            {
+              id: `anthropic/claude-ccr-h${hex('Golem/local-model')}`,
+              display_name: 'Golem/local-model',
+              // A size the router does not know.
+              max_input_tokens: 0,
+            },
+          ],
+        },
+        decodeRouterId,
+      ),
+    ).toEqual([
+      {
+        id: 'Z.ai (Global) - Coding Plan/glm-5.3-flash',
+        label: 'GLM-5.3-Flash (1M context)',
+        provider: 'Z.ai (Global) - Coding Plan',
+        contextWindow: 1_310_720,
+        oneMillionContext: true,
+      },
+      { id: 'Golem/local-model', label: 'local-model', provider: 'Golem' },
+    ]);
+  });
+});
+
 describe('toGatewayModels', () => {
-  const parse = (body: unknown) => toGatewayModels(parseProviderModels(body));
+  const parse = (body: unknown) => toGatewayModels(parseProviderModels(body, decodeRouterId));
 
   it('decodes claude-code-router ids, drops the provider from labels, and reads each context window', () => {
     // The Anthropic-shaped list claude-code-router sends a Claude Code client.

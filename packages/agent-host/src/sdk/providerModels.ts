@@ -52,20 +52,25 @@ export function providerModelsUrl(baseUrl: string): string {
   return `${providerApiRoot(baseUrl)}/models`;
 }
 
-/** claude-code-router's id for a model as it lists it to Claude Code:
- *  `anthropic/claude-ccr-h<hex>`, the hex being the router's own
- *  `<provider>/<model>` id in UTF-8. */
-const CCR_ENCODED_ID = /^(?:anthropic\/)?claude-ccr-h((?:[0-9a-f]{2})+)$/i;
 /** The marker a 1M-context variant's id carries. */
 const ONE_MILLION_MARKER = /\[1m\]$/i;
+
+/**
+ * A listed id (its `[1m]` marker already removed) turned into the id a
+ * request names, for an endpoint that lists encoded ids to some clients.
+ * The caller that asked as such a client knows the encoding; it returns
+ * the id unchanged when it is not one.
+ */
+export type DecodeModelId = (listed: string) => string;
 
 /**
  * The models in an endpoint's answer: the OpenAI-shaped `data` array, a
  * `models` array or a bare array, of objects with an `id` or of plain id
  * strings. Duplicates, blanks and anything that is not a model are
- * dropped; an answer that is not a list yields nothing.
+ * dropped; an answer that is not a list yields nothing. Each id goes
+ * through `decodeId`, when given, before duplicates are told apart.
  */
-export function parseProviderModels(body: unknown): EndpointModel[] {
+export function parseProviderModels(body: unknown, decodeId?: DecodeModelId): EndpointModel[] {
   const list = Array.isArray(body)
     ? body
     : typeof body === 'object' && body !== null
@@ -80,8 +85,7 @@ export function parseProviderModels(body: unknown): EndpointModel[] {
     if (typeof listed !== 'string' || listed.trim() === '') continue;
     const marked = ONE_MILLION_MARKER.test(listed);
     const bare = listed.replace(ONE_MILLION_MARKER, '');
-    const hex = CCR_ENCODED_ID.exec(bare)?.[1];
-    const id = (hex && Buffer.from(hex, 'hex').toString('utf8')) || bare;
+    const id = decodeId ? decodeId(bare) : bare;
     if (seen.has(id)) {
       // The same model listed with and without the 1M marker: one entry,
       // which has the window.
@@ -145,6 +149,8 @@ export interface FetchProviderModelsOptions {
   token?: string;
   /** Any further request headers. */
   headers?: Record<string, string>;
+  /** How the listed ids are decoded (see `parseProviderModels`). */
+  decodeId?: DecodeModelId;
   httpGet: HttpGet;
   /** Where a failure is reported; `tag` prefixes each line. */
   log: (message: string) => void;
@@ -158,7 +164,7 @@ export interface FetchProviderModelsOptions {
  */
 export async function readProviderModels(
   baseUrl: string,
-  options: Pick<FetchProviderModelsOptions, 'token' | 'headers' | 'httpGet'>,
+  options: Pick<FetchProviderModelsOptions, 'token' | 'headers' | 'decodeId' | 'httpGet'>,
 ): Promise<EndpointModel[]> {
   let url: string;
   try {
@@ -190,7 +196,7 @@ export async function readProviderModels(
   } catch {
     throw new Error(`${url} did not answer with a model list`);
   }
-  const models = parseProviderModels(body);
+  const models = parseProviderModels(body, options.decodeId);
   if (models.length === 0) throw new Error('it lists no models');
   return models;
 }
