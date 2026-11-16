@@ -1,4 +1,14 @@
-//! The session-list merge and the title helpers.
+//! The session-list merge and the title helpers. Port of the pure half of
+//! `apps/mobile/src/core/stores/machines.ts`: `mergeSessionList` and the title
+//! helpers.
+//!
+//! Contract, verbatim from the TS:
+//! - sessions in the incoming list are upserted (`Live`, or `Offline` on a
+//!   `machineOffline` shutdown publish);
+//! - **absence NEVER deletes** — a known session missing from the list is kept
+//!   and marked `Stale` (or held past a grace window);
+//! - removal is ONLY via explicit `removedSessions` tombstones;
+//! - the merge is pure — `prev` is never mutated.
 
 use std::collections::BTreeMap;
 

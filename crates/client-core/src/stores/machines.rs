@@ -1,15 +1,14 @@
-//! `machines` store — the bug-B session-loss killer. Port of the PURE half of
-//! `apps/mobile/src/core/stores/machines.ts`: `mergeSessionList` and the title
-//! helpers. The store actions (`applySessionList`, `applyModels`, …), the
-//! `MachineView`, and serialize/hydrate land in a follow-up.
+//! `machines` store: what the phone knows about each paired bridge — its
+//! sessions, agents and settings — and the actions that change it, as a pure
+//! state machine ([`MachinesState`]) the runtime persists after each change.
 //!
-//! Contract, verbatim from the TS:
-//! - sessions in the incoming list are upserted (`Live`, or `Offline` on a
-//!   `machineOffline` shutdown publish);
-//! - **absence NEVER deletes** — a known session missing from the list is kept
-//!   and marked `Stale` (or held past a grace window);
-//! - removal is ONLY via explicit `removedSessions` tombstones;
-//! - the merge is pure — `prev` is never mutated.
+//! Its parts, each re-exported here:
+//! - `view`: the view types the UI, the backup and the persisted store read;
+//! - `merge`: the session-list merge, where a session missing from a list is
+//!   never deleted (bug B, sessions vanishing from the phone), and the title
+//!   helpers;
+//! - `persist`: what is stripped before the store is written, and the
+//!   tolerant parse at boot.
 
 use std::collections::{BTreeMap, BTreeSet};
 
