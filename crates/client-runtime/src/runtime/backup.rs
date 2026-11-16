@@ -31,10 +31,10 @@ use client_core::stores::terminals::InputTransport;
 use nostr_transport::{Filter, SubCallbacks, Transport};
 use tokio::sync::oneshot;
 
-use super::{abort, IntentCtx, Loop, Msg, SignerJob};
+use super::{abort, Loop, Msg, SignerJob};
 use crate::backup::{is_removed, BackupStatus};
 use crate::dispatch::StoreId;
-use crate::intent::{apply as apply_intent, Intent};
+use crate::intent::{apply as apply_intent, Intent, IntentCtx};
 use crate::nostr_client::NostrEvent;
 use crate::stores::Persister;
 use crate::transport::ws::{PUBLISH_CONFIRM_ATTEMPTS, PUBLISH_CONFIRM_BUDGET};

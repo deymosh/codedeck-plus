@@ -3,7 +3,7 @@ use crate::ports::RecordingNotifier;
 use crate::transport::mock::{mock_relay, MockRelay};
 use protocol::crypto::{generate_keypair, keypair_from_secret_hex, Keypair};
 use protocol::codec::encode_bridge_to_phone;
-use protocol::commands::UploadFileMsg;
+use protocol::commands::{PresenceMsg, UploadFileMsg, PRESENCE_RENEW_SECS};
 use protocol::kinds::{LIVE_KIND, RESPONSE_KIND, SESSION_LIST_KIND};
 use crate::stores::LAST_STORED_SEEN_KEY;
 use crate::intent::SessionFileSend;

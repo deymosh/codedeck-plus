@@ -42,7 +42,7 @@ use tokio::task::AbortHandle;
 use super::{abort, Loop, Msg, SignerJob};
 use crate::dispatch::StoreId;
 use crate::nostr_client::NostrEvent;
-use crate::signer::Cipher;
+use crate::signer::{Cipher, PhoneKeys};
 
 /// How long a machine has to confirm a grant once it reached a relay. A
 /// round trip through the relays, over Tor too, takes seconds.
@@ -230,5 +230,41 @@ impl Loop {
                 }
             }
         }
+    }
+
+    /// Rotate the session key if due, then grant `machine` the current one
+    /// if it wants it ([`Self::grant_if_due`]).
+    pub(super) async fn grant_session_key_if_due(&mut self, machine: &str) {
+        self.rotate_session_key_if_due().await;
+        self.grant_if_due(machine);
+    }
+
+    /// Replace the session key with a fresh one when it is a month from
+    /// lapsing; every bridge is then granted the new one as it is heard from.
+    pub(super) async fn rotate_session_key_if_due(&mut self) {
+        let now = self.clock.now_ms();
+        if !self.session.rotate_if_due(now) {
+            return;
+        }
+        log::info!("session key: replaced by a fresh one");
+        self.session.drop_unused_previous(&self.stores.machines, now);
+        self.session_ring_changed().await;
+    }
+
+    /// The session-key ring changed (rotated, pruned, or taken from a
+    /// backup): store it, grant and encrypt under its current key, and back
+    /// it up.
+    pub(super) async fn session_ring_changed(&mut self) {
+        self.key_store.save(&self.session.encode()).await;
+        if self.keys.session_pubkey_hex != self.session.current.pubkey_hex() {
+            self.keys =
+                PhoneKeys::new(&self.keys.identity_pubkey_hex, &self.session.current, self.keys.device_label.clone());
+            // The old key's grant attempts say nothing about the new one.
+            self.grant_attempts.clear();
+        }
+        // The copies to read are those to the ring's keys now.
+        self.refresh_authors();
+        self.sync_direct_links();
+        self.backup_changed();
     }
 }
