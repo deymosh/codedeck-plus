@@ -1,4 +1,10 @@
 use super::*;
+use protocol::capabilities::PROTOCOL_VERSION;
+use protocol::common::{
+    AgentAccount, AvailablePlugin, InstalledPlugin, McpServerInfo, PermissionRule, Persona, ProviderProfileInfo,
+    SessionMcpServer, SignInAttempt,
+};
+use protocol::events::{ModelEntry, SlashCommand};
 use protocol::codec::decode_bridge_to_phone;
 use protocol::events::BridgeToPhone;
 use serde_json::json;
