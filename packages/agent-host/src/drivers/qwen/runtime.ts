@@ -16,7 +16,7 @@ import * as path from 'node:path';
 import { AcpRuntime, type AcpProcessEvents, type AcpProcessSpec, type SpawnFn } from '../../acp/runtime';
 import { agentCacheDir } from '../../install/agentInstall';
 import { isFile } from '../../sdk/executable';
-import { packageVersionOf } from '../../sdk/packageVersion';
+import { packageVersionOf } from '../../sdk/version';
 import { QWEN_LABEL } from './install';
 import { START_TURN_METHOD, TURN_REFUSED } from './tasks';
 
