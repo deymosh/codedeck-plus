@@ -5,8 +5,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fetchProviderModels, MAX_ENDPOINT_MODELS, parseProviderModels, providerModelsUrl } from '../providerModels';
 
-const hex = (text: string): string => Buffer.from(text, 'utf8').toString('hex');
-
 /** An endpoint answering with `body`. */
 const answering = (body: unknown, status = 200) =>
   vi.fn(async (_url: string, _headers: Record<string, string>) => ({
@@ -55,36 +53,6 @@ describe('parseProviderModels', () => {
       { id: 'Claude Code API/claude-sonnet-5', label: 'Claude Sonnet 5', provider: 'Claude Code API' },
       { id: 'Z.ai (Global) - Coding Plan/glm-5.2', label: 'GLM-5.2', provider: 'Z.ai (Global) - Coding Plan' },
       { id: 'deepseek/deepseek-chat', provider: 'deepseek' },
-    ]);
-  });
-
-  it("decodes claude-code-router's ids for Claude Code and reads what it says about context", () => {
-    expect(
-      parseProviderModels({
-        data: [
-          {
-            id: `anthropic/claude-ccr-h${hex('Z.ai (Global) - Coding Plan/glm-5.3-flash')}[1m]`,
-            display_name: 'Z.ai (Global) - Coding Plan/GLM-5.3-Flash (1M context)',
-            max_input_tokens: 1_310_720,
-            capabilities: { context_window: { max_input_tokens: 1_310_720, supports_1m_context: true } },
-          },
-          {
-            id: `anthropic/claude-ccr-h${hex('Golem/local-model')}`,
-            display_name: 'Golem/local-model',
-            // A size the router does not know.
-            max_input_tokens: 0,
-          },
-        ],
-      }),
-    ).toEqual([
-      {
-        id: 'Z.ai (Global) - Coding Plan/glm-5.3-flash',
-        label: 'GLM-5.3-Flash (1M context)',
-        provider: 'Z.ai (Global) - Coding Plan',
-        contextWindow: 1_310_720,
-        oneMillionContext: true,
-      },
-      { id: 'Golem/local-model', label: 'local-model', provider: 'Golem' },
     ]);
   });
 

@@ -303,6 +303,7 @@ export async function fetchGatewayModels(): Promise<SdkModelDescriptor[]> {
   const models = await fetchProviderModels(baseUrl, {
     token,
     headers: { 'anthropic-version': '2023-06-01', 'user-agent': GATEWAY_USER_AGENT },
+    decodeId: decodeRouterId,
     httpGet: gatewayGet,
     log: (line) => console.error(line),
     tag: '[SdkFacade] fetchGatewayModels:',
@@ -316,6 +317,19 @@ export async function fetchGatewayModels(): Promise<SdkModelDescriptor[]> {
 /** Any `claude-code/…` agent gets claude-code-router's Anthropic-shaped
  *  model list, the one that carries context-window sizes. */
 const GATEWAY_USER_AGENT = 'claude-code/1.0 (codedeck)';
+
+/** claude-code-router's id for a model as it lists it to Claude Code:
+ *  `anthropic/claude-ccr-h<hex>`, the hex being the router's own
+ *  `<provider>/<model>` id in UTF-8. */
+const CCR_ENCODED_ID = /^(?:anthropic\/)?claude-ccr-h((?:[0-9a-f]{2})+)$/i;
+
+/** The router's own id for a model it listed to a Claude Code client (see
+ *  `CCR_ENCODED_ID`); any other id unchanged. Only a request with
+ *  `GATEWAY_USER_AGENT` is answered with encoded ids. */
+export function decodeRouterId(listed: string): string {
+  const hex = CCR_ENCODED_ID.exec(listed)?.[1];
+  return (hex && Buffer.from(hex, 'hex').toString('utf8')) || listed;
+}
 
 /** The gateway's list, read with a shorter timeout than the host's other
  *  calls: a phone is waiting on it. Generous next to
@@ -345,8 +359,9 @@ const ONE_MILLION_CONTEXT = 1_000_000;
  *
  * claude-code-router answers a Claude Code client with an Anthropic-shaped
  * list whose ids it encodes and whose 1M models it marks; the shared parser
- * decodes both, so the id here is always the router's own — what a session
- * sends, and what the phone keeps as a machine's default. A model without a
+ * reads the marks, and `fetchGatewayModels` has it decode the ids
+ * (`decodeRouterId`), so the id here is always the router's own — what a
+ * session sends, and what the phone keeps as a machine's default. A model without a
  * name of its own is labelled by the part after its provider, which the
  * phone shows on its own.
  */

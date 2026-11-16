@@ -18,7 +18,7 @@ import * as path from 'node:path';
 import { AcpRuntime, type AcpProcess, type AcpProcessEvents, type AcpProcessSpec, type SpawnFn } from '../../acp/runtime';
 import { agentCacheDir } from '../../install/agentInstall';
 import { isFile } from '../../sdk/executable';
-import { packageVersionOf } from '../../sdk/packageVersion';
+import { packageVersionOf } from '../../sdk/version';
 import { bridgeSocketPath } from './bridge';
 import { DSH_LABEL } from './install';
 import { BRIDGE_SOCKET_ENV, QUESTION_MARKER } from './plugin';
