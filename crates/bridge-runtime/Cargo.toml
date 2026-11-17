@@ -66,6 +66,8 @@ portable-pty = "0.9"
 nix = { version = "0.28", features = ["hostname", "term", "user"] }
 
 [dev-dependencies]
+# Signs as a browser's WebCrypto key does, for the web stream's tests.
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
 tempfile = "3"
 # Paused time for the tests that wait on timers (`start_paused`).
 tokio = { version = "1", features = ["test-util"] }

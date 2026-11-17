@@ -171,7 +171,7 @@ struct Conn {
 /// larger than the bounds can still be delivered to a phone that is reading:
 /// the bounds decide whether the phone has *stopped* reading, not how big one
 /// publish pass may be.
-struct FrameLane {
+pub(crate) struct FrameLane {
     queue: RefCell<VecDeque<String>>,
     bytes: Cell<usize>,
     /// When the serve loop last took a frame out.
@@ -182,7 +182,7 @@ struct FrameLane {
 }
 
 impl FrameLane {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             queue: RefCell::new(VecDeque::new()),
             bytes: Cell::new(0),
@@ -195,7 +195,7 @@ impl FrameLane {
     /// Queue a frame; false once the connection has been closed as stalled.
     /// An over-cap queue while frames are still being taken is accepted: it
     /// is a big burst, and the phone will drain it.
-    fn push(&self, frame: String) -> bool {
+    pub(crate) fn push(&self, frame: String) -> bool {
         if self.closed.get() {
             return false;
         }
@@ -219,21 +219,21 @@ impl FrameLane {
         true
     }
 
-    fn pop(&self) -> Option<String> {
+    pub(crate) fn pop(&self) -> Option<String> {
         let frame = self.queue.borrow_mut().pop_front()?;
         self.bytes.set(self.bytes.get().saturating_sub(frame.len()));
         self.last_taken.set(std::time::Instant::now());
         Some(frame)
     }
 
-    fn is_closed(&self) -> bool {
+    pub(crate) fn is_closed(&self) -> bool {
         self.closed.get()
     }
 
     /// Stop accepting frames and wake the serve loop, which sends its
     /// `closed` frame and ends. The lane is shared with that loop, so
     /// dropping the connection is not enough to end it.
-    fn close(&self) {
+    pub(crate) fn close(&self) {
         self.closed.set(true);
         self.wake.notify_one();
     }
@@ -241,7 +241,7 @@ impl FrameLane {
     /// Ready once a frame is waiting or the lane is closed. A `push` while
     /// nobody waits leaves `Notify`'s permit behind, so no wake-up is lost
     /// between the check and the wait.
-    async fn ready(&self) {
+    pub(crate) async fn ready(&self) {
         while self.queue.borrow().is_empty() && !self.closed.get() {
             self.wake.notified().await;
         }
@@ -316,6 +316,22 @@ fn recipient_of(event: &SignedEvent) -> Option<&str> {
 }
 
 impl Hub {
+    /// A browser's stream from `peer` stops counting against its host's
+    /// connections ([`MAX_CONNECTIONS_PER_HOST`]): the page caps streams
+    /// itself, and on an IPv6 LAN — one /64 for every device — a few tabs
+    /// would otherwise lock the phones on it out of their direct link.
+    /// [`Hub::retake_host_slot`] gives the slot back when the stream ends,
+    /// so the accept loop's own release still balances.
+    pub(crate) fn release_host_slot(&self, peer: IpAddr) {
+        if let Some(held) = self.open_by_host.borrow_mut().get_mut(&crate::web::rate_key(peer)) {
+            *held = held.saturating_sub(1);
+        }
+    }
+
+    pub(crate) fn retake_host_slot(&self, peer: IpAddr) {
+        *self.open_by_host.borrow_mut().entry(crate::web::rate_key(peer)).or_insert(0) += 1;
+    }
+
     pub fn new(bridge_pubkey: String, inputs: mpsc::UnboundedSender<Input>) -> Rc<Self> {
         Rc::new(Self {
             bridge_pubkey,
@@ -637,7 +653,13 @@ where
 async fn route<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, peer: IpAddr, hub: &Hub, web: &crate::web::Web, limits: Limits) {
     let Ok(Some(head)) = tokio::time::timeout(limits.handshake, crate::web::read_head(&mut stream)).await else { return };
     if crate::web::is_websocket(&head) {
-        serve(Replay { prefix: head, at: 0, inner: stream }, hub, limits).await;
+        // A browser's stream is the page's, on its own path; every other
+        // upgrade is a phone's direct link.
+        if crate::web::is_stream_request(&head) {
+            crate::web_stream::serve(head, stream, web, Some((hub, peer))).await;
+        } else {
+            serve(Replay::new(head, stream), hub, limits).await;
+        }
     } else {
         crate::web::serve(&head, stream, peer, web).await;
     }
@@ -646,10 +668,16 @@ async fn route<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, peer: IpAddr, h
 /// A stream that yields `prefix` before reading on from `inner`: the request
 /// head [`route`] read to tell a WebSocket from a page, given back to the
 /// WebSocket handshake that needs it.
-struct Replay<S> {
+pub(crate) struct Replay<S> {
     prefix: Vec<u8>,
     at: usize,
     inner: S,
+}
+
+impl<S> Replay<S> {
+    pub(crate) fn new(prefix: Vec<u8>, inner: S) -> Self {
+        Self { prefix, at: 0, inner }
+    }
 }
 
 impl<S: AsyncRead + Unpin> AsyncRead for Replay<S> {

@@ -443,6 +443,7 @@ dependencies = [
  "nix",
  "nostr",
  "nostr-transport",
+ "p256",
  "portable-pty",
  "protocol",
  "qrcode",

@@ -17,7 +17,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use bridge_core::ports::{Ports, System};
 use bridge_core::{
-    Config as EngineConfig, Effect, Engine, Input, NotifyLevel, PairingCloseReason, PairingWindowInfo, TerminalConfig,
+    Addressee, Config as EngineConfig, Effect, Engine, Input, NotifyLevel, PairingCloseReason, PairingWindowInfo, TerminalConfig,
     TimerId,
 };
 use protocol::commands::UploadFileMsg;
@@ -373,6 +373,22 @@ impl Runtime {
         self.direct.as_ref().map(|direct| direct.web.browsers()).unwrap_or_default()
     }
 
+    /// Send `message` to `to`: a browser's copy goes down its stream on the
+    /// web page as it is (TLS carries it; no message holds a secret), every
+    /// other copy to the relays and the direct link, encrypted and signed.
+    fn publish(&self, to: Vec<Addressee>, message: BridgeToPhone) {
+        let (browsers, phones): (Vec<Addressee>, Vec<Addressee>) = to.into_iter().partition(|a| a.browser_id().is_some());
+        if let (false, Some(direct)) = (browsers.is_empty(), &self.direct) {
+            let text = protocol::encode_bridge_to_phone(&message);
+            for browser in browsers.iter().filter_map(Addressee::browser_id) {
+                direct.web.deliver(browser, &text);
+            }
+        }
+        if !phones.is_empty() {
+            self.relays.publish(phones, message);
+        }
+    }
+
     /// Carry out one effect; true for [`Effect::Stopped`]. Async because one
     /// effect does blocking file work that must not run here: opening a
     /// terminal's recording, which is handed to a blocking task before its
@@ -380,14 +396,13 @@ impl Runtime {
     async fn execute(&mut self, effect: Effect) -> bool {
         match effect {
             Effect::Publish { to, message } => {
-                if let (protocol::events::BridgeToPhone::Sessions(list), Some(direct)) = (&message, &self.direct) {
-                    direct.web.set_heartbeat(list);
-                    // The devices API follows the heartbeat: the paired
-                    // phones are cheap to hand over, and this is where they
-                    // change.
+                if let (protocol::events::BridgeToPhone::Sessions(_), Some(direct)) = (&message, &self.direct) {
+                    // The page's devices view follows the heartbeat: the
+                    // paired phones are cheap to hand over, and this is where
+                    // they change.
                     direct.web.set_devices(self.engine.paired_phones());
                 }
-                self.relays.publish(to, message)
+                self.publish(to, message);
             }
             Effect::WebSignedIn { code, by } => {
                 if let Some(direct) = &self.direct {
@@ -400,7 +415,7 @@ impl Runtime {
             // fresh list. Both go to the asking client alone.
             Effect::WebBrowsers { client } => {
                 let message = BridgeToPhone::WebBrowsers(WebBrowsersMsg { browsers: self.web_browsers() });
-                self.relays.publish(vec![client], message);
+                self.publish(vec![client], message);
             }
             Effect::WebBrowserSignOut { id, client } => {
                 // `revoke` persists through the web page's own writer thread,
@@ -409,7 +424,7 @@ impl Runtime {
                     direct.web.revoke(&id);
                 }
                 let message = BridgeToPhone::WebBrowsers(WebBrowsersMsg { browsers: self.web_browsers() });
-                self.relays.publish(vec![client], message);
+                self.publish(vec![client], message);
             }
             Effect::WebEndBrowsers { by } => {
                 if let Some(direct) = &self.direct {
@@ -556,7 +571,7 @@ impl Runtime {
                         data: STANDARD.encode(data),
                         replay: Some(true),
                     });
-                    self.relays.publish(vec![client], message);
+                    self.publish(vec![client], message);
                 }
             }
             Effect::TerminalClose { term } => self.terminals.close(&term),
