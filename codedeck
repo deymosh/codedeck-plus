@@ -324,7 +324,7 @@ a Docker-less host:
                            --persona ID, --cwd DIR, --env K=V (agent paths and keys),
                            --timeout SECONDS (default 300), --no-sync
                            agents: claude-code, opencode, deepseek-harness,
-                           qwen-code, and `fake` for the driver-protocol
+                           qwen-code, pi, and `fake` for the driver-protocol
                            test agent
   live <agent> --fake-model
                            Point the agent at a local model server instead
@@ -1290,7 +1290,7 @@ cmd_live() {
       echo "            background sub-agent or a late notification does" >&2
       echo "  CODEDECK_DEBUG_EVENTS=1 (via --env) logs every raw agent event the" >&2
       echo "            OpenCode driver received, with the session each names" >&2
-      echo "agents: claude-code, opencode, deepseek-harness, qwen-code, fake" >&2
+      echo "agents: claude-code, opencode, deepseek-harness, qwen-code, pi, fake" >&2
       exit 2
       ;;
   esac
