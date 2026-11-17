@@ -6,7 +6,7 @@ use protocol::commands::{
     PluginActionMsg, QuestionAnswer, QuestionResponseMsg, SetOptionMsg, UploadFileMsg,
 };
 use protocol::common::{
-    is_valid_provider_base_url, AgentAction, AgentStyle, EntryBody, Role, SessionOption, PROVIDER_BASE_URL_ERROR,
+    TerminalVia, is_valid_provider_base_url, AgentAction, AgentStyle, EntryBody, Role, SessionOption, PROVIDER_BASE_URL_ERROR,
 };
 use protocol::events::{
     AgentAckMsg, BridgeToPhone, CloseSessionAckMsg, FolderAckMsg, InputAckMsg, InputFailedMsg,
@@ -131,14 +131,16 @@ impl Engine {
                         self.grant_session_key(&event.pubkey, m.session_key, &key);
                     }
                     PhoneToBridge::Presence(_) => {}
-                    msg => self.dispatch(msg, &event.pubkey, via),
+                    msg => self.dispatch(msg, &event.pubkey, super::terminal::via_of(via)),
                 }
                 self.requester = None;
             }
         }
     }
 
-    fn dispatch(&mut self, msg: PhoneToBridge, phone: &str, via: Via) {
+    /// Run one command of `phone` (an identity, hex). `via` is the way it
+    /// came, which only the terminal keeps, for its audit.
+    pub(super) fn dispatch(&mut self, msg: PhoneToBridge, phone: &str, via: TerminalVia) {
         match msg {
             PhoneToBridge::Input(m) => self.on_input(m),
             PhoneToBridge::PermissionResponse(m) => self.on_permission_response(m),
@@ -200,12 +202,12 @@ impl Engine {
             }
             // Terminals: the engine decides, the runtime runs their shells
             // (see the `terminal` module).
-            PhoneToBridge::TerminalOpen(m) => self.on_terminal_open(m, super::terminal::via_of(via)),
-            PhoneToBridge::TerminalInput(m) => self.on_terminal_input(m, super::terminal::via_of(via)),
-            PhoneToBridge::TerminalResize(m) => self.on_terminal_resize(m, super::terminal::via_of(via)),
-            PhoneToBridge::TerminalReplay(m) => self.on_terminal_replay(m, super::terminal::via_of(via)),
-            PhoneToBridge::TerminalTakeover(m) => self.on_terminal_takeover(m, super::terminal::via_of(via)),
-            PhoneToBridge::TerminalClose(m) => self.on_terminal_close(m, super::terminal::via_of(via)),
+            PhoneToBridge::TerminalOpen(m) => self.on_terminal_open(m, via),
+            PhoneToBridge::TerminalInput(m) => self.on_terminal_input(m, via),
+            PhoneToBridge::TerminalResize(m) => self.on_terminal_resize(m, via),
+            PhoneToBridge::TerminalReplay(m) => self.on_terminal_replay(m, via),
+            PhoneToBridge::TerminalTakeover(m) => self.on_terminal_takeover(m, via),
+            PhoneToBridge::TerminalClose(m) => self.on_terminal_close(m, via),
             PhoneToBridge::WebSignIn(m) => self.on_web_sign_in(&m.code, phone),
             PhoneToBridge::WebBrowsersRequest(_) => self.on_web_browsers_request(),
             PhoneToBridge::WebBrowserSignOut(m) => self.on_web_browser_sign_out(m.id),

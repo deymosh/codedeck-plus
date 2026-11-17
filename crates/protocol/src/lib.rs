@@ -28,6 +28,7 @@ pub mod ranges;
 pub mod recipients;
 pub mod relays;
 pub mod tristate;
+pub mod web;
 
 pub use codec::{
     decode_bridge_to_phone, decode_phone_to_bridge, encode_bridge_to_phone, encode_phone_to_bridge,

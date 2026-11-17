@@ -11,7 +11,7 @@
 <body>
 <header class="bar">
   <div class="brand"><span class="mark">CodeDeck+</span><span class="machine" id="machine"></span></div>
-  <button class="quiet" id="sign-out" hidden>Sign out</button>
+  <div class="bar-end"><span class="state busy" id="link" hidden>connecting</span><button class="quiet" id="sign-out" hidden>Sign out</button></div>
 </header>
 
 
@@ -20,7 +20,7 @@
 <main id="signed-out" class="center" hidden>
   <section class="card narrow">
     <h1>Sign in with your phone</h1>
-    <p class="dim">This page shows what your bridge is doing. Only a phone paired with it can let a browser in — there is no password.</p>
+    <p class="dim">Drive your bridge's sessions from this browser. Only a phone paired with it can let a browser in — there is no password.</p>
     <button class="primary" id="start">Show a sign-in code</button>
     <p class="error" id="start-error" hidden></p>
   </section>
@@ -35,6 +35,7 @@
       <li>Open CodeDeck+ on a phone paired with this bridge.</li>
       <li>On the machine's page, under <b>Web page</b>, choose <b>Browsers</b>.</li>
       <li>Scan this code, or type it.</li>
+      <li>The phone shows this page's certificate fingerprint. Check that the certificate your browser accepted for this page shows the same SHA-256 before you sign in.</li>
     </ol>
     <p class="dim small" id="expires"></p>
   </section>
@@ -42,6 +43,7 @@
 
 <main id="dashboard" hidden>
   <nav class="tabs" aria-label="Pages">
+    <a href="#sessions" data-tab="sessions">Sessions</a>
     <a href="#overview" data-tab="overview">Overview</a>
     <a href="#usage" data-tab="usage">Usage</a>
     <a href="#browsers" data-tab="browsers">Browsers</a>
@@ -49,7 +51,47 @@
     <a href="#settings" data-tab="settings">Settings</a>
   </nav>
 
-  <div class="pane" data-pane="overview">
+  <div class="pane split" data-pane="sessions" hidden>
+    <aside class="session-list">
+      <a class="new-link" href="#sessions">New session</a>
+      <nav id="session-list" aria-label="Sessions"></nav>
+      <p class="dim small" id="no-sessions" hidden>No sessions yet.</p>
+    </aside>
+    <section class="session-main">
+      <form class="card" id="new-session" autocomplete="off">
+        <h2>New session</h2>
+        <div class="form">
+          <label class="field"><span class="field-label">Agent</span><select id="new-agent"></select></label>
+          <label class="field"><span class="field-label">Folder</span><select id="new-folder"></select></label>
+        </div>
+        <div class="actions"><button class="primary" type="submit" id="new-start">Start</button></div>
+      </form>
+      <div class="session-view" id="session-view" hidden>
+        <header class="session-head">
+          <div class="session-head-main">
+            <div class="session-name" id="session-name"></div>
+            <div class="session-meta" id="session-meta"></div>
+          </div>
+          <div class="session-tools">
+            <select id="session-mode" aria-label="Mode" hidden></select>
+            <button class="quiet" type="button" id="interrupt" hidden>Stop</button>
+            <button class="quiet danger" type="button" id="close-session">End</button>
+          </div>
+        </header>
+        <div class="transcript" id="transcript">
+          <p class="dim" id="transcript-empty" hidden>Nothing here yet.</p>
+          <div id="entries"></div>
+          <div id="live"></div>
+        </div>
+        <form class="composer" id="composer" autocomplete="off">
+          <textarea id="input" rows="2" placeholder="Message the agent (Enter sends, Shift+Enter for a new line)"></textarea>
+          <button class="primary" type="submit">Send</button>
+        </form>
+      </div>
+    </section>
+  </div>
+
+  <div class="pane" data-pane="overview" hidden>
   <section class="grid">
     <article class="card">
       <h2>Bridge</h2>
@@ -63,16 +105,6 @@
   <section class="card">
     <h2>Agents</h2>
     <div class="agents" id="agents"></div>
-  </section>
-  <section class="card">
-    <h2>Sessions <span class="count" id="session-count"></span></h2>
-    <div class="table-wrap">
-      <table class="sessions">
-        <thead><tr><th>Session</th><th>Agent</th><th>State</th><th>Folder</th><th>Last activity</th></tr></thead>
-        <tbody id="sessions"></tbody>
-      </table>
-    </div>
-    <p class="dim" id="no-sessions" hidden>No sessions yet.</p>
   </section>
   </div>
 
@@ -96,7 +128,7 @@
       <div class="rows" id="browsers"></div>
       <p class="error" id="browsers-error" hidden></p>
     </section>
-    <p class="dim small">A browser stays signed in for 30 days. Signing one out here ends it at once; a phone signs a new one in.</p>
+    <p class="dim small">A browser stays signed in for 30 days, and only while it is used: 7 days without it ends it sooner. Signing one out here ends it at once; a phone signs a new one in.</p>
   </div>
 
   <div class="pane" data-pane="devices" hidden>
@@ -126,5 +158,6 @@
 
   <p class="dim small foot" id="signed-in-as"></p>
 </main>
+<div class="toast" id="toast" role="status" hidden></div>
 </body>
 </html>

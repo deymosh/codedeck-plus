@@ -12,6 +12,7 @@ pub mod direct;
 pub mod host;
 pub mod uploads;
 pub mod web;
+pub mod web_stream;
 pub mod pairing;
 pub mod qr;
 pub mod relay;

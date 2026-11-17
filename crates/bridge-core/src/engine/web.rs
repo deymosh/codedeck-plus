@@ -7,12 +7,84 @@
 //! ([`Effect::WebSignedIn`]). A code works once, and only until it lapses:
 //! anyone who reads it off the screen still needs a paired phone to use it.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
+use protocol::commands::PhoneToBridge;
+use protocol::common::TerminalVia;
 use protocol::events::{BridgeToPhone, WebSignInResultMsg};
 
 use super::Engine;
-use crate::io::Effect;
+use crate::io::{Addressee, Effect, WatchState};
+
+/// Whether a browser may send `msg`. A browser drives sessions and reads;
+/// what belongs to an identity (its keys, letting in another browser,
+/// pairing), what moves a secret or a sign-in, the terminal (whose allowlist
+/// names devices, and a browser is none), uploads and the agents'
+/// configuration stay with the phone. Every command is named, so a new one
+/// is decided here rather than let through by default.
+pub fn browser_may_send(msg: &PhoneToBridge) -> bool {
+    match msg {
+        PhoneToBridge::Input(_)
+        | PhoneToBridge::PermissionResponse(_)
+        | PhoneToBridge::QuestionResponse(_)
+        | PhoneToBridge::PlanResponse(_)
+        | PhoneToBridge::SetOption(_)
+        | PhoneToBridge::SyncRequest(_)
+        | PhoneToBridge::SyncAck(_)
+        | PhoneToBridge::CreateSession(_)
+        | PhoneToBridge::RefreshSessions(_)
+        | PhoneToBridge::CloseSession(_)
+        | PhoneToBridge::Interrupt(_)
+        | PhoneToBridge::StopTask(_)
+        | PhoneToBridge::CreateFolder(_)
+        | PhoneToBridge::Presence(_)
+        | PhoneToBridge::UsageRequest(_)
+        | PhoneToBridge::ModelsRequest(_)
+        | PhoneToBridge::AgentStyleRequest(_)
+        | PhoneToBridge::CommandsRequest(_)
+        | PhoneToBridge::PersonasRequest(_)
+        | PhoneToBridge::PluginsRequest(_)
+        | PhoneToBridge::McpRequest(_)
+        | PhoneToBridge::SessionMcpRequest(_)
+        | PhoneToBridge::PermissionRulesRequest(_)
+        | PhoneToBridge::AccountsRequest(_)
+        | PhoneToBridge::ProviderProfilesRequest(_)
+        | PhoneToBridge::WebBrowsersRequest(_)
+        | PhoneToBridge::WebBrowserSignOut(_) => true,
+        PhoneToBridge::SessionKey(_)
+        | PhoneToBridge::PairRequest(_)
+        | PhoneToBridge::WebSignIn(_)
+        | PhoneToBridge::SetCredentials(_)
+        | PhoneToBridge::SetProviderProfile(_)
+        | PhoneToBridge::AccountAction(_)
+        | PhoneToBridge::TerminalOpen(_)
+        | PhoneToBridge::TerminalInput(_)
+        | PhoneToBridge::TerminalResize(_)
+        | PhoneToBridge::TerminalReplay(_)
+        | PhoneToBridge::TerminalTakeover(_)
+        | PhoneToBridge::TerminalClose(_)
+        | PhoneToBridge::UploadFile(_)
+        | PhoneToBridge::PluginAction(_)
+        | PhoneToBridge::McpAction(_)
+        | PhoneToBridge::AgentAction(_)
+        | PhoneToBridge::SessionMcpToggle(_)
+        | PhoneToBridge::PermissionRulesRemove(_) => false,
+    }
+}
+
+/// A browser with a stream open: a present client of the identity that let
+/// it in. One whose streams all closed is not kept — it gets nothing until it
+/// opens one, and says again what it watches.
+#[derive(Debug)]
+pub(super) struct BrowserClient {
+    /// The identity that let it in (hex).
+    identity: String,
+    /// Which session's live text it wants.
+    watch: WatchState,
+}
+
+/// The browsers with a stream open, by their public id.
+pub(super) type Browsers = BTreeMap<String, BrowserClient>;
 
 /// Codes the page is showing at once; the soonest to lapse goes first past
 /// it. The page caps its own pending sign-ins at this too, and withdraws a
@@ -88,6 +160,91 @@ impl Engine {
         if let Some(client) = self.requester.clone() {
             self.out.push(Effect::WebBrowserSignOut { id, client });
         }
+    }
+
+    /// The paired identity whose npub is `by`, as hex.
+    fn identity_of_npub(&self, by: &str) -> Option<String> {
+        self.paired.iter().find(|p| p.npub == by).map(|p| p.pubkey_hex.clone())
+    }
+
+    /// A browser that `by` let in opened its first stream. An identity that
+    /// is no longer paired lets nothing in: its browsers are ended.
+    pub(super) fn on_web_browser_online(&mut self, id: String, by: &str) {
+        let Some(identity) = self.identity_of_npub(by) else {
+            self.out.push(Effect::WebEndBrowsers { by: by.to_string() });
+            return;
+        };
+        self.browser_present(&id, &identity);
+    }
+
+    /// `id` is a present client of `identity`; one that was not gets a
+    /// heartbeat of its own, as a phone's client back from away does.
+    fn browser_present(&mut self, id: &str, identity: &str) {
+        if self.browsers.contains_key(id) {
+            return;
+        }
+        log::info!("[Engine] A browser of {}... is online", identity.get(..8).unwrap_or(identity));
+        self.want_list(Addressee::browser(identity, id));
+        self.browsers.insert(id.to_string(), BrowserClient { identity: identity.to_string(), watch: WatchState::Unknown });
+    }
+
+    pub(super) fn on_web_browser_offline(&mut self, id: &str) {
+        self.browsers.remove(id);
+    }
+
+    /// A command from browser `id`, whose signature the runtime checked.
+    /// It runs as its identity's — the reply goes to the browser alone —
+    /// unless the identity is no longer paired or the command is one a
+    /// browser may not send ([`browser_may_send`]).
+    pub(super) fn on_web_command(&mut self, id: String, by: &str, msg: PhoneToBridge) {
+        let Some(identity) = self.identity_of_npub(by) else {
+            log::info!("[Engine] Ignoring a browser command: the identity that let it in is not paired");
+            self.out.push(Effect::WebEndBrowsers { by: by.to_string() });
+            return;
+        };
+        if !browser_may_send(&msg) {
+            log::info!("[Engine] Ignoring a command a browser may not send");
+            return;
+        }
+        self.browser_present(&id, &identity);
+        let client = Addressee::browser(&identity, &id);
+        if let PhoneToBridge::Presence(m) = &msg {
+            let next = WatchState::Watching(if m.away { None } else { m.watching.clone() });
+            let Some(browser) = self.browsers.get_mut(&id) else { return };
+            if browser.watch != next {
+                browser.watch = next.clone();
+                // A browser that starts watching a session is caught up on
+                // its live parts at once, as a phone's client is.
+                if let WatchState::Watching(Some(session)) = next {
+                    self.catch_up_live_text(&identity, &client.key, &session);
+                }
+            }
+            return;
+        }
+        self.requester = Some(client);
+        self.dispatch(msg, &identity, TerminalVia::Unknown);
+    }
+
+    /// The browsers of `identity` a copy of `message` goes to: every one
+    /// with a stream open, narrowed to those watching the session for live
+    /// text. Never a terminal's output — a browser opens no terminal.
+    pub(super) fn browser_copies(&self, identity: &str, message: &BridgeToPhone) -> Vec<Addressee> {
+        self.browsers
+            .iter()
+            .filter(|(_, b)| b.identity == identity)
+            .filter(|(_, b)| match message {
+                BridgeToPhone::Partial(m) => b.watch.wants(&m.session_id),
+                BridgeToPhone::TerminalOutput(_) => false,
+                _ => true,
+            })
+            .map(|(id, _)| Addressee::browser(identity, id))
+            .collect()
+    }
+
+    /// `identity` was unpaired: the browsers it let in go with it.
+    pub(super) fn end_identity_browsers(&mut self, identity: &str, npub: &str) {
+        self.browsers.retain(|_, b| b.identity != identity);
+        self.out.push(Effect::WebEndBrowsers { by: npub.to_string() });
     }
 }
 

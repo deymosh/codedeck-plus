@@ -252,3 +252,19 @@ fn direct_frames_decode_round_trip_and_rejections_stay_rejected() {
         assert!(decode_direct_frame(&text).is_err(), "directFrames.rejected[{i}] {text} decoded but should not have");
     }
 }
+
+#[test]
+fn web_frames_decode_round_trip_and_rejections_stay_rejected() {
+    use protocol::web::{decode_web_frame, encode_web_frame};
+    let corpus = corpus();
+    for (i, frame) in corpus["webFrames"]["valid"].as_array().unwrap().iter().enumerate() {
+        let text = frame.to_string();
+        let decoded = decode_web_frame(&text).unwrap_or_else(|e| panic!("webFrames.valid[{i}] {text} -> {e}"));
+        assert_eq!(decode_web_frame(&encode_web_frame(&decoded)), Ok(decoded), "webFrames.valid[{i}] not a round-trip");
+    }
+    for (i, frame) in corpus["webFrames"]["rejected"].as_array().unwrap().iter().enumerate() {
+        // A string fixture is the raw frame text, anything else its JSON.
+        let text = frame.as_str().map(str::to_string).unwrap_or_else(|| frame.to_string());
+        assert!(decode_web_frame(&text).is_err(), "webFrames.rejected[{i}] {text} decoded but should not have");
+    }
+}

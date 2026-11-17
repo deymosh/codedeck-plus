@@ -129,13 +129,12 @@ impl Engine {
     /// machine's terminals are not left running for a phone that is no longer
     /// paired.
     pub(super) fn unpair(&mut self, identity: &str) {
-        let before = self.paired.len();
+        let Some(npub) = self.paired.iter().find(|p| p.pubkey_hex == identity).map(|p| p.npub.clone()) else { return };
         self.paired.retain(|p| p.pubkey_hex != identity);
-        if self.paired.len() == before {
-            return;
-        }
         log::info!("[Engine] Unpaired {}...", identity.get(..8).unwrap_or(identity));
         self.close_identity_terminals(identity, TerminalEndReason::Killed);
+        // The browsers it let in on the web page were its; they end too.
+        self.end_identity_browsers(identity, &npub);
         self.store_paired();
         // Nothing from that author is heard any more, and every other phone's
         // list changed.

@@ -21,6 +21,10 @@ serde_json = "1"
 # Packing a message before it is encrypted (`packing.rs`): raw deflate,
 # pure Rust, and the base64 the rest of the workspace already uses.
 miniz_oxide = { version = "0.8", features = ["with-alloc"] }
+# The web page's browser key (`web.rs`): WebCrypto's ECDSA P-256 over
+# SHA-256, verified in pure Rust (RustCrypto), nothing to cross-compile.
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
+sha2 = "0.10"
 base64 = "0.22"
 # The agent host's TypeScript types are generated FROM these types (the
 # driver protocol reuses them; see agent-protocol's gen_ts_bindings test),

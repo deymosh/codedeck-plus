@@ -207,7 +207,7 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm --filter @codedeck/agent-host run build
           cargo test --locked -p agent-protocol --test agent_host -- --ignored
-          cargo test --locked -p bridge-runtime --test e2e -- --ignored
+          cargo test --locked -p bridge-runtime --test e2e --test web_page -- --ignored
 
   # The bridge on Windows — what the Windows release archive ships: the crates
   # the binary is built from, the agent host's tests and bundle, and the same
@@ -257,7 +257,7 @@ jobs:
         run: |
           cargo test --locked -p protocol -p agent-protocol -p nostr-transport -p bridge-core -p bridge-runtime
           cargo test --locked -p agent-protocol --test agent_host -- --ignored
-          cargo test --locked -p bridge-runtime --test e2e -- --ignored
+          cargo test --locked -p bridge-runtime --test e2e --test web_page -- --ignored
 
   # apps/android: Gradle unit tests + Paparazzi screenshot verification
   # + the UniFFI Kotlin bindings drift check. The crates it watches are

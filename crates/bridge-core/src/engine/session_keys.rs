@@ -300,7 +300,7 @@ impl Engine {
     /// shows are complete instead of waiting for the entry that completes
     /// each part. A part that outgrew the cap has nothing to send, and a
     /// session with no live parts nothing either.
-    fn catch_up_live_text(&mut self, identity: &str, client_key: &str, session_id: &str) {
+    pub(super) fn catch_up_live_text(&mut self, identity: &str, client_key: &str, session_id: &str) {
         let Some(run) = self.sessions.get(session_id).and_then(|s| s.run.as_ref()) else { return };
         let messages: Vec<BridgeToPhone> = run
             .parts
@@ -406,7 +406,12 @@ impl Engine {
                                 Stream::Terminal(term) => self.copy_keys_watching_terminal(&a.phone, now, term),
                                 Stream::Everyone => self.copy_keys(&a.phone, now),
                             };
-                            keys.into_iter().map(|key| Addressee { phone: a.phone.clone(), key }).collect()
+                            let mut copies: Vec<Addressee> =
+                                keys.into_iter().map(|key| Addressee { phone: a.phone.clone(), key }).collect();
+                            // The identity's browsers on the web page are its
+                            // clients too.
+                            copies.extend(self.browser_copies(&a.phone, message));
+                            copies
                         } else {
                             vec![a.clone()]
                         }
