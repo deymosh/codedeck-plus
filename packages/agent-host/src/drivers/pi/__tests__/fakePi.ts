@@ -224,6 +224,11 @@ export class FakePi {
       this.runTool({ id: `call_${++this.nextCall}`, toolName: 'read', args: { path: 'a.txt' } });
       return;
     }
+    if (text === '/edit') {
+      // Pi's edit tool's own argument shape (its tool schema in 1.5.2).
+      this.runTool({ id: `call_${++this.nextCall}`, toolName: 'edit', args: { path: 'a.txt', edits: [{ oldText: 'a', newText: 'b' }] } });
+      return;
+    }
     if (text === '/retry') {
       // Two failed attempts, then the reply.
       this.failedAttempt(1);

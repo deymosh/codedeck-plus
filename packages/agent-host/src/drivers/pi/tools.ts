@@ -55,6 +55,14 @@ export const PI_TOOLS: ToolDialects = {
  */
 export const PI_READ_ONLY_TOOLS: ReadonlySet<string> = new Set(['read', 'grep', 'find', 'ls']);
 
+/**
+ * The tools this driver's `auto-edit` mode also runs without a card: Pi's
+ * own file writers. Only Pi's built-ins, by name — an extension's or an MCP
+ * server's tool that looks like an edit may do anything else as well, so it
+ * still asks, and so does every shell.
+ */
+export const PI_EDIT_TOOLS: ReadonlySet<string> = new Set(['edit', 'write']);
+
 /** Read one of this agent's tool calls. `report` is told a name this table
  *  does not list (`unknownToolReporter`). */
 export function piTool(toolName: string, input: Input, report?: (toolName: string) => void): ToolCallRead {

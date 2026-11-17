@@ -52,17 +52,19 @@ import { buildPiEnv } from './env';
 import { PI_PERMISSION_PREFIX, installPiExtension } from './extension';
 import { PI_LABEL } from './install';
 import { PiRpc, type PiRecord, type PiRpcOptions } from './rpc';
-import { PI_READ_ONLY_TOOLS, piTool } from './tools';
+import { PI_EDIT_TOOLS, PI_READ_ONLY_TOOLS, piTool } from './tools';
 import { PI_STYLE } from './style';
 import { PiRuntime, piCommand, type PiRuntimeOptions } from './runtime';
 
 export const PI_AGENT_ID = 'pi';
 
 const ASK_MODE = 'ask';
+const AUTO_EDIT_MODE = 'auto-edit';
 const YOLO_MODE = 'yolo';
 const DEFAULT_MODE = ASK_MODE;
 const PI_MODES = [
   { id: ASK_MODE, label: 'Ask', description: 'Ask before each tool call, except for read-only tools' },
+  { id: AUTO_EDIT_MODE, label: 'Auto edit', description: 'Edit files without asking; ask before running commands' },
   { id: YOLO_MODE, label: 'YOLO', description: 'Run every tool without asking' },
 ];
 
@@ -637,7 +639,12 @@ export class PiSession implements DriverSession {
   private async answerPermission(id: string, callId: string): Promise<void> {
     const facts = this.toolFacts.get(callId);
     const toolName = facts?.name ?? 'tool';
-    if (this.sessionMode === YOLO_MODE || this.allowedTools.has(toolName) || PI_READ_ONLY_TOOLS.has(toolName)) {
+    if (
+      this.sessionMode === YOLO_MODE ||
+      this.allowedTools.has(toolName) ||
+      PI_READ_ONLY_TOOLS.has(toolName) ||
+      (this.sessionMode === AUTO_EDIT_MODE && PI_EDIT_TOOLS.has(toolName))
+    ) {
       this.respond({ type: 'extension_ui_response', id, value: 'allow' });
       return;
     }

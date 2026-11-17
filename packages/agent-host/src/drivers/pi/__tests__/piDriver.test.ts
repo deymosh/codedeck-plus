@@ -81,7 +81,7 @@ describe('PiDriver.info', () => {
     const info = driver.info();
     expect(info.id).toBe('pi');
     expect(info.displayName).toBe('Pi');
-    expect(info.modes?.map((mode) => mode.id)).toEqual(['ask', 'yolo']);
+    expect(info.modes?.map((mode) => mode.id)).toEqual(['ask', 'auto-edit', 'yolo']);
     expect(info.efforts?.map((effort) => effort.id)).toEqual(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
     expect(info.defaultMode).toBe('ask');
     expect(info.defaultEffort).toBe('medium');
@@ -336,6 +336,26 @@ describe('PiSession permission policy', () => {
     expect(ctx.permissions).toHaveLength(0);
     expect(h.fake.uiResponses.at(-1)).toMatchObject({ value: 'allow' });
     expect(entries(ctx)).toContainEqual(expect.objectContaining({ entryType: 'tool_call', toolName: 'read', kind: 'read' }));
+  });
+
+  it('runs Pi’s file edits without a card in auto-edit mode, and still asks before a command', async () => {
+    const h = withDriver();
+    const ctx = await ready(h, { mode: 'auto-edit' });
+    await turn(h.session!, ctx, '/edit');
+    expect(ctx.permissions).toHaveLength(0);
+    expect(h.fake.uiResponses.at(-1)).toMatchObject({ value: 'allow' });
+
+    await turn(h.session!, ctx, '/tool');
+    expect(ctx.permissions).toHaveLength(1);
+    expect(ctx.permissions[0]).toMatchObject({ toolName: 'bash' });
+  });
+
+  it('asks before a file edit in ask mode', async () => {
+    const h = withDriver();
+    const ctx = await ready(h);
+    await turn(h.session!, ctx, '/edit');
+    expect(ctx.permissions).toHaveLength(1);
+    expect(ctx.permissions[0]).toMatchObject({ toolName: 'edit', kind: 'edit' });
   });
 
   it('remembers “allow for this session” for that tool only', async () => {
