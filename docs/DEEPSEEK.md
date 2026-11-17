@@ -59,6 +59,14 @@ does not leave an agent's conversations behind. `CODEDECK_DEEPSEEK_HOME`
 overrides it. It is shared by every session, whatever provider profile a
 session is bound to.
 
+The harness process also starts in that directory, whatever directory the
+bridge was started from. The harness reads the `.env` of the directory it
+starts in and refuses to boot when that file sets a variable only the
+launching environment may set (`DEEPSEEK_BASE_URL` among them), so a bridge
+started in a project with such a `.env` would otherwise fail every session.
+`$DSH_HOME/.env` is the one it reads, the file the harness documents as the
+user's own; each session still works in its own directory.
+
 ## Models and reasoning
 
 The model list and the reasoning levels come from the harness itself, read
