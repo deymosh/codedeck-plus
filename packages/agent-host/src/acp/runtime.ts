@@ -24,6 +24,7 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { mkdirSync } from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
 import type {
   ClientCapabilities,
@@ -74,6 +75,15 @@ export interface AcpProcessSpec<H> {
   args: string[];
   /** The child's environment: the session's own, plus what the agent needs. */
   env: Record<string, string>;
+  /**
+   * The directory the process starts in: the agent's own (its state root),
+   * created when missing. Never the host's: an agent reads files from the
+   * directory it starts in — a `.env`, a workspace settings file — before it
+   * hears of any session, and the host's is whatever project it was started
+   * in. A session's own directory is not this one; it travels in
+   * `session/new`, per session.
+   */
+  cwd: string;
   /** Anything the driver attaches to this process (its own auxiliary
    *  channel, say). Opaque here, handed back on the process. */
   handle: H;
@@ -440,7 +450,12 @@ export abstract class AcpRuntime<H = undefined, E extends AcpProcessEvents = Acp
   private async spawn(context: Context<H>, env: Record<string, string>, events: E): Promise<AgentProcess<H>> {
     const entry = await this.entryPoint();
     const spec = this.spec(entry, env);
+    // A fresh machine has no agent state yet, and a spawn into a missing
+    // directory fails as if the command were missing. Synchronous: one call
+    // per process start, and no wait between the entry point and the spawn.
+    mkdirSync(spec.cwd, { recursive: true });
     const child = (this.options.spawnFn ?? spawn)(spec.command, spec.args, {
+      cwd: spec.cwd,
       env: spec.env,
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,

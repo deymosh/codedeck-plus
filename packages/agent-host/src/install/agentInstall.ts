@@ -49,7 +49,9 @@ export interface InstallOptions {
 /** The bridge passes `<home>/agents`; a host started by hand uses the same
  *  place under the default home. */
 export function agentCacheDir(env: NodeJS.ProcessEnv = process.env): string {
-  return env.CODEDECK_AGENT_CACHE?.trim() || path.join(os.homedir(), '.codedeck', 'agents');
+  // Absolute: an agent that starts in a directory of its own (the ACP
+  // agents) is handed paths under it, which must mean what they mean here.
+  return path.resolve(env.CODEDECK_AGENT_CACHE?.trim() || path.join(os.homedir(), '.codedeck', 'agents'));
 }
 
 /** CODEDECK_NPM_REGISTRY points at a mirror; the sha512 pin still applies. */

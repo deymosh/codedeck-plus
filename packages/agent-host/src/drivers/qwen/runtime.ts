@@ -24,9 +24,11 @@ export type { SpawnFn } from '../../acp/runtime';
 
 /** `$QWEN_HOME`: the operator's override, else a `qwen` directory beside the
  *  installed agent binaries (the bridge passes its own home, so this follows
- *  it). Qwen Code reads its settings and writes its transcripts here. */
+ *  it). Qwen Code reads its settings and writes its transcripts here.
+ *  Absolute: Qwen Code starts inside it, so a relative path would resolve a
+ *  second time, against the home itself. */
 export function qwenHomeDir(env: NodeJS.ProcessEnv = process.env): string {
-  return env.CODEDECK_QWEN_HOME?.trim() || path.join(path.dirname(agentCacheDir(env)), 'qwen');
+  return path.resolve(env.CODEDECK_QWEN_HOME?.trim() || path.join(path.dirname(agentCacheDir(env)), 'qwen'));
 }
 
 /** Qwen Code's settings file, directly inside `$QWEN_HOME`. */
@@ -90,7 +92,9 @@ export class QwenRuntime extends AcpRuntime<undefined, AcpProcessEvents> {
   /** The CLI entry point: the operator's own, else the installed tree. */
   override entryPoint(): Promise<string> {
     if (this.qwen.qwenPath) {
-      const explicit = this.qwen.qwenPath;
+      // The host's path: Qwen Code starts in its home, where a relative one
+      // would name another file.
+      const explicit = path.resolve(this.qwen.qwenPath);
       if (!isFile(explicit)) return Promise.reject(new Error(`CODEDECK_QWEN_PATH points at ${explicit}, which is not a file`));
       return Promise.resolve(explicit);
     }
@@ -127,6 +131,10 @@ export class QwenRuntime extends AcpRuntime<undefined, AcpProcessEvents> {
       command: command.command,
       args: command.args,
       env: { ...env, ...QWEN_OFF_ENV, QWEN_HOME: this.qwen.home },
+      // Qwen Code loads settings and `.env` files from the directory it
+      // starts in before any session names its own; its home, as its CLI
+      // commands run (plugins.ts), is the one place that is the user's.
+      cwd: this.qwen.home,
       handle: undefined,
       detail: 'acp',
     };
