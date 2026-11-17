@@ -57,7 +57,8 @@ const KILL_AFTER_MS = 3_000;
 export type SubagentEvent =
   | { kind: 'text'; text: string }
   | { kind: 'tool_call'; callId: string; toolName: string; args: Record<string, unknown> }
-  | { kind: 'tool_result'; callId: string; text: string; isError: boolean };
+  // `patch`: an edit's unified patch (Pi's `details.patch`), for its diff card.
+  | { kind: 'tool_result'; callId: string; text: string; isError: boolean; patch?: string };
 
 /** The details of one progress update: who, which event, in order. */
 export interface SubagentUpdate {
@@ -193,7 +194,14 @@ export function runSubagent(options: ChildOptions): Promise<{ text: string; erro
           const callId = typeof rec.toolCallId === 'string' ? rec.toolCallId : undefined;
           if (!callId) return;
           facts.delete(callId);
-          options.onEvent({ kind: 'tool_result', callId, text: textOf(record(rec.result)?.content), isError: rec.isError === true });
+          const patch = record(record(rec.result)?.details)?.patch;
+          options.onEvent({
+            kind: 'tool_result',
+            callId,
+            text: textOf(record(rec.result)?.content),
+            isError: rec.isError === true,
+            ...(typeof patch === 'string' ? { patch } : {}),
+          });
           return;
         }
         case 'extension_ui_request': {

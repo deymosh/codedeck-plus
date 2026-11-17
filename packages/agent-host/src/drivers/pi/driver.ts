@@ -79,6 +79,7 @@ import {
   CODEDECK_SAFE_TOOLS,
   PI_EDIT_TOOLS,
   PI_READ_ONLY_TOOLS,
+  fileChangeDiff,
   isReadOnlyShellCall,
   piExtraTools,
   piTool,
@@ -196,6 +197,9 @@ export class PiSession implements DriverSession {
   private sessionMode: string;
   private readonly allowedTools = new Set<string>();
   private readonly toolFacts = new Map<string, { name: string; input: Record<string, unknown> }>();
+  /** The same for a sub-agent's calls, by the id the phone knows them by
+   *  (`<parent call>/<child call>`), for the diff card of a file it changed. */
+  private readonly subagentFacts = new Map<string, { name: string; input: Record<string, unknown> }>();
   /** Calls shown as their own card (CARD_TOOLS) rather than a tool row. */
   private readonly cardCalls = new Set<string>();
   /** The last progress event shown per sub-agent, by its `task` call. */
@@ -553,8 +557,10 @@ export class PiSession implements DriverSession {
   private toolEnd(record: PiRecord): void {
     const callId = str(record.toolCallId);
     if (callId === undefined) return;
+    const facts = this.toolFacts.get(callId);
     this.toolFacts.delete(callId);
     this.subagentSeq.delete(callId);
+    for (const id of this.subagentFacts.keys()) if (id.startsWith(`${callId}/`)) this.subagentFacts.delete(id);
     const text = resultText(record.result);
     if (this.cardCalls.delete(callId)) {
       // The card was the call; only a failure is news (the question went
@@ -571,6 +577,8 @@ export class PiSession implements DriverSession {
         timestamp: now(),
       },
     ]);
+    const diff = record.isError === true || !facts ? null : fileChangeDiff(facts.name, facts.input, recordOf(record.result)?.details);
+    if (diff) this.emit([{ entryType: 'diff', ...diff, callId, timestamp: now() }]);
   }
 
   /**
@@ -599,6 +607,7 @@ export class PiSession implements DriverSession {
     } else if (event.kind === 'tool_call') {
       const call = piTool(event.toolName, event.args, this.reportUnknownTool);
       const locations = toolLocations(event.args);
+      if (PI_EDIT_TOOLS.has(event.toolName)) this.subagentFacts.set(childId(event.callId), { name: event.toolName, input: event.args });
       this.emit([
         {
           entryType: 'tool_call',
@@ -623,6 +632,10 @@ export class PiSession implements DriverSession {
           timestamp,
         },
       ]);
+      const facts = this.subagentFacts.get(childId(event.callId));
+      this.subagentFacts.delete(childId(event.callId));
+      const diff = event.isError || !facts ? null : fileChangeDiff(facts.name, facts.input, { patch: event.patch });
+      if (diff) this.emit([{ entryType: 'diff', ...diff, callId: childId(event.callId), ...tag, timestamp }]);
     }
   }
 

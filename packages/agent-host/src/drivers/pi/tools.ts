@@ -16,6 +16,7 @@
 import * as path from 'node:path';
 import { findInDirs, findOnPath } from '../../sdk/executable';
 import { oneLine, readToolCall, str, ToolKind, type ToolCallRead, type ToolDialects } from '../../sdk/tools';
+import { boundedDiff, patchLines, toDiffLines, type DiffPayload } from '../../sdk/transcript';
 import { PI_TOOL } from './extension/protocol';
 
 type Input = Record<string, unknown>;
@@ -203,6 +204,27 @@ export const PI_READ_ONLY_TOOLS: ReadonlySet<string> = new Set(['read', 'grep', 
  * still asks, and so does every shell.
  */
 export const PI_EDIT_TOOLS: ReadonlySet<string> = new Set(['edit', 'write']);
+
+/**
+ * The diff card of a finished file change, or `null` when there is none to
+ * show. Taken from the result, not the call: only then has the change been
+ * applied. `edit` returns the unified patch Pi computed against the file
+ * (`details.patch`), with real context lines; `write` returns no details, so
+ * its card is the content it wrote, every line an addition.
+ */
+export function fileChangeDiff(toolName: string, input: Record<string, unknown>, details: unknown): DiffPayload | null {
+  const file = str(input.path);
+  if (!file) return null;
+  if (toolName === 'edit') {
+    const patch = typeof details === 'object' && details !== null ? (details as { patch?: unknown }).patch : undefined;
+    return typeof patch === 'string' ? boundedDiff(file, patchLines(patch)) : null;
+  }
+  if (toolName === 'write') {
+    const content = str(input.content);
+    return content ? boundedDiff(file, toDiffLines(content, 'add')) : null;
+  }
+  return null;
+}
 
 /**
  * The built-in tools a session turns on beyond Pi's default four, as
