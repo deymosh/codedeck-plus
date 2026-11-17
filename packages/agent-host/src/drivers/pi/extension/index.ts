@@ -8,15 +8,21 @@
  * Pi provides to extensions — Pi maps `@earendil-works/*` and `typebox` to
  * its own copies, which the bundle leaves external — and Node's built-ins.
  * Nothing of the host exists there.
+ *
+ * A sub-agent's Pi (task.ts) loads it too, in a smaller form: the gate and
+ * the provider profile, and `web_fetch` for a general sub-agent — nothing
+ * that talks to the user (questions, plans, the checklist), starts work that
+ * outlives it, or writes the project's notes.
  */
 import { getBuiltinModels, getBuiltinProviders } from '@earendil-works/pi-ai/providers/all';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
-import type { CatalogModel } from './catalog';
 import { registerAsk } from './ask';
+import type { CatalogModel } from './catalog';
 import { installGate } from './gate';
 import { registerMemory } from './memory';
 import { registerPlanMode } from './plan';
 import { registerProfile } from './provider';
+import { registerTask, SUBAGENT_ENV } from './task';
 import { registerTodo } from './todo';
 import { registerWebFetch } from './webFetch';
 
@@ -33,10 +39,18 @@ function builtinCatalog(): CatalogModel[] {
 export default function codedeckPi(pi: ExtensionAPI): void {
   registerProfile(pi, process.env, builtinCatalog);
   installGate(pi);
+
+  const subagent = process.env[SUBAGENT_ENV];
+  if (subagent) {
+    if (subagent === 'general') registerWebFetch(pi);
+    return;
+  }
+
   registerTodo(pi);
   registerAsk(pi);
   registerPlanMode(pi);
   registerWebFetch(pi);
+  registerTask(pi, process.env);
   // The notes live in Pi's home, which the driver always names; without it
   // there is nowhere that is the machine's own to keep them.
   const home = process.env.PI_CODING_AGENT_DIR;

@@ -12,6 +12,7 @@ import { bundledPiExtension, installPiExtension, PI_PERMISSION_PREFIX, piExtensi
 import type { CatalogModel } from '../extension/catalog';
 import { installGate } from '../extension/gate';
 import { registerProfile } from '../extension/provider';
+import { subagentTools, taskResult } from '../extension/task';
 
 const read = (file: string): string => readFileSync(file, 'utf8');
 
@@ -125,6 +126,31 @@ describe('the provider profile', () => {
     expect(registered({})).toBeUndefined();
     expect(() => registered({ CODEDECK_PI_PROVIDER: '{ not json' })).not.toThrow();
     expect(registered({ CODEDECK_PI_PROVIDER: '{ not json' })).toBeUndefined();
+  });
+});
+
+describe('a sub-agent’s tools', () => {
+  const active = ['read', 'bash', 'edit', 'write', 'ls', 'grep', 'todo', 'ask', 'task', 'web_fetch', 'memory', 'mcp_tool'];
+
+  it('gives an explore sub-agent only the read-only built-ins the session has', () => {
+    expect(subagentTools('explore', active)).toEqual(['read', 'ls', 'grep']);
+  });
+
+  it('gives a general one the session’s built-ins and web_fetch, never a parent-only tool', () => {
+    expect(subagentTools('general', active)).toEqual(['read', 'bash', 'edit', 'write', 'ls', 'grep', 'web_fetch']);
+  });
+});
+
+describe('a task’s result', () => {
+  it('is the sub-agent’s last reply when it finished', () => {
+    expect(taskResult({ text: 'Found it in src/a.ts' })).toBe('Found it in src/a.ts');
+  });
+
+  it('fails when the sub-agent crashed or was stopped, even after it said something', () => {
+    expect(() => taskResult({ text: '', error: 'the sub-agent exited (1)' })).toThrow('the sub-agent exited (1)');
+    expect(() => taskResult({ text: 'Looking at src…', error: 'The sub-agent was stopped.' })).toThrow(
+      /was stopped[\s\S]*Its last reply before that:\nLooking at src/,
+    );
   });
 });
 

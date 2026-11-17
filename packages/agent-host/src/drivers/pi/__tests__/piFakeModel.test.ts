@@ -240,6 +240,35 @@ live('Pi against the fake model', () => {
   );
 
   it(
+    "runs a sub-agent whose own command asks through the parent's card, tagged with the sub-agent",
+    async () => {
+      const ctx = start({ permission: () => ({ outcome: 'selected', optionId: 'allow' }) });
+      await turn(ctx, '/task /tool');
+
+      const task = ctx.entries().find((entry) => entry.entryType === 'tool_call' && entry.toolName === 'task');
+      expect(task, 'the parent called task').toBeDefined();
+      const parentCallId = task!.entryType === 'tool_call' ? task!.callId : '';
+      // The task call itself needs no card; the child's command does, and
+      // the card says which sub-agent asks.
+      expect(ctx.permissions).toHaveLength(1);
+      expect(ctx.permissions[0]).toMatchObject({ toolName: 'bash', subagent: { label: 'general', parentCallId } });
+      expect(existsSync(path.join(cwd, 'codedeck-fake-model.txt'))).toBe(true);
+      // The child's work shows under the parent's call.
+      expect(ctx.entries()).toContainEqual(
+        expect.objectContaining({ entryType: 'tool_call', toolName: 'bash', subagent: { label: 'general', parentCallId } }),
+      );
+      expect(ctx.entries()).toContainEqual(
+        expect.objectContaining({ entryType: 'text', text: expect.stringContaining('tool-finished'), subagent: expect.anything() }),
+      );
+      // Its answer is the task's result, which the parent's model answers.
+      expect(ctx.entries()).toContainEqual(
+        expect.objectContaining({ entryType: 'tool_result', callId: parentCallId, text: expect.stringContaining('tool-finished') }),
+      );
+    },
+    TURN_MS,
+  );
+
+  it(
     "sizes a gateway's model from Pi's own catalog, which the extension reads inside Pi",
     async () => {
       // A gateway's id names its route before the model; the pinned Pi's

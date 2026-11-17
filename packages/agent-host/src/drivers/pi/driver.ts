@@ -56,10 +56,13 @@ import {
   PI_REQUEST_PREFIX,
   PI_TOOL,
   type PiAskReply,
+  type PiPermissionReply,
   type PiPlanReply,
   type PiRequest,
   type PiSessionReply,
+  type PiSubagent,
 } from './extension/protocol';
+import { EXTENSION_ENV, type SubagentUpdate } from './extension/task';
 import { todoItems } from './extension/todo';
 import { PI_LABEL } from './install';
 import { PiRpc, type PiRecord, type PiRpcOptions } from './rpc';
@@ -184,6 +187,8 @@ export class PiSession implements DriverSession {
   private readonly toolFacts = new Map<string, { name: string; input: Record<string, unknown> }>();
   /** Calls shown as their own card (CARD_TOOLS) rather than a tool row. */
   private readonly cardCalls = new Set<string>();
+  /** The last progress event shown per sub-agent, by its `task` call. */
+  private readonly subagentSeq = new Map<string, number>();
   /** Dialog requests Pi is waiting on, by id, so an interrupt or the
    *  session's end answers every one. */
   private readonly openUi = new Set<string>();
@@ -255,6 +260,8 @@ export class PiSession implements DriverSession {
     const entry = await this.deps.runtime.entryPoint();
     if (this.ended) return;
     const extension = installPiExtension(this.deps.home, bundledPiExtension());
+    // A sub-agent's Pi loads the same file (extension/task.ts).
+    this.env[EXTENSION_ENV] = extension;
     // Read before the process starts: a change made while it boots may or
     // may not be in it, and is then reported as not loaded yet.
     this.mcpVersion = this.deps.mcp.version;
@@ -383,6 +390,9 @@ export class PiSession implements DriverSession {
         return;
       case 'tool_execution_start':
         this.toolStart(record);
+        return;
+      case 'tool_execution_update':
+        this.toolUpdate(record);
         return;
       case 'tool_execution_end':
         this.toolEnd(record);
@@ -526,6 +536,7 @@ export class PiSession implements DriverSession {
     const callId = str(record.toolCallId);
     if (callId === undefined) return;
     this.toolFacts.delete(callId);
+    this.subagentSeq.delete(callId);
     const text = resultText(record.result);
     if (this.cardCalls.delete(callId)) {
       // The card was the call; only a failure is news (the question went
@@ -542,6 +553,59 @@ export class PiSession implements DriverSession {
         timestamp: now(),
       },
     ]);
+  }
+
+  /**
+   * A sub-agent's progress (extension/task.ts): each update carries one thing
+   * it did, numbered, and becomes an entry under the parent's `task` call.
+   * Its call ids are the child's own, so they are put under the parent's to
+   * stay apart from the session's (and from a parallel sub-agent's).
+   */
+  private toolUpdate(record: PiRecord): void {
+    if (record.toolName !== PI_TOOL.task) return;
+    const details = recordOf(recordOf(record.partialResult)?.details) as Partial<SubagentUpdate> | undefined;
+    const subagent = details?.subagent;
+    const event = details?.event;
+    const seq = num(details?.seq);
+    if (!subagent || typeof subagent.parentCallId !== 'string' || !event || seq === undefined) return;
+    // One update replaces the last in Pi's own UI; here each is one event,
+    // so an update seen twice must not show twice.
+    const last = this.subagentSeq.get(subagent.parentCallId) ?? 0;
+    if (seq <= last) return;
+    this.subagentSeq.set(subagent.parentCallId, seq);
+    const tag = { subagent: { label: subagent.label, parentCallId: subagent.parentCallId } };
+    const timestamp = now();
+    const childId = (id: string): string => `${subagent.parentCallId}/${id}`;
+    if (event.kind === 'text') {
+      this.emit([{ entryType: 'text', role: 'agent', text: event.text, ...tag, timestamp }]);
+    } else if (event.kind === 'tool_call') {
+      const call = piTool(event.toolName, event.args, this.reportUnknownTool);
+      const locations = toolLocations(event.args);
+      this.emit([
+        {
+          entryType: 'tool_call',
+          callId: childId(event.callId),
+          toolName: event.toolName,
+          kind: call.kind,
+          title: call.title,
+          ...(locations.length > 0 ? { locations } : {}),
+          ...(call.input !== undefined ? { input: call.input } : {}),
+          ...tag,
+          timestamp,
+        },
+      ]);
+    } else if (event.kind === 'tool_result') {
+      this.emit([
+        {
+          entryType: 'tool_result',
+          callId: childId(event.callId),
+          text: event.text === '' ? (event.isError ? 'The tool failed.' : '(no output)') : truncateToolResult(event.text),
+          ...(event.isError ? { isError: true } : {}),
+          ...tag,
+          timestamp,
+        },
+      ]);
+    }
   }
 
   /** Pi will try the failed request again: one status line says so, in
@@ -701,28 +765,41 @@ export class PiSession implements DriverSession {
       this.respond({ type: 'extension_ui_response', id, value: decision === 'allow' ? GATE.allow : GATE.plan });
       return;
     }
+    const answer = await this.card(id, toolName, input);
+    if (this.cancelledUi.has(id)) return;
+    if (answer === 'cancelled') {
+      this.respond({ type: 'extension_ui_response', id, cancelled: true });
+      return;
+    }
+    this.respond({ type: 'extension_ui_response', id, value: answer === 'allow' ? GATE.allow : GATE.deny });
+  }
+
+  /** The phone's permission card for one call, and what the user chose. A
+   *  sub-agent's call names the sub-agent, so the card says who asks. */
+  private async card(
+    requestId: string,
+    toolName: string,
+    input: Record<string, unknown>,
+    subagent?: PiSubagent,
+  ): Promise<'allow' | 'deny' | 'cancelled'> {
     const call = piTool(toolName, input, this.reportUnknownTool);
     const locations = toolLocations(input);
     const request: Omit<PermissionRequest, 'sessionId'> = {
-      requestId: id,
+      requestId,
       toolName,
       kind: call.kind,
       title: call.title,
       ...(locations.length > 0 ? { locations } : {}),
+      ...(subagent ? { subagent: { label: subagent.label, parentCallId: subagent.parentCallId } } : {}),
       options: [PERMISSION_ALLOW, { ...ALLOW_SESSION, label: `Allow ${toolName} for this session` }, PERMISSION_DENY],
     };
     const outcome: SelectOutcome = await this.ctx.requestPermission(request);
-    if (this.cancelledUi.has(id)) return;
-    if (outcome.outcome === 'cancelled') {
-      this.respond({ type: 'extension_ui_response', id, cancelled: true });
-      return;
-    }
+    if (outcome.outcome === 'cancelled') return 'cancelled';
     if (outcome.optionId === PERMISSION_ALLOW.id || outcome.optionId === ALLOW_SESSION.id) {
       if (outcome.optionId === ALLOW_SESSION.id) this.allowedTools.add(toolName);
-      this.respond({ type: 'extension_ui_response', id, value: 'allow' });
-      return;
+      return 'allow';
     }
-    this.respond({ type: 'extension_ui_response', id, value: 'deny' });
+    return 'deny';
   }
 
   /**
@@ -800,6 +877,21 @@ export class PiSession implements DriverSession {
         this.sessionMode = outcome.optionId;
         this.ctx.emit({ type: 'info', mode: this.sessionMode });
         return { approved: true, mode: this.sessionMode } satisfies PiPlanReply;
+      }
+      case 'permission': {
+        // A sub-agent's call, held by its own gate: the session's mode
+        // decides it exactly as it decides the session's own calls.
+        const decision = this.decide(body.toolName, body.input ?? {});
+        if (decision === 'allow') return { allow: true } satisfies PiPermissionReply;
+        if (decision === 'plan') return { allow: false, plan: true } satisfies PiPermissionReply;
+        const answer = await this.card(
+          `${body.subagent.parentCallId}/${body.callId}`,
+          body.toolName,
+          body.input ?? {},
+          body.subagent,
+        );
+        if (answer === 'cancelled') return undefined;
+        return { allow: answer === 'allow' } satisfies PiPermissionReply;
       }
       default:
         return undefined;

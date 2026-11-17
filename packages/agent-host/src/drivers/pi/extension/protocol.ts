@@ -86,6 +86,8 @@ export interface PiPlanReply {
 
 export interface PiPermissionReply {
   allow: boolean;
+  /** Refused because the session is in plan mode (the model is told so). */
+  plan?: boolean;
 }
 
 export interface PiSessionReply {
