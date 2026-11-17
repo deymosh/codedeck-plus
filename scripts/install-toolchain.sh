@@ -30,14 +30,6 @@
 # real sandbox that had curl/tar/python3 but no `xz` or `unzip` and no
 # root/apt access to install them.
 #
-# One real exception this script does NOT cover: building apps/mobile's
-# Tauri DESKTOP target on Linux needs system GUI libraries (webkit2gtk,
-# gtk3, libayatana-appindicator3, librsvg2, patchelf, pkg-config) — genuine
-# OS packages (GTK/WebKit), not something vendorable into a project folder.
-# Install those via your distro's package manager if you need that build;
-# everything else in this repo (crates/*, apps/android, the TS workspace)
-# does not need them.
-#
 # Linux, and Windows (Git Bash). Node on Windows is a zip with nothing to
 # link. The crates compile C (ring, secp256k1, sqlite) and link executables,
 # which on Windows normally means the MSVC build tools — a system install this
@@ -313,7 +305,7 @@ fi
 # Cargo links host binaries (build scripts, proc macros, test executables)
 # through a system `cc`, which a bare machine lacks. zig cc bundles clang
 # plus glibc headers/startup files, so it works with nothing from the OS;
-# pkg-config-driven libs (Tauri desktop) are still the distro's job.
+# pkg-config-driven system libraries are still the distro's job.
 # env.sh only puts toolchain/bin (the shims below) on PATH when the machine
 # has no cc/gcc/clang at all.
 ZIG_DIR="$TOOLCHAIN_DIR/zig"

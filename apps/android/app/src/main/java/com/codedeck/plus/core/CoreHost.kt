@@ -46,8 +46,8 @@ import uniffi.client_ffi.UniffiUiView
 data class LiveReply(val key: String, val text: String, val id: Long)
 
 /**
- * The Kotlin-side counterpart to `apps/mobile/src/core/nativeCore.ts` and
- * `apps/mobile/src-tauri/src/native_core.rs`'s `TauriObserver`: owns the
+ * The Kotlin side of the core (the Tauri app's `TauriObserver` was its
+ * counterpart there): owns the
  * generated `Core` object, implements the generated `CoreListener` callback
  * interface, and republishes each callback as a `StateFlow`/`Flow` a
  * Composable can collect. Nothing here understands the wire protocol, a

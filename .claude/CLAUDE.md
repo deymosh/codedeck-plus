@@ -24,8 +24,10 @@ the upstream did not design for:
   upstream is re-implemented here as an ordinary change.
 - The **editable** code is `crates/*`, `packages/agent-host`,
   `packages/vscode-extension` and `apps/android`.
-  `apps/mobile` (the Tauri app) is frozen on protocol v10, outside the pnpm
-  workspace and CI; it is kept as the base of a future desktop client.
+  The former Tauri app (`apps/mobile`, protocol v10) is no longer on
+  master; the tag `archive/tauri-app` points at the last commit that has it, as the
+  base of a future desktop client. Comments that name a file under
+  `apps/mobile/` ("Port of …") mean that file at the tag.
 - **`crates/protocol` is the single source of truth for the phone wire**, and
   **`crates/agent-protocol` for the driver protocol** (bridge ⇄ agent host).
   Decoders are **total** (they return a result, never panic or throw).

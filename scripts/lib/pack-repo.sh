@@ -9,7 +9,7 @@
 # Everything .gitignore covers — node_modules, target/, dist/, .env, data/,
 # .pnpm-store, toolchain/ — therefore never leaves the host, with no exclude
 # list to keep in sync. Pathspecs narrow it further per job (e.g. a Rust-only
-# job does not need apps/mobile's web sources); `:(exclude)<path>` works too.
+# job does not need the agent host's sources); `:(exclude)<path>` works too.
 #
 # The tarball is piped straight into `docker exec -i ... tar -x`: no temp file
 # on the host (Git Bash's `docker cp` mishandles /tmp paths on Windows) and no

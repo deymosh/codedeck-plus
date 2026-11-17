@@ -1,8 +1,5 @@
 [versions]
-# Latest stable of every toolchain piece as of this week — not the versions
-# apps/mobile's Tauri-generated gen/android happens to sit on (AGP 8.11/
-# Kotlin 1.9.25/compileSdk 36), which is Tauri's own scaffold and is
-# regenerated on demand rather than kept current.
+# Latest stable of every toolchain piece as of the last bump.
 agp = "9.4.1"
 kotlin = "2.4.21"
 coreKtx = "1.19.1"

@@ -17,7 +17,7 @@
 //!
 //! `TranscriptRowsView`'s crossing goes one step further: `client_core`'s
 //! `presentation::display_entries` module (already a complete, already-tested
-//! port of `apps/mobile/src/ui/transcript/displayEntries.ts` — grouping,
+//! port of the Tauri app's `displayEntries.ts` — grouping,
 //! answered-state detection, the pending-permission finder — but unwired
 //! into any view until now) computes the *grouped* rows here, once, so
 //! Android never re-implements that algorithm. The grouped list and the

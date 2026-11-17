@@ -4,9 +4,8 @@
 //!
 //! Every `client_runtime`/`client_core` call site logs through the plain
 //! `log` facade (`log::info!`, `log::warn!`, …) so the same instrumentation
-//! also works for `apps/mobile/src-tauri` the day it wires its own backend —
-//! this module is the ONLY Android-specific piece: it just decides where
-//! those records go.
+//! works for any other client that wires its own backend — this module is
+//! the ONLY Android-specific piece: it just decides where those records go.
 //!
 //! Without this, `Core::new`'s dedicated OS thread has no logging backend at
 //! all, and — unlike a typical Linux process — Zygote dups this app's own
