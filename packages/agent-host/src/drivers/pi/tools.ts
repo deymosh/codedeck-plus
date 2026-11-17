@@ -16,6 +16,7 @@
 import * as path from 'node:path';
 import { findInDirs, findOnPath } from '../../sdk/executable';
 import { oneLine, readToolCall, str, ToolKind, type ToolCallRead, type ToolDialects } from '../../sdk/tools';
+import { PI_TOOL } from './extension/protocol';
 
 type Input = Record<string, unknown>;
 
@@ -51,6 +52,101 @@ export const PI_TOOLS: ToolDialects = {
 };
 
 /**
+ * The tools the CodeDeck Pi extension adds (extension/protocol.ts). Apart
+ * from Pi's own table: the drift test holds that one to exactly the names the
+ * installed Pi declares.
+ */
+export const CODEDECK_TOOLS: ToolDialects = {
+  [PI_TOOL.todo]: { kind: ToolKind.Think, title: () => 'Checklist' },
+  [PI_TOOL.ask]: { kind: ToolKind.Other, title: () => 'Question' },
+  [PI_TOOL.exitPlan]: { kind: ToolKind.SwitchMode, title: () => 'Plan' },
+  [PI_TOOL.task]: { kind: ToolKind.Agent, title: (input) => oneLine(str(input.description)), detail: (input) => str(input.prompt) },
+  [PI_TOOL.bashBackground]: { kind: ToolKind.Execute, title: runTitle, detail: (input) => str(input.command) },
+  [PI_TOOL.taskOutput]: { kind: ToolKind.Read, title: (input) => str(input.id) },
+  [PI_TOOL.taskStop]: { kind: ToolKind.Execute, title: (input) => str(input.id) },
+  [PI_TOOL.webFetch]: { kind: ToolKind.Fetch, title: (input) => str(input.url) },
+  [PI_TOOL.memory]: { kind: ToolKind.Edit, title: (input) => `${str(input.action)} ${str(input.name)}`.trim() },
+};
+
+/**
+ * The extension's tools that run without a card in every mode: they change
+ * nothing in the project or outside the session (a checklist, a question,
+ * the plan card, a sub-agent whose own calls each pass the gate, a
+ * background task's output, the session's own notes), or they stop what the
+ * session started. Starting a background command asks like any command, and
+ * a fetch reaches the network, so neither is here.
+ */
+export const CODEDECK_SAFE_TOOLS: ReadonlySet<string> = new Set([
+  PI_TOOL.todo,
+  PI_TOOL.ask,
+  PI_TOOL.exitPlan,
+  PI_TOOL.task,
+  PI_TOOL.taskOutput,
+  PI_TOOL.taskStop,
+  PI_TOOL.memory,
+]);
+
+/**
+ * Commands plan mode lets `bash` run, each with the options that would make
+ * it write a file or run another program (`sort -o`, `rg --pre`, `fd -x`,
+ * `find -delete`, `git log --output`). A command not listed is not
+ * read-only; `uniq` is left out because its second operand is a file it
+ * writes.
+ */
+const READ_ONLY_COMMANDS: ReadonlyMap<string, RegExp | null> = new Map([
+  ['cat', null], ['head', null], ['tail', null], ['wc', null], ['cut', null], ['tr', null], ['pwd', null],
+  ['echo', null], ['basename', null], ['dirname', null], ['realpath', null], ['which', null], ['file', null],
+  ['stat', null], ['du', null], ['ls', null], ['diff', null],
+  ['grep', null],
+  ['rg', /^--pre(=|$)|^--hostname-bin(=|$)/],
+  ['sort', /^-o|^--output(=|$)|^--compress-program(=|$)/],
+  ['tree', /^-o$|^-o.|^--output/],
+  ['find', /^-(exec|execdir|ok|okdir|delete|fprint|fprint0|fprintf|fls)$/],
+  ['fd', /^-x$|^-X$|^--exec(-batch)?(=|$)/],
+  ['fdfind', /^-x$|^-X$|^--exec(-batch)?(=|$)/],
+  // `-O` (alone or in a bundle such as `-nO`) is `git grep`'s
+  // --open-files-in-pager: it runs the program it names on the matches.
+  ['git', /^--output(=|$)|^--ext-diff$|^--textconv$|^-c$|^--exec-path(=|$)|^--open-files-in-pager|^-[A-Za-z]*O/],
+]);
+const READ_ONLY_GIT = new Set(['status', 'log', 'diff', 'show', 'blame', 'ls-files', 'grep', 'rev-parse', 'describe']);
+
+/**
+ * Whether a command could read a process's environment from the filesystem:
+ * a `proc` path segment or the word `environ`, or a glob inside a path,
+ * which could spell either (`/pr?c/self/env*`). Plan mode refuses these in
+ * either shell; a glob without a path (`-name "*.ts"`) is still fine.
+ */
+function readsEnvironment(command: string): boolean {
+  if (/environ|(^|[\s/\\'"=])proc([/\\'"\s]|$)/i.test(command)) return true;
+  return command.split(/\s+/).some((word) => /[*?[]/.test(word) && /[/\\]/.test(word));
+}
+
+/**
+ * Whether a shell command only reads, for plan mode: every part of a pipeline
+ * or a `&&`/`||`/`;` chain is a listed reading command without its writing
+ * options, and nothing redirects, substitutes another command or runs one in
+ * the background. git may run only its reading subcommands. Nothing may
+ * read the environment — `env`/`printenv` are not listed, and no `$`
+ * expansion or a process's `environ` file passes — since it would put
+ * secrets into the transcript. Plan mode is a guardrail against a model
+ * changing things too early, not a sandbox: anything not recognised is
+ * refused.
+ */
+export function isReadOnlyCommand(command: string): boolean {
+  if (command.trim() === '' || /[\n\r`<>$]/.test(command) || readsEnvironment(command)) return false;
+  return command.split(/\|\||&&|[|;]/).every((part) => {
+    if (part.includes('&')) return false;
+    const words = part.trim().split(/\s+/);
+    const name = words[0] ?? '';
+    if (!READ_ONLY_COMMANDS.has(name)) return false;
+    const writes = READ_ONLY_COMMANDS.get(name);
+    if (writes && words.slice(1).some((word) => writes.test(word))) return false;
+    if (name === 'git') return READ_ONLY_GIT.has(words.find((word, i) => i > 0 && !word.startsWith('-')) ?? '');
+    return true;
+  });
+}
+
+/**
  * The tools this driver's `ask` mode runs without a card: Pi's own read-only
  * set, the same four `--tools read,grep,find,ls` selects. A call to any other
  * tool — including one an operator's extension registered — asks.
@@ -80,8 +176,10 @@ export function piExtraTools(home: string, env: NodeJS.ProcessEnv, platform: Nod
   return ['ls', ...(has('rg') ? ['grep'] : []), ...(has('fd', 'fdfind') ? ['find'] : [])];
 }
 
+const PI_ALL_TOOLS: ToolDialects = { ...PI_TOOLS, ...CODEDECK_TOOLS };
+
 /** Read one of this agent's tool calls. `report` is told a name this table
  *  does not list (`unknownToolReporter`). */
 export function piTool(toolName: string, input: Input, report?: (toolName: string) => void): ToolCallRead {
-  return readToolCall(PI_TOOLS, toolName, input, report);
+  return readToolCall(PI_ALL_TOOLS, toolName, input, report);
 }

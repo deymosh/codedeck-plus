@@ -193,6 +193,53 @@ live('Pi against the fake model', () => {
   );
 
   it(
+    'asks through the question card and gives the model the answer, with no tool row',
+    async () => {
+      const ctx = start({
+        question: () => ({ outcome: 'answered', answers: [{ type: 'selected', labels: ['Blue'] }] }),
+      });
+      await turn(ctx, '/question');
+
+      // No permission card: asking is the card.
+      expect(ctx.permissions).toHaveLength(0);
+      expect(ctx.questions).toHaveLength(1);
+      expect(ctx.questions[0]!.questions[0]).toMatchObject({ question: 'Which color?', header: 'Color' });
+      expect(ctx.questions[0]!.questions[0]!.options?.map((option) => option.label)).toContain('Blue');
+      expect(ctx.entries().some((entry) => entry.entryType === 'tool_call' && entry.toolName === 'ask')).toBe(false);
+      // The fake model echoes the tool result it was sent.
+      expect(ctx.entries()).toContainEqual(
+        expect.objectContaining({ entryType: 'text', role: 'agent', text: expect.stringContaining('Blue') }),
+      );
+    },
+    TURN_MS,
+  );
+
+  it(
+    'in plan mode, refuses a command that writes and presents the plan as a card whose approval switches the mode',
+    async () => {
+      const ctx = start(
+        { plan: () => ({ outcome: 'selected', optionId: 'auto-edit' }) },
+        { mode: 'plan' },
+      );
+      await turn(ctx, '/tool');
+      // The write is refused without a card, with the reason that says what to do.
+      expect(ctx.permissions).toHaveLength(0);
+      expect(ctx.entries()).toContainEqual(
+        expect.objectContaining({ entryType: 'tool_result', isError: true, text: expect.stringContaining('plan mode') }),
+      );
+      expect(existsSync(path.join(cwd, 'codedeck-fake-model.txt'))).toBe(false);
+
+      await turn(ctx, '/plan-approval');
+      expect(ctx.plans).toHaveLength(1);
+      expect(ctx.plans[0]!.options.map((option) => option.id)).toEqual(['ask', 'auto-edit', 'revise']);
+      expect(ctx.plans[0]!.revise).toBe('revise');
+      expect(ctx.entries()).toContainEqual(expect.objectContaining({ entryType: 'plan', text: expect.stringContaining('Do the thing') }));
+      expect(ctx.events).toContainEqual(expect.objectContaining({ type: 'info', mode: 'auto-edit' }));
+    },
+    TURN_MS,
+  );
+
+  it(
     "sizes a gateway's model from Pi's own catalog, which the extension reads inside Pi",
     async () => {
       // A gateway's id names its route before the model; the pinned Pi's

@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { PI_READ_ONLY_TOOLS, PI_TOOLS, piExtraTools, piTool } from '../tools';
+import { PI_READ_ONLY_TOOLS, PI_TOOLS, isReadOnlyCommand, piExtraTools, piTool } from '../tools';
 
 describe('piExtraTools', () => {
   const exe = (dir: string, name: string): void => {
@@ -27,6 +27,60 @@ describe('piExtraTools', () => {
     exe(path.join(home, 'bin'), 'rg');
     exe(onPath, 'fdfind');
     expect(piExtraTools(home, env)).toEqual(['ls', 'grep', 'find']);
+  });
+});
+
+describe('isReadOnlyCommand (plan mode)', () => {
+  it('lets commands that only read through, alone and in pipelines', () => {
+    for (const command of [
+      'git status',
+      'git log --oneline -5',
+      'git diff HEAD~1 -- src',
+      'cat package.json | head -20',
+      'grep -rn TODO src && wc -l src/main.ts',
+      'rg --files | sort',
+      'find . -name "*.ts" -type f',
+      'ls -la; pwd',
+    ]) {
+      expect(isReadOnlyCommand(command), command).toBe(true);
+    }
+  });
+
+  it('refuses anything that writes, runs another program, or is not known', () => {
+    for (const command of [
+      'echo x > file.txt',
+      'cat a >> b',
+      'npm install',
+      'rm -rf build',
+      'git commit -m x',
+      'git checkout main',
+      'git log --output=log.txt',
+      'git -c core.pager=sh log',
+      'find . -name x -delete',
+      'find . -exec rm {} ;',
+      'sort -o out.txt in.txt',
+      'rg --pre ./run.sh x',
+      'fd -x rm',
+      'cat $(which node)',
+      'cat `which node`',
+      'grep x file & rm y',
+      'env',
+      'printenv TOKEN',
+      'echo $GITHUB_TOKEN',
+      'echo ${GITHUB_TOKEN}',
+      'cat /proc/self/environ',
+      'cat /proc/self/env*',
+      'cat /pr?c/self/en*',
+      // git grep's -O runs a program on the matches.
+      'git grep -Osh TODO',
+      'git grep -nO TODO',
+      'git grep --open-files-in-pager=sh TODO',
+      'python -c "print(1)"',
+      'uniq in.txt out.txt',
+      '',
+    ]) {
+      expect(isReadOnlyCommand(command), command).toBe(false);
+    }
   });
 });
 

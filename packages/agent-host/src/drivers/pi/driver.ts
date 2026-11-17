@@ -50,9 +50,27 @@ import { PiMcp } from './mcp';
 import { PiPlugins, piCliRunner, type PiCliRunner } from './plugins';
 import { buildPiEnv } from './env';
 import { PI_PERMISSION_PREFIX, bundledPiExtension, installPiExtension } from './extension';
+import { GATE } from './extension/gate';
+import {
+  PI_PLAN_MODE,
+  PI_REQUEST_PREFIX,
+  PI_TOOL,
+  type PiAskReply,
+  type PiPlanReply,
+  type PiRequest,
+  type PiSessionReply,
+} from './extension/protocol';
+import { todoItems } from './extension/todo';
 import { PI_LABEL } from './install';
 import { PiRpc, type PiRecord, type PiRpcOptions } from './rpc';
-import { PI_EDIT_TOOLS, PI_READ_ONLY_TOOLS, piExtraTools, piTool } from './tools';
+import {
+  CODEDECK_SAFE_TOOLS,
+  PI_EDIT_TOOLS,
+  PI_READ_ONLY_TOOLS,
+  isReadOnlyCommand,
+  piExtraTools,
+  piTool,
+} from './tools';
 import { PI_STYLE } from './style';
 import { PiRuntime, piCommand, type PiRuntimeOptions } from './runtime';
 
@@ -61,12 +79,26 @@ export const PI_AGENT_ID = 'pi';
 const ASK_MODE = 'ask';
 const AUTO_EDIT_MODE = 'auto-edit';
 const YOLO_MODE = 'yolo';
+const PLAN_MODE = PI_PLAN_MODE;
 const DEFAULT_MODE = ASK_MODE;
 const PI_MODES = [
   { id: ASK_MODE, label: 'Ask', description: 'Ask before each tool call, except for read-only tools' },
   { id: AUTO_EDIT_MODE, label: 'Auto edit', description: 'Edit files without asking; ask before running commands' },
+  { id: PLAN_MODE, label: 'Plan', description: 'Explore read-only, then present a plan to approve before anything changes' },
   { id: YOLO_MODE, label: 'YOLO', description: 'Run every tool without asking' },
 ];
+
+/** The plan card's choices: approving picks the mode the work runs in. */
+const PLAN_REVISE = 'revise';
+const PLAN_OPTIONS: OptionChoice[] = [
+  { id: ASK_MODE, label: 'Approve, ask before each change' },
+  { id: AUTO_EDIT_MODE, label: 'Approve, edit without asking' },
+  { id: PLAN_REVISE, label: 'Keep planning' },
+];
+
+/** The extension's tools whose own card stands in for the tool call: the
+ *  question card, the plan card, the checklist. */
+const CARD_TOOLS: ReadonlySet<string> = new Set([PI_TOOL.ask, PI_TOOL.exitPlan, PI_TOOL.todo]);
 
 /** Pi's thinking levels (`--thinking`, `set_thinking_level`). A model that
  *  does not support one clamps it, as Pi does in its own UI; the list is the
@@ -150,6 +182,8 @@ export class PiSession implements DriverSession {
   private sessionMode: string;
   private readonly allowedTools = new Set<string>();
   private readonly toolFacts = new Map<string, { name: string; input: Record<string, unknown> }>();
+  /** Calls shown as their own card (CARD_TOOLS) rather than a tool row. */
+  private readonly cardCalls = new Set<string>();
   /** Dialog requests Pi is waiting on, by id, so an interrupt or the
    *  session's end answers every one. */
   private readonly openUi = new Set<string>();
@@ -460,6 +494,18 @@ export class PiSession implements DriverSession {
     if (callId === undefined || toolName === undefined) return;
     const input = recordOf(record.args) ?? {};
     this.toolFacts.set(callId, { name: toolName, input });
+    if (CARD_TOOLS.has(toolName)) {
+      this.cardCalls.add(callId);
+      if (toolName === PI_TOOL.todo) {
+        const items = todoItems(input).map((item) => ({
+          text: item.content,
+          status: item.status,
+          ...(item.activeForm !== undefined ? { activeText: item.activeForm } : {}),
+        }));
+        this.emit([{ entryType: 'todos', items, callId, timestamp: now() }]);
+      }
+      return;
+    }
     const call = piTool(toolName, input, this.reportUnknownTool);
     const locations = toolLocations(input);
     this.emit([
@@ -480,9 +526,13 @@ export class PiSession implements DriverSession {
     const callId = str(record.toolCallId);
     if (callId === undefined) return;
     this.toolFacts.delete(callId);
-    // The facts are gone by now; a call the permission gate hid would be
-    // known here, but nothing is hidden: Pi's own question tools are none.
     const text = resultText(record.result);
+    if (this.cardCalls.delete(callId)) {
+      // The card was the call; only a failure is news (the question went
+      // unanswered, the plan was empty).
+      if (record.isError === true && text !== '') this.emit([{ entryType: 'status', text, timestamp: now() }]);
+      return;
+    }
     this.emit([
       {
         entryType: 'tool_result',
@@ -587,6 +637,10 @@ export class PiSession implements DriverSession {
       await this.answerPermission(id, title.slice(PI_PERMISSION_PREFIX.length));
       return;
     }
+    if (method === 'editor' && title.startsWith(PI_REQUEST_PREFIX)) {
+      await this.answerRequest(id, str(record.prefill) ?? '');
+      return;
+    }
     if (method === 'select') {
       const options = Array.isArray(record.options) ? record.options.filter((o): o is string => typeof o === 'string') : [];
       const outcome = await this.ask(id, title || 'Pi asks', options);
@@ -641,16 +695,12 @@ export class PiSession implements DriverSession {
   private async answerPermission(id: string, callId: string): Promise<void> {
     const facts = this.toolFacts.get(callId);
     const toolName = facts?.name ?? 'tool';
-    if (
-      this.sessionMode === YOLO_MODE ||
-      this.allowedTools.has(toolName) ||
-      PI_READ_ONLY_TOOLS.has(toolName) ||
-      (this.sessionMode === AUTO_EDIT_MODE && PI_EDIT_TOOLS.has(toolName))
-    ) {
-      this.respond({ type: 'extension_ui_response', id, value: 'allow' });
+    const input = facts?.input ?? {};
+    const decision = this.decide(toolName, input);
+    if (decision !== 'ask') {
+      this.respond({ type: 'extension_ui_response', id, value: decision === 'allow' ? GATE.allow : GATE.plan });
       return;
     }
-    const input = facts?.input ?? {};
     const call = piTool(toolName, input, this.reportUnknownTool);
     const locations = toolLocations(input);
     const request: Omit<PermissionRequest, 'sessionId'> = {
@@ -673,6 +723,87 @@ export class PiSession implements DriverSession {
       return;
     }
     this.respond({ type: 'extension_ui_response', id, value: 'deny' });
+  }
+
+  /**
+   * What the session's mode says of one call, before any card: run it, refuse
+   * it as plan mode does, or ask the phone. Plan mode lets through only what
+   * reads (Pi's read-only tools, a read-only shell command, the extension's
+   * own safe tools) and asks before a fetch; everything else is refused with
+   * the plan reason, which tells the model to present its plan.
+   */
+  private decide(toolName: string, input: Record<string, unknown>): 'allow' | 'plan' | 'ask' {
+    const reads = PI_READ_ONLY_TOOLS.has(toolName) || CODEDECK_SAFE_TOOLS.has(toolName);
+    if (this.sessionMode === PLAN_MODE) {
+      if (reads) return 'allow';
+      if (toolName === 'bash' && typeof input.command === 'string' && isReadOnlyCommand(input.command)) return 'allow';
+      return toolName === PI_TOOL.webFetch ? 'ask' : 'plan';
+    }
+    if (
+      this.sessionMode === YOLO_MODE ||
+      reads ||
+      this.allowedTools.has(toolName) ||
+      (this.sessionMode === AUTO_EDIT_MODE && PI_EDIT_TOOLS.has(toolName))
+    ) {
+      return 'allow';
+    }
+    return 'ask';
+  }
+
+  /**
+   * One request from the extension (extension/protocol.ts): answered with the
+   * reply as JSON, or cancelled when there is none to give — the phone did
+   * not answer, or the request is not one this driver serves.
+   */
+  private async answerRequest(id: string, prefill: string): Promise<void> {
+    let body: PiRequest | undefined;
+    try {
+      body = JSON.parse(prefill) as PiRequest;
+    } catch {
+      body = undefined;
+    }
+    const reply = body !== undefined ? await this.serve(body) : undefined;
+    if (this.cancelledUi.has(id)) return;
+    if (reply === undefined) {
+      this.respond({ type: 'extension_ui_response', id, cancelled: true });
+      return;
+    }
+    this.respond({ type: 'extension_ui_response', id, value: JSON.stringify(reply) });
+  }
+
+  private async serve(body: PiRequest): Promise<unknown> {
+    switch (body.op) {
+      case 'session':
+        return { mode: this.sessionMode } satisfies PiSessionReply;
+      case 'ask': {
+        const specs: QuestionSpec[] = body.questions.map((q) => ({
+          question: q.question,
+          ...(q.header !== undefined ? { header: q.header } : {}),
+          ...(q.options !== undefined ? { options: q.options } : {}),
+          ...(q.multiSelect === true ? { multiSelect: true } : {}),
+        }));
+        const outcome = await this.ctx.askQuestion(body.callId, specs);
+        if (outcome.outcome === 'cancelled') return undefined;
+        return {
+          answers: outcome.answers.map((answer) => (answer.type === 'selected' ? { selected: answer.labels } : { text: answer.text })),
+        } satisfies PiAskReply;
+      }
+      case 'plan': {
+        this.emit([{ entryType: 'plan', text: body.plan, timestamp: now() }]);
+        const outcome = await this.ctx.requestPlanApproval(body.callId, PLAN_OPTIONS, PLAN_REVISE);
+        if (outcome.outcome !== 'selected') return undefined;
+        if (outcome.optionId === PLAN_REVISE) {
+          const feedback = outcome.feedback?.trim();
+          return { approved: false, ...(feedback ? { feedback } : {}) } satisfies PiPlanReply;
+        }
+        if (!PLAN_OPTIONS.some((option) => option.id === outcome.optionId)) return undefined;
+        this.sessionMode = outcome.optionId;
+        this.ctx.emit({ type: 'info', mode: this.sessionMode });
+        return { approved: true, mode: this.sessionMode } satisfies PiPlanReply;
+      }
+      default:
+        return undefined;
+    }
   }
 
   /** Answer every dialog still waiting with "cancelled". Pi does not settle

@@ -150,9 +150,19 @@ describe('the permission gate', () => {
       block: true,
       reason: 'Denied by the user',
     });
-    expect(asked).toEqual({ title: `${PI_PERMISSION_PREFIX}call_1`, options: ['allow', 'deny'] });
+    expect(asked).toEqual({ title: `${PI_PERMISSION_PREFIX}call_1`, options: ['allow', 'deny', 'plan'] });
 
     const allowing = { ui: { select: () => Promise.resolve('allow') } };
     await expect(handler!({ toolCallId: 'call_2', toolName: 'bash', input: {} }, allowing)).resolves.toBeUndefined();
+
+    // Plan mode's refusal tells the model what to do instead.
+    const planning = { ui: { select: () => Promise.resolve('plan') } };
+    await expect(handler!({ toolCallId: 'call_3', toolName: 'bash', input: {} }, planning)).resolves.toEqual({
+      block: true,
+      reason: expect.stringContaining('exit_plan'),
+    });
+    // A dialog nobody answered blocks, as a denial does.
+    const cancelled = { ui: { select: () => Promise.resolve(undefined) } };
+    await expect(handler!({ toolCallId: 'call_4', toolName: 'bash', input: {} }, cancelled)).resolves.toMatchObject({ block: true });
   });
 });

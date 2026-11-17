@@ -241,10 +241,12 @@ export function offeredTools(body, shape) {
  *  it, `/tool` there would fall back to the first tool offered, which is
  *  its question tool. */
 const SHELL_TOOLS = ['Bash', 'bash', 'pwsh', 'shell', 'execute', 'run_command', 'run_shell_command'];
-/** Names that ask the user a question. */
-const QUESTION_TOOLS = ['AskUserQuestion', 'ask_user_question', 'question', 'ask_user'];
-/** Names that propose a plan for approval. */
-const PLAN_TOOLS = ['ExitPlanMode', 'exit_plan_mode'];
+/** Names that ask the user a question (`ask` is the CodeDeck Pi
+ *  extension's, which takes AskUserQuestion's shape). */
+const QUESTION_TOOLS = ['AskUserQuestion', 'ask_user_question', 'question', 'ask_user', 'ask'];
+/** Names that propose a plan for approval (`exit_plan` is the CodeDeck Pi
+ *  extension's, which takes `{plan}` too). */
+const PLAN_TOOLS = ['ExitPlanMode', 'exit_plan_mode', 'exit_plan'];
 /** What each scenario's call prefers to be named — the agent's own tool for
  *  it, when the request offers one. */
 const SCENARIO_TOOLS = { question: QUESTION_TOOLS, 'plan-approval': PLAN_TOOLS, tool: SHELL_TOOLS, background: SHELL_TOOLS };

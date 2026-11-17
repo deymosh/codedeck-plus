@@ -81,7 +81,7 @@ describe('PiDriver.info', () => {
     const info = driver.info();
     expect(info.id).toBe('pi');
     expect(info.displayName).toBe('Pi');
-    expect(info.modes?.map((mode) => mode.id)).toEqual(['ask', 'auto-edit', 'yolo']);
+    expect(info.modes?.map((mode) => mode.id)).toEqual(['ask', 'auto-edit', 'plan', 'yolo']);
     expect(info.efforts?.map((effort) => effort.id)).toEqual(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
     expect(info.defaultMode).toBe('ask');
     expect(info.defaultEffort).toBe('medium');
@@ -459,7 +459,7 @@ describe('PiSession commands and options', () => {
   it('refuses a mode or effort Pi does not have', async () => {
     const h = withDriver();
     await ready(h);
-    await expect(h.session!.setOption('mode', 'plan')).rejects.toThrow(/no mode 'plan'/);
+    await expect(h.session!.setOption('mode', 'bypass')).rejects.toThrow(/no mode 'bypass'/);
     await expect(h.session!.setOption('effort', 'turbo')).rejects.toThrow(/no thinking level 'turbo'/);
   });
 });
@@ -487,5 +487,41 @@ describe('PiDriver models and conversations', () => {
   it('refuses to delete a path that is not a session id', async () => {
     const h = withDriver();
     await expect(h.driver.deleteConversation('../state', '/work')).rejects.toThrow(/not a Pi session id/);
+  });
+});
+
+describe('PiSession checklist', () => {
+  it('shows a todo call as the checklist, not as a tool row', async () => {
+    const h = withDriver();
+    const ctx = await ready(h);
+    const todos = [
+      { content: 'Read the code', status: 'completed' },
+      { content: 'Run the tests', status: 'in_progress', activeForm: 'Running the tests' },
+      { content: '', status: 'pending' },
+      { content: 'Ship it', status: 'later' },
+    ];
+    h.fake.emit({ type: 'tool_execution_start', toolCallId: 'call_t', toolName: 'todo', args: { todos } });
+    h.fake.emit({
+      type: 'tool_execution_end',
+      toolCallId: 'call_t',
+      toolName: 'todo',
+      result: { content: [{ type: 'text', text: 'Checklist updated' }] },
+      isError: false,
+    });
+    await ctx.waitFor((event) => event.type === 'entries' && event.entries.some((entry) => entry.entryType === 'todos'));
+
+    expect(entries(ctx)).toContainEqual(
+      expect.objectContaining({
+        entryType: 'todos',
+        callId: 'call_t',
+        items: [
+          { text: 'Read the code', status: 'completed' },
+          { text: 'Run the tests', status: 'in_progress', activeText: 'Running the tests' },
+          // A blank item is dropped; an unknown status reads as pending.
+          { text: 'Ship it', status: 'pending' },
+        ],
+      }),
+    );
+    expect(entries(ctx).some((entry) => entry.entryType === 'tool_call' || entry.entryType === 'tool_result')).toBe(false);
   });
 });

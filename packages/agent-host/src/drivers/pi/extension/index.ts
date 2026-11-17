@@ -12,8 +12,11 @@
 import { getBuiltinModels, getBuiltinProviders } from '@earendil-works/pi-ai/providers/all';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import type { CatalogModel } from './catalog';
+import { registerAsk } from './ask';
 import { installGate } from './gate';
+import { registerPlanMode } from './plan';
 import { registerProfile } from './provider';
+import { registerTodo } from './todo';
 
 /** Every chat model of the running Pi's own catalog. A catalog that cannot
  *  be read describes nothing: profile models then run at the fallbacks. */
@@ -28,4 +31,7 @@ function builtinCatalog(): CatalogModel[] {
 export default function codedeckPi(pi: ExtensionAPI): void {
   registerProfile(pi, process.env, builtinCatalog);
   installGate(pi);
+  registerTodo(pi);
+  registerAsk(pi);
+  registerPlanMode(pi);
 }
