@@ -12,6 +12,7 @@
 use proptest::prelude::*;
 use protocol::chunking::{frame_encoded_message, parse_chunk_envelope, ChunkAssembler};
 use protocol::direct::decode_direct_frame;
+use protocol::web::{decode_web_frame, BrowserKey};
 use protocol::{decode_bridge_to_phone, decode_phone_to_bridge};
 use serde_json::Value;
 
@@ -35,6 +36,8 @@ fn exercise_ingest(text: &str) {
     let _ = decode_phone_to_bridge(text);
     let _ = decode_bridge_to_phone(text);
     let _ = decode_direct_frame(text);
+    let _ = decode_web_frame(text);
+    let _ = BrowserKey::parse(text);
     let _ = parse_chunk_envelope(text);
     let mut assembler = ChunkAssembler::new();
     let _ = assembler.offer(text, 0);
@@ -55,8 +58,10 @@ fn valid_wire_messages() -> &'static [String] {
                 out.push(msg.as_str().map(str::to_string).unwrap_or_else(|| msg.to_string()));
             }
         }
-        for frame in corpus["directFrames"]["valid"].as_array().expect("a valid list") {
-            out.push(frame.to_string());
+        for list in ["directFrames", "webFrames"] {
+            for frame in corpus[list]["valid"].as_array().expect("a valid list") {
+                out.push(frame.to_string());
+            }
         }
         let large = format!(r#"{{"type":"output","sessionId":"s","seq":1,"content":"{}"}}"#, "x".repeat(200_000));
         out.extend(frame_encoded_message(&large, || "cid-property".to_string()));

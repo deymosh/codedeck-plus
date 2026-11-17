@@ -283,6 +283,35 @@
       ["OK", "aa", true]
     ]
   },
+  "webFrames": {
+    "valid": [
+      ["CHALLENGE", "q3Jv8c1Ew7Xh2mY0aZ5tUe9kQnB4sLfD6pR1oG8iVxM"],
+      ["HELLO", "w_qyb5iAhcG-HSkLYHw3VlPFGm-W3hwPwMyJ0kKbvItoSB6Ml-lqPy5PkVOWj4QCZnYi8IbgUTBwim6pcXFklQ"],
+      ["READY"],
+      ["CLOSED", "expired"],
+      ["CMD", 1, "{\"v\":12,\"type\":\"input\",\"sessionId\":\"s\",\"text\":\"hi\",\"inputId\":\"i1\"}", "w_qyb5iAhcG-HSkLYHw3VlPFGm-W3hwPwMyJ0kKbvItoSB6Ml-lqPy5PkVOWj4QCZnYi8IbgUTBwim6pcXFklQ"],
+      ["OK", 1, false, "not from a browser"],
+      ["MSG", { "v": 12, "type": "input-ack", "sessionId": "s", "inputId": "i1" }],
+      ["PAGE", 2, "{\"type\":\"config\"}", "w_qyb5iAhcG-HSkLYHw3VlPFGm-W3hwPwMyJ0kKbvItoSB6Ml-lqPy5PkVOWj4QCZnYi8IbgUTBwim6pcXFklQ"],
+      ["REPLY", 2, { "fields": [] }]
+    ],
+    "rejected": [
+      "not json",
+      {},
+      [],
+      ["EVENT", {}],
+      ["HELLO"],
+      ["HELLO", 1],
+      ["CMD", 1, { "v": 12, "type": "input" }, "s"],
+      ["CMD", -1, "{}", "s"],
+      ["CMD", 9007199254740992, "{}", "s"],
+      ["CMD", 1, "{}"],
+      ["OK", 1, "yes", ""],
+      ["MSG", "{}"],
+      ["REPLY", 2],
+      ["READY", 1]
+    ]
+  },
   "forwardCompatible": [
     { "dir": "b2p", "msg": { "v": 12, "type": "agent-style", "agent": "x", "style": { "userMessage": { "shape": "card", "corner": 3 }, "futureKnob": 1 } } },
     { "dir": "p2b", "msg": { "v": 12, "type": "input", "sessionId": "s", "text": "hi", "unknownFutureField": 1 } },
