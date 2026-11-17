@@ -38,7 +38,8 @@ import { shortDescription } from '../../sdk/commands';
 import type { PluginManager, PluginState } from '../../sdk/driver';
 import type { InstalledPlugin, PluginAction } from '../../sdk/types';
 import { QWEN_LABEL } from './install';
-import { qwenCommand, QWEN_OFF_ENV, type QwenConfigVersion } from './runtime';
+import type { ConfigVersion } from '../../acp/runtime';
+import { qwenCommand, QWEN_OFF_ENV } from './runtime';
 
 export interface CliResult {
   code: number;
@@ -201,7 +202,7 @@ export class QwenPlugins implements PluginManager {
   constructor(
     private readonly home: string,
     private readonly run: QwenCliRunner,
-    private readonly config: QwenConfigVersion,
+    private readonly config: ConfigVersion,
   ) {}
 
   list(available: boolean): Promise<PluginState> {

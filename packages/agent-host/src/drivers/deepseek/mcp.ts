@@ -28,6 +28,7 @@
  */
 import * as path from 'node:path';
 import { load, dump } from 'js-yaml';
+import type { ConfigVersion } from '../../acp/runtime';
 import type { McpManager, McpState } from '../../sdk/driver';
 import { serverInfo } from '../../sdk/mcp';
 import type { McpAction, McpServerAdd, McpServerInfo } from '../../sdk/types';
@@ -57,6 +58,9 @@ interface ManagedServer extends McpServerInfo {
 export interface DeepSeekMcpOptions {
   /** The profile directory (`$DSH_HOME/profiles/acp`). */
   profileDir: string;
+  /** The profile's configuration version (the runtime's), bumped by every
+   *  change this manager makes. */
+  config: ConfigVersion;
   log: (message: string) => void;
 }
 
@@ -67,18 +71,23 @@ export class DeepSeekMcp implements McpManager {
   /** One change at a time: each reads the block, edits it, writes it back. */
   private queue: Promise<unknown> = Promise.resolve();
   private readonly layer: ProfileLayer;
-  /** How many times this manager changed the layer. A harness process records
-   *  it as it starts, so a change made afterwards is configuration that
-   *  process has not loaded — no file timestamp, and no clock, involved. */
-  private versions = 0;
+  private readonly config: ConfigVersion;
+  /** The configuration version this manager's last change made (0: none). A
+   *  harness process records the current version as it starts, so a server
+   *  changed afterwards is one that process has not loaded — no file
+   *  timestamp, and no clock, involved. */
+  private changedAt = 0;
 
   constructor(options: DeepSeekMcpOptions) {
     this.layer = new ProfileLayer(path.join(options.profileDir, 'cordis.patch.yml'), options.log);
+    this.config = options.config;
   }
 
-  /** How many times the layer has changed since this bridge started. */
+  /** The configuration version of the servers' last change: a process that
+   *  recorded a lower one as it started has not loaded them as they are. A
+   *  plugin change bumps the same counter without making this stale. */
   get version(): number {
-    return this.versions;
+    return this.changedAt;
   }
 
   list(): Promise<McpState> {
@@ -89,7 +98,7 @@ export class DeepSeekMcp implements McpManager {
     return this.serial(async () => {
       const current = await this.servers();
       const next = applyAction(current, action, servers, names);
-      if (await this.layer.set(BLOCK, next.length === 0 ? undefined : renderRows(next))) this.versions++;
+      if (await this.layer.set(BLOCK, next.length === 0 ? undefined : renderRows(next))) this.changedAt = this.config.bump();
       return this.state(next);
     });
   }

@@ -533,9 +533,6 @@ export interface DeepSeekDriverOptions {
   runtime: DeepSeekRuntime;
   /** `$DSH_HOME` — where the harness's profiles and sessions live. */
   home: string;
-  /** The MCP manager over that home's profile layer. The runtime is told to
-   *  watch its version, so the process and the manager share one instance. */
-  mcp?: DeepSeekMcp;
   /** The environment this driver's own probe inherits (the host's). */
   baseEnv?: NodeJS.ProcessEnv;
   /** HTTPS client for the credential check. */
@@ -586,9 +583,14 @@ export class DeepSeekDriver implements Driver {
 
   private constructor(private readonly options: DeepSeekDriverOptions) {
     const profileDir = dshProfileDir(options.home);
-    this.mcp = options.mcp ?? new DeepSeekMcp({ profileDir, log: options.log });
+    // Both write configuration a harness reads once, as it boots, so both
+    // bump the version the runtime keys its processes on: a session started
+    // after either change gets a process that has loaded it.
+    const config = options.runtime.config;
+    this.mcp = new DeepSeekMcp({ profileDir, config, log: options.log });
     this.plugins = new DeepSeekPlugins({
       profileDir,
+      config,
       run: (args) => this.runDsh(args),
       packagesDir: () => options.runtime.packagesRoot(),
       log: options.log,

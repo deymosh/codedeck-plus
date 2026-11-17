@@ -18,7 +18,7 @@
 import type { McpManager, McpState } from '../../sdk/driver';
 import { serverInfo } from '../../sdk/mcp';
 import type { McpAction, McpServerAdd, McpServerInfo } from '../../sdk/types';
-import { QwenConfigVersion } from './runtime';
+import { ConfigVersion } from '../../acp/runtime';
 import type { QwenSettingsFile } from './settings';
 
 /** A server as Qwen Code's settings take it: the phone's setup, secrets in
@@ -106,7 +106,7 @@ export class QwenMcp implements McpManager {
 
   constructor(
     readonly settings: QwenSettingsFile,
-    private readonly config: QwenConfigVersion = new QwenConfigVersion(),
+    private readonly config: ConfigVersion = new ConfigVersion(),
   ) {}
 
   /** The configuration version of the servers' last change: a process that

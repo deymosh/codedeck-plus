@@ -17,7 +17,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { bundledQwenExecutable } from '../install';
 import { enabledEverywhere, qwenCli, QwenPlugins, readQwenExtensions, type CliResult, type QwenCliRunner } from '../plugins';
-import { QwenConfigVersion } from '../runtime';
+import { ConfigVersion } from '../../../acp/runtime';
 
 let home: string;
 let work: string;
@@ -47,10 +47,10 @@ const rules = (name: string): unknown =>
 const entry = bundledQwenExecutable();
 
 describe.skipIf(entry === null)('Qwen Code extensions through the real CLI', () => {
-  const plugins = (config: QwenConfigVersion) => new QwenPlugins(home, qwenCli(async () => entry!, home, process.env), config);
+  const plugins = (config: ConfigVersion) => new QwenPlugins(home, qwenCli(async () => entry!, home, process.env), config);
 
   it('installs, switches off and on for every workspace, updates and uninstalls', async () => {
-    const config = new QwenConfigVersion();
+    const config = new ConfigVersion();
     const manager = plugins(config);
     const source = extensionSource('ctx-ext', {
       displayName: { en: 'Context Ext', zh: '上下文' },
@@ -88,7 +88,7 @@ describe.skipIf(entry === null)('Qwen Code extensions through the real CLI', () 
   }, 120_000);
 
   it('refuses with the CLI’s own reason', async () => {
-    const config = new QwenConfigVersion();
+    const config = new ConfigVersion();
     await expect(plugins(config).act('install', path.join(work, 'missing'))).rejects.toThrow(/Install source not found/);
     await expect(plugins(config).act('disable', 'nope')).rejects.toThrow(/does not exist/);
     // Its update says so on stdout and exits 0.
@@ -105,7 +105,7 @@ describe('Qwen Code extensions, scripted', () => {
     };
 
   it('fails an install that exited cleanly having installed nothing', async () => {
-    const config = new QwenConfigVersion();
+    const config = new ConfigVersion();
     const calls: Parameters<QwenCliRunner>[] = [];
     const manager = new QwenPlugins(home, answering({ code: 0, stdout: 'Do you want to continue? [Y/n]: ', stderr: '' }, calls), config);
     await expect(manager.act('install', 'https://github.com/acme/ext')).rejects.toThrow(/installed nothing/);
@@ -115,14 +115,14 @@ describe('Qwen Code extensions, scripted', () => {
 
   it('runs only the switches with the home directory at the root', async () => {
     const calls: Parameters<QwenCliRunner>[] = [];
-    const manager = new QwenPlugins(home, answering({ code: 0, stdout: '', stderr: '' }, calls), new QwenConfigVersion());
+    const manager = new QwenPlugins(home, answering({ code: 0, stdout: '', stderr: '' }, calls), new ConfigVersion());
     await manager.act('disable', 'a');
     await manager.act('uninstall', 'a');
     expect(calls.map(([args, options]) => [args[1], options.rootHome])).toEqual([['disable', true], ['uninstall', false]]);
   });
 
   it('has no marketplaces, and takes no option for a target', async () => {
-    const manager = new QwenPlugins(home, answering({ code: 0, stdout: '', stderr: '' }), new QwenConfigVersion());
+    const manager = new QwenPlugins(home, answering({ code: 0, stdout: '', stderr: '' }), new ConfigVersion());
     await expect(manager.act('add-marketplace', 'acme/market')).rejects.toThrow(/no marketplaces/);
     await expect(manager.act('install', '--scope=project')).rejects.toThrow(/not an extension/);
   });

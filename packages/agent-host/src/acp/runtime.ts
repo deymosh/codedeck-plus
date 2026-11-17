@@ -106,6 +106,28 @@ export interface AcpProcess<H> {
   release(): void;
 }
 
+/**
+ * How many times the configuration an agent process loads as it starts has
+ * changed — its MCP servers, its plugins or extensions, whatever the driver
+ * writes for it. A process records the value as it starts, so a later change
+ * is one it has not loaded. One counter for everything a process loads, since
+ * the pool keys a process on a single number; each manager that changes part
+ * of it keeps the value of its own last change, to tell what it alone made
+ * stale.
+ */
+export class ConfigVersion {
+  private value = 0;
+
+  get current(): number {
+    return this.value;
+  }
+
+  /** Record a change; the value after it. */
+  bump(): number {
+    return ++this.value;
+  }
+}
+
 export interface AcpRuntimeOptions {
   log: (message: string) => void;
   /** The tag every log line carries, so one agent's pool is told from
@@ -118,9 +140,9 @@ export interface AcpRuntimeOptions {
   clientCapabilities?: ClientCapabilities;
   /** Spawn seam for tests. */
   spawnFn?: SpawnFn;
-  /** A counter that changes when the configuration a process loads changes,
-   *  read at each spawn. The runtime does not know what that configuration
-   *  is; the driver that owns it does. */
+  /** A counter that changes when the configuration a process loads changes
+   *  (ConfigVersion's current value), read at each spawn. The runtime does
+   *  not know what that configuration is; the driver that owns it does. */
   configVersion?: () => number;
   /** How long a process outlives its last session (0 to close at once). */
   idleCloseMs?: number;

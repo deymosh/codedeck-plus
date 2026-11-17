@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { McpServerAdd } from '../../../sdk/types';
+import { ConfigVersion } from '../../../acp/runtime';
 import { DeepSeekMcp } from '../mcp';
 
 const INITIAL_LAYER = `# Your patch layer for this dsh profile, applied after every bundle layer.
@@ -21,7 +22,7 @@ function profile(initial: string = INITIAL_LAYER): string {
 }
 
 const layerOf = (dir: string): string => readFileSync(path.join(dir, 'cordis.patch.yml'), 'utf8');
-const manager = (dir: string): DeepSeekMcp => new DeepSeekMcp({ profileDir: dir, log: () => {} });
+const manager = (dir: string): DeepSeekMcp => new DeepSeekMcp({ profileDir: dir, config: new ConfigVersion(), log: () => {} });
 
 const stdio = (name: string, command = '/usr/bin/tool', env?: Record<string, string>): McpServerAdd => ({
   name,
@@ -124,6 +125,18 @@ describe('switching', () => {
     expect(mcp.version).toBe(1);
     await mcp.act('remove', [], ['demo']);
     expect(mcp.version).toBe(2);
+  });
+
+  it('shares the version with the rest of the profile, and is made stale only by its own changes', async () => {
+    // A plugin change bumps the same counter (the harness reloads its whole
+    // profile as it boots), but leaves the servers as they were.
+    const config = new ConfigVersion();
+    const mcp = new DeepSeekMcp({ profileDir: profile(), config, log: () => {} });
+    config.bump();
+    expect(mcp.version).toBe(0);
+    await mcp.act('add', [stdio('demo')], []);
+    expect(mcp.version).toBe(2);
+    expect(config.current).toBe(2);
   });
 
   it('refuses to switch a server it does not have', async () => {

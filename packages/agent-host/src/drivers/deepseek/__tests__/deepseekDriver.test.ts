@@ -10,7 +10,6 @@ import type { StartSession } from '../../../sdk/types';
 import type { DriverSession } from '../../../sdk/driver';
 import { DeepSeekDriver } from '../driver';
 import { BRIDGE_SOCKET_ENV, QUESTION_MARKER } from '../plugin';
-import { DeepSeekMcp } from '../mcp';
 import { DeepSeekRuntime, dshHomeDir } from '../runtime';
 import { FakeAgent } from '../../../acp/__tests__/fakeAgent';
 
@@ -84,13 +83,11 @@ function withDriver(
   const log = (line: string): void => {
     logs.push(line);
   };
-  const mcp = new DeepSeekMcp({ profileDir: path.join(home, 'profiles', 'acp'), log });
   const runtime = new DeepSeekRuntime({
     ...(options.dshPath !== undefined ? { dshPath: options.dshPath } : {}),
     home,
     cacheDir: path.join(home, 'agents'),
     installDsh: async () => '/fake/dsh/lib/bin.js',
-    configVersion: () => mcp.version,
     spawnFn: ((command: string, args: string[], opts: { env: Record<string, string> }) => {
       spawns.push({ command, args, env: opts.env });
       return harness.child;
@@ -101,7 +98,6 @@ function withDriver(
   const driver = DeepSeekDriver.create({
     runtime,
     home,
-    mcp,
     baseEnv: options.env ?? ({} as NodeJS.ProcessEnv),
     log: options.log ?? log,
   });
@@ -1210,6 +1206,33 @@ describe('the harness process', () => {
     // Under the harness's home — or, on Windows, a named pipe.
     if (process.platform === 'win32') expect(first!.startsWith('\\\\.\\pipe\\')).toBe(true);
     else expect(path.dirname(first!)).toBe(path.join(ready.home, 'codedeck'));
+  });
+
+  it('gives the next session a fresh harness once a plugin changes the profile layers', async () => {
+    // The harness composes its layers once, as it boots: a session started
+    // after a plugin is switched on must get a process that has loaded it.
+    const ready = withDriver();
+    await ready.driver.mcp.act('add', [{ name: 'demo', setup: { type: 'stdio', command: '/usr/bin/demo' } }], []);
+    await started(ready, { sessionId: 'b1' });
+    const earlier = ready.session;
+    const profileDir = path.join(ready.home, 'profiles', 'acp');
+    mkdirSync(path.join(profileDir, 'node_modules', 'layer-plugin'), { recursive: true });
+    writeFileSync(
+      path.join(profileDir, 'node_modules', 'layer-plugin', 'package.json'),
+      JSON.stringify({ name: 'layer-plugin', version: '1.0.0', dsh: { bundle: { patch: './cordis.patch.yml' } } }),
+    );
+    writeFileSync(path.join(profileDir, 'package.json'), JSON.stringify({ dependencies: { 'layer-plugin': '1.0.0' } }));
+
+    await ready.driver.plugins.act('enable', 'layer-plugin');
+    await started(ready, { sessionId: 'b2' });
+    expect(ready.spawns).toHaveLength(2);
+    // The MCP servers did not change: the running session still has them.
+    expect((await earlier.mcpStatus?.())?.servers).toEqual([{ name: 'demo', status: 'connected' }]);
+
+    // Switching on what is on changes nothing, so the warm process serves on.
+    await ready.driver.plugins.act('enable', 'layer-plugin');
+    await started(ready, { sessionId: 'b3' });
+    expect(ready.spawns).toHaveLength(2);
   });
 
   it('runs a plugin command in the sessions\' home, and puts its own plugin back after it', async () => {
