@@ -80,7 +80,8 @@ const FLAGS = new Set(['models', 'fake-model']);
  *
  * Qwen Code takes a profile the way the phone hands one over: the driver's
  * `set-providers` writes it into Qwen Code's own settings, so the probe sends
- * that frame (see `main`) and names the profile's model.
+ * that frame (see `main`) and names the profile's model. Pi binds a profile
+ * to a session; its driver registers it through the extension it writes.
  */
 function fakeModelSession(agent, url) {
   const provider = {
@@ -105,6 +106,10 @@ function fakeModelSession(agent, url) {
       // session therefore keeps its own default name while every request
       // still goes to the stub — nothing is spent on that name.
       return { provider };
+    case 'pi':
+      // Pi's driver registers the profile through the extension it writes,
+      // and names the profile's model as `<provider>/<model>` at startup.
+      return { provider, model: FAKE_MODEL_ID };
     case 'opencode': {
       // `aisdk:@ai-sdk/openai-compatible` is the package the driver uses for
       // an endpoint OpenCode's own catalog does not know.
@@ -192,7 +197,7 @@ async function main() {
   if (args['fake-model'] && args.agent === 'fake') {
     // Nothing to point and no model to name: the fake agent answers from the
     // prompt itself, and a server behind it would be decoration.
-    say('model: the fake agent runs no model, so --fake-model has nothing to do (it is for claude-code, opencode, deepseek-harness and qwen-code)');
+    say('model: the fake agent runs no model, so --fake-model has nothing to do (it is for claude-code, opencode, deepseek-harness, qwen-code and pi)');
   } else if (args['fake-model']) {
     fakeModel = await startFakeModel({ log: (line) => say(`model: ${line}`), dump: args.dump ?? null });
     fakeSession = fakeModelSession(args.agent, fakeModel.url);

@@ -1,7 +1,7 @@
 # The bridge
 
 The bridge runs coding agents (OpenCode, Claude Code, the DeepSeek
-Harness and Qwen Code) on your laptop or VPS and serves them to the CodeDeck+ Android app
+Harness, Qwen Code and Pi) on your laptop or VPS and serves them to the CodeDeck+ Android app
 over end-to-end encrypted Nostr (NIP-44). No accounts and no central server: the phone and the
 bridge pair by scanning a QR code.
 
@@ -124,6 +124,8 @@ asked for:
   `CODEDECK_DEEPSEEK_PATH` names a CLI to use instead.
 - **Qwen Code**: a package tree too (`@qwen-code/qwen-code`);
   `CODEDECK_QWEN_PATH` names a CLI to use instead.
+- **Pi**: a package tree too (`@earendil-works/pi-coding-agent`);
+  `CODEDECK_PI_PATH` names a CLI to use instead.
 
 Every download comes from the npm registry and is checked against the sha512
 in this build's `pnpm-lock.yaml`; a mismatch is refused. Binaries live in
@@ -140,7 +142,7 @@ for it.
 - Ahead of time: `codedeck-bridge agents install <agent>…` installs from the
   terminal, into the same cache, before any phone asks.
 - Offline machines: install `claude` (or `opencode`) yourself and it is used
-  as is, point `CODEDECK_DEEPSEEK_PATH` (or `CODEDECK_QWEN_PATH`) at one you
+  as is, point `CODEDECK_DEEPSEEK_PATH` (or `CODEDECK_QWEN_PATH`, `CODEDECK_PI_PATH`) at one you
   installed, or copy an
   `agents/` directory from another machine.
 - A mirror: `CODEDECK_NPM_REGISTRY=https://…` (the sha512 still applies).

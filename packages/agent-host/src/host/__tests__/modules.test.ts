@@ -6,14 +6,20 @@ import { DRIVER_MODULES, selectModules } from '../modules';
 
 describe('selectModules', () => {
   it('loads every agent but the test ones by default, in catalog order', () => {
-    expect(selectModules({}, () => {}).map((m) => m.id)).toEqual(['opencode', 'claude-code', 'deepseek-harness', 'qwen-code']);
+    expect(selectModules({}, () => {}).map((m) => m.id)).toEqual([
+      'opencode',
+      'claude-code',
+      'deepseek-harness',
+      'qwen-code',
+      'pi',
+    ]);
   });
 
   it('loads what CODEDECK_AGENT_HOST_DRIVERS names, in its order, and skips an unknown id', () => {
     const log: string[] = [];
-    const picked = selectModules({ CODEDECK_AGENT_HOST_DRIVERS: ' fake, pi ,opencode' }, (m) => log.push(m));
-    expect(picked.map((m) => m.id)).toEqual(['fake', 'opencode']);
-    expect(log).toEqual(["[agent-host] unknown driver 'pi' — skipped"]);
+    const picked = selectModules({ CODEDECK_AGENT_HOST_DRIVERS: ' fake, gemini ,pi,opencode' }, (m) => log.push(m));
+    expect(picked.map((m) => m.id)).toEqual(['fake', 'pi', 'opencode']);
+    expect(log).toEqual(["[agent-host] unknown driver 'gemini' — skipped"]);
   });
 
   it('module ids are unique', () => {

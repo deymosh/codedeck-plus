@@ -35,7 +35,7 @@ jobs:
           set -euo pipefail
           title='Agent updates available'
           # The agents' own packages, and the ACP types their drivers use.
-          packages='@anthropic-ai/claude-agent-sdk @opencode/client @opencode/cli @deepseek-ai/dsh @qwen-code/qwen-code @agentclientprotocol/sdk'
+          packages='@anthropic-ai/claude-agent-sdk @opencode/client @opencode/cli @deepseek-ai/dsh @qwen-code/qwen-code @earendil-works/pi-coding-agent @agentclientprotocol/sdk'
           rows=''
           for name in $packages; do
             pinned=$(jq -r --arg n "$name" '(.dependencies + .devDependencies)[$n] // empty' packages/agent-host/package.json | sed 's/^[\^~]//')

@@ -56,6 +56,8 @@ install a gate (an extension hooking tool calls) that routes each call to
 unasked. A pure-JS package with ~23 dependencies: installs as a package tree,
 like the DeepSeek Harness. Prefer the RPC mode: it keeps the agent out of the
 host's process and is the same surface Oh My Pi speaks (below).
+**Added** (`drivers/pi/`, see [PI.md](PI.md)): over RPC, with the gate as an
+extension the driver writes into every session.
 
 **GitHub Copilot CLI** (`@github/copilot`, proprietary). Reaches everyone who
 has Copilot through an employer or the free tier. Speaks ACP

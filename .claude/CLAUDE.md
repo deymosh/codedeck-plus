@@ -5,7 +5,7 @@ Guidance for Claude Code (claude.ai/code) when working in this repository.
 ## Project identity
 
 CodeDeck+ is a community-maintained continuation of CodeDeck Next: run coding
-agents (Claude Code, OpenCode, DeepSeek Harness, Qwen Code) on a laptop/VPS ("the bridge") and drive them
+agents (Claude Code, OpenCode, DeepSeek Harness, Qwen Code, Pi) on a laptop/VPS ("the bridge") and drive them
 from an Android phone over end-to-end-encrypted Nostr. It started as a merge of
 the two upstream projects (`codedeck-next-bridge`, `codedeck-next-mobile`) and
 has since been rebuilt: the protocol, the bridge and the phone's core are Rust;
@@ -181,18 +181,19 @@ credentials (`--env` is for the agent's own paths, not its keys).
 1. **`live fake`** — the scripted test agent: the driver protocol's own
    plumbing, with no SDK and no model at all.
 2. **`live <agent> --fake-model`** — a real agent (claude-code, opencode,
-   deepseek-harness, qwen-code) against a local model server
+   deepseek-harness, qwen-code, pi) against a local model server
    (`packages/agent-host/tools/fake-model.mjs`). The session is real, the
    model is not: each prompt is a scenario — `/tool` (a tool call; OpenCode
-   asks permission for it), `/question` (a question form), `/plan-approval`
+   and Pi ask permission for it), `/question` (a question form), `/plan-approval`
    (a plan card), `/error` (an API failure), `/long` (a long answer and a
    large context) — and anything else is echoed. Nothing reaches an account,
-   and CI runs the same thing for claude-code
-   (`src/drivers/claude/__tests__/claudeFakeModel.test.ts`).
+   and CI runs the same thing for claude-code and pi
+   (`src/drivers/claude/__tests__/claudeFakeModel.test.ts`,
+   `src/drivers/pi/__tests__/piFakeModel.test.ts`).
 3. **A real model** — OpenCode on its free Zen models
    (`--model opencode/cat-jam-free`) for fidelity, since only a real model
    chooses its own tool arguments and writes prose. Everything else on
-   claude-code, deepseek-harness or qwen-code spends the account. The
+   claude-code, deepseek-harness, qwen-code or pi spends the account. The
    commands for each tier are in the verify-changes skill.
 
 ### Tests
@@ -332,7 +333,7 @@ crates/protocol          the phone wire: messages, total codec, kinds, ranges,
     │                            workspace, uploads, direct link, CLI.
     │                                 │ stdio (driver protocol)
     │                            packages/agent-host   Node: one driver per agent
-    │                            (opencode, claude, deepseek, qwen, fake) around
+    │                            (opencode, claude, deepseek, qwen, pi, fake) around
     │                            its SDK.
     │                            packages/vscode-extension   installs a release's
     │                            bridge (sha256 baked in at release), runs it on

@@ -72,6 +72,14 @@ function hasAny(input: Input, keys: readonly string[]): boolean {
   return keys.some((key) => has(input, key));
 }
 
+/** Whether a call carries replacements as a list (`edits: [{oldText,
+ *  newText}]`): Pi's editor and Claude Code's MultiEdit spell their changes
+ *  this way, so a path plus a non-empty list is a file change even though no
+ *  single text key holds a string. */
+function hasEdits(input: Input): boolean {
+  return Array.isArray(input.edits) && input.edits.length > 0;
+}
+
 /** The file a call names, under any of the spellings these agents use:
  *  Claude Code and the DeepSeek Harness say `file_path`, OpenCode v2 `path`,
  *  and a notebook has a path of its own. */
@@ -121,7 +129,7 @@ const CALL_PATTERNS: readonly CallPattern[] = [
   // A file change: a path, and the text that goes in it.
   {
     kind: ToolKind.Edit,
-    matches: (input) => callPath(input) !== '' && hasAny(input, EDIT_TEXT_KEYS),
+    matches: (input) => callPath(input) !== '' && (hasAny(input, EDIT_TEXT_KEYS) || hasEdits(input)),
     title: callPath,
   },
   // Something to find: a pattern, and where to look for it.

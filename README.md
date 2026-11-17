@@ -4,7 +4,7 @@
 
 # CodeDeck+
 
-**Control coding agents (OpenCode, Claude Code, DeepSeek Harness, Qwen Code)
+**Control coding agents (OpenCode, Claude Code, DeepSeek Harness, Qwen Code, Pi)
 running on your laptop or VPS from your Android phone, over end-to-end
 encrypted Nostr.** No accounts and no CodeDeck server: the phone and the bridge pair by
 scanning a QR code and talk through ordinary Nostr relays — public ones, or
@@ -44,7 +44,8 @@ Pairing is a one-time QR scan; it survives restarts on both ends.
 - [OpenCode](https://opencode.ai) (the default, installed on first start),
   Claude Code, the
   [DeepSeek Harness](https://www.deepseek.com/en/harness/) and
-  [Qwen Code](https://github.com/QwenLM/qwen-code) (installed from the phone
+  [Qwen Code](https://github.com/QwenLM/qwen-code) and
+  [Pi](https://github.com/earendil-works/pi) (installed from the phone
   when chosen), picked per session — the protocol is agent-neutral, so another
   agent is one driver away
   ([`docs/PROTOCOL.md`](docs/PROTOCOL.md#adding-an-agent))
@@ -247,6 +248,7 @@ the full runbook.
 - [`docs/CLAUDE-CODE.md`](docs/CLAUDE-CODE.md) — Claude Code: sign-in, modes and models, the 1M window, gateways and provider profiles
 - [`docs/DEEPSEEK.md`](docs/DEEPSEEK.md) — the DeepSeek Harness: API key, models and reasoning, gateways, MCP servers and plugins
 - [`docs/QWEN.md`](docs/QWEN.md) — Qwen Code: install, OpenAI-compatible providers, its home, modes, MCP servers and extensions
+- [`docs/PI.md`](docs/PI.md) — Pi: install, accounts and providers, its home, the permission gate and its tiers, MCP servers and packages
 - [`docs/AGENT-CANDIDATES.md`](docs/AGENT-CANDIDATES.md) — which agents to add next and how
 - [`.claude/skills/cut-release/SKILL.md`](.claude/skills/cut-release/SKILL.md) — the release runbook
 
