@@ -24,7 +24,7 @@ interface Harness {
   session?: DriverSession;
 }
 
-function withDriver(options: { fake?: FakePiOptions } = {}): Harness {
+function withDriver(options: { fake?: FakePiOptions; killTree?: (pid: number) => void } = {}): Harness {
   const root = mkdtempSync(path.join(tmpdir(), 'codedeck-pi-'));
   const home = path.join(root, 'home');
   const cli = path.join(root, 'pi.js');
@@ -46,6 +46,7 @@ function withDriver(options: { fake?: FakePiOptions } = {}): Harness {
       spawns.push({ command, args, env: opts.env, cwd: opts.cwd });
       return fake.child;
     }) as never,
+    ...(options.killTree ? { killTree: options.killTree } : {}),
     log: (line) => logs.push(line),
   });
   return { driver, fake, home, spawns, logs };
@@ -94,7 +95,7 @@ describe('PiDriver.info', () => {
       accounts: true,
       plugins: true,
       mcp: true,
-      tasks: false,
+      tasks: true,
     });
     // Pi's own auth in its home applies; there is no CodeDeck credential.
     expect(info.credentials).toEqual([]);
@@ -487,6 +488,32 @@ describe('PiDriver models and conversations', () => {
   it('refuses to delete a path that is not a session id', async () => {
     const h = withDriver();
     await expect(h.driver.deleteConversation('../state', '/work')).rejects.toThrow(/not a Pi session id/);
+  });
+});
+
+describe('PiSession background tasks', () => {
+  const task = (data: Record<string, unknown>) => ({
+    type: 'entry_appended',
+    entry: { type: 'custom', id: 'e1', customType: 'codedeck', data: { kind: 'task', taskId: 'bg-1', title: 'Dev server', ...data } },
+  });
+
+  it('kills a task the phone stops, and shows it stopped however its shell exits', async () => {
+    const killed: number[] = [];
+    const h = withDriver({ killTree: (pid) => killed.push(pid) });
+    const ctx = await ready(h);
+    h.fake.emit(task({ status: 'running', pid: 4321, callId: 'call_b' }));
+    await ctx.waitFor((e) => e.type === 'entries' && e.entries.some((entry) => entry.entryType === 'background_task'));
+
+    await h.session!.stopTask!('bg-1');
+    expect(killed).toEqual([4321]);
+    // A shell that traps the stop may still exit 0.
+    h.fake.emit(task({ status: 'completed', summary: 'Exited with code 0' }));
+    await ctx.waitFor((e) => e.type === 'entries' && e.entries.some((entry) => entry.entryType === 'background_task' && entry.status !== 'running'));
+    expect(entries(ctx).filter((entry) => entry.entryType === 'background_task').at(-1)).toMatchObject({
+      status: 'stopped',
+      summary: 'Stopped',
+    });
+    await expect(h.session!.stopTask!('bg-1')).rejects.toThrow(/no running task/);
   });
 });
 

@@ -269,6 +269,48 @@ live('Pi against the fake model', () => {
   );
 
   it(
+    'runs a background shell past the turn, reporting its start and its end as a background task',
+    async () => {
+      const ctx = start({ permission: () => ({ outcome: 'selected', optionId: 'allow' }) });
+      await turn(ctx, '/background');
+      expect(ctx.permissions).toHaveLength(1);
+      expect(ctx.permissions[0]).toMatchObject({ toolName: 'bash_background', kind: 'execute' });
+      const call = ctx.entries().find((entry) => entry.entryType === 'tool_call' && entry.toolName === 'bash_background');
+      const callId = call?.entryType === 'tool_call' ? call.callId : undefined;
+      expect(ctx.entries()).toContainEqual(
+        expect.objectContaining({ entryType: 'background_task', kind: 'shell', status: 'running', callId }),
+      );
+      // The command prints for about three seconds: it ends after the turn.
+      await ctx.waitFor(
+        (event) => event.type === 'entries' && event.entries.some((entry) => entry.entryType === 'background_task' && entry.status === 'completed'),
+        TURN_MS,
+      );
+      expect(ctx.entries()).toContainEqual(
+        expect.objectContaining({ entryType: 'background_task', status: 'completed', summary: 'Exited with code 0' }),
+      );
+    },
+    TURN_MS,
+  );
+
+  it(
+    "stops a background task from the phone, with what it started, and says it was stopped",
+    async () => {
+      const ctx = start({ permission: () => ({ outcome: 'selected', optionId: 'allow' }) });
+      await turn(ctx, '/background node -e "setInterval(function(){},1000)"');
+      const running = ctx.entries().find((entry) => entry.entryType === 'background_task' && entry.status === 'running');
+      expect(running).toBeDefined();
+      const taskId = running!.entryType === 'background_task' ? running!.taskId : '';
+      await session!.stopTask!(taskId);
+      await ctx.waitFor(
+        (event) => event.type === 'entries' && event.entries.some((entry) => entry.entryType === 'background_task' && entry.status === 'stopped'),
+        TURN_MS,
+      );
+      await expect(session!.stopTask!(taskId)).rejects.toThrow(/no running task/);
+    },
+    TURN_MS,
+  );
+
+  it(
     "sizes a gateway's model from Pi's own catalog, which the extension reads inside Pi",
     async () => {
       // A gateway's id names its route before the model; the pinned Pi's

@@ -12,15 +12,17 @@
  * A sub-agent's Pi (task.ts) loads it too, in a smaller form: the gate and
  * the provider profile, and `web_fetch` for a general sub-agent — nothing
  * that talks to the user (questions, plans, the checklist), starts work that
- * outlives it, or writes the project's notes.
+ * outlives it (background shells), or writes the project's notes.
  */
 import { getBuiltinModels, getBuiltinProviders } from '@earendil-works/pi-ai/providers/all';
-import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import { getShellConfig, type ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { registerAsk } from './ask';
+import { registerBackground } from './background';
 import type { CatalogModel } from './catalog';
 import { installGate } from './gate';
 import { registerMemory } from './memory';
 import { registerPlanMode } from './plan';
+import { PI_ENTRY_TYPE } from './protocol';
 import { registerProfile } from './provider';
 import { registerTask, SUBAGENT_ENV } from './task';
 import { registerTodo } from './todo';
@@ -51,6 +53,10 @@ export default function codedeckPi(pi: ExtensionAPI): void {
   registerPlanMode(pi);
   registerWebFetch(pi);
   registerTask(pi, process.env);
+  registerBackground(pi, {
+    shell: () => getShellConfig(),
+    report: (event) => pi.appendEntry(PI_ENTRY_TYPE, event),
+  });
   // The notes live in Pi's home, which the driver always names; without it
   // there is nowhere that is the machine's own to keep them.
   const home = process.env.PI_CODING_AGENT_DIR;

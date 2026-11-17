@@ -260,7 +260,9 @@ const SCENARIO_TOOLS = {
   'plan-approval': PLAN_TOOLS,
   task: TASK_TOOLS,
   tool: SHELL_TOOLS,
-  background: SHELL_TOOLS,
+  // The CodeDeck Pi extension's background shell first, when offered: its
+  // plain `bash` would run the command in the foreground.
+  background: ['bash_background', ...SHELL_TOOLS],
 };
 
 /**

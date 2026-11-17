@@ -52,6 +52,7 @@ import { buildPiEnv } from './env';
 import { PI_PERMISSION_PREFIX, bundledPiExtension, installPiExtension } from './extension';
 import { GATE } from './extension/gate';
 import {
+  PI_ENTRY_TYPE,
   PI_PLAN_MODE,
   PI_REQUEST_PREFIX,
   PI_TOOL,
@@ -62,6 +63,7 @@ import {
   type PiSessionReply,
   type PiSubagent,
 } from './extension/protocol';
+import { killTree, type TaskEvent } from './extension/background';
 import { EXTENSION_ENV, type SubagentUpdate } from './extension/task';
 import { todoItems } from './extension/todo';
 import { PI_LABEL } from './install';
@@ -177,6 +179,8 @@ interface PiSessionDeps {
   home: string;
   baseEnv: NodeJS.ProcessEnv;
   spawnFn?: PiRpcOptions['spawnFn'];
+  /** Stops a background task's process tree; tests pass their own. */
+  killTree?: (pid: number) => void;
   log: (message: string) => void;
 }
 
@@ -189,6 +193,10 @@ export class PiSession implements DriverSession {
   private readonly cardCalls = new Set<string>();
   /** The last progress event shown per sub-agent, by its `task` call. */
   private readonly subagentSeq = new Map<string, number>();
+  /** Running background tasks' process ids, by task id. */
+  private readonly taskPids = new Map<string, number>();
+  /** Tasks the user stopped from the phone, until their end is reported. */
+  private readonly stoppedTasks = new Set<string>();
   /** Dialog requests Pi is waiting on, by id, so an interrupt or the
    *  session's end answers every one. */
   private readonly openUi = new Set<string>();
@@ -393,6 +401,9 @@ export class PiSession implements DriverSession {
         return;
       case 'tool_execution_update':
         this.toolUpdate(record);
+        return;
+      case 'entry_appended':
+        this.appended(record.entry);
         return;
       case 'tool_execution_end':
         this.toolEnd(record);
@@ -606,6 +617,40 @@ export class PiSession implements DriverSession {
         },
       ]);
     }
+  }
+
+  /**
+   * One of the extension's out-of-turn events: a background task starting or
+   * ending (extension/background.ts) becomes the phone's background-task
+   * entry. A task the user stopped from the phone ends as stopped, whatever
+   * exit its killed shell reports.
+   */
+  private appended(entry: unknown): void {
+    const appended = recordOf(entry);
+    if (appended?.customType !== PI_ENTRY_TYPE) return;
+    const event = recordOf(appended.data) as Partial<TaskEvent> | undefined;
+    if (event?.kind !== 'task' || typeof event.taskId !== 'string' || typeof event.status !== 'string') return;
+    const taskId = event.taskId;
+    if (event.status === 'running') {
+      if (typeof event.pid === 'number') this.taskPids.set(taskId, event.pid);
+    } else {
+      this.taskPids.delete(taskId);
+    }
+    // Even a clean exit: a shell that traps the stop and exits 0 was still
+    // stopped by the user.
+    const status = event.status !== 'running' && this.stoppedTasks.delete(taskId) ? 'stopped' : event.status;
+    this.emit([
+      {
+        entryType: 'background_task',
+        taskId,
+        kind: 'shell',
+        title: typeof event.title === 'string' && event.title !== '' ? event.title : taskId,
+        status,
+        ...(typeof event.callId === 'string' ? { callId: event.callId } : {}),
+        ...(status === 'stopped' ? { summary: 'Stopped' } : typeof event.summary === 'string' ? { summary: event.summary } : {}),
+        timestamp: now(),
+      },
+    ]);
   }
 
   /** Pi will try the failed request again: one status line says so, in
@@ -967,6 +1012,15 @@ export class PiSession implements DriverSession {
     }
   }
 
+  /** Stop one background task: its process and everything it started, on
+   *  this machine. Its end arrives from the extension as it exits. */
+  async stopTask(taskId: string): Promise<void> {
+    const pid = this.taskPids.get(taskId);
+    if (pid === undefined) throw new Error(`${PI_LABEL} has no running task '${taskId}'`);
+    this.stoppedTasks.add(taskId);
+    (this.deps.killTree ?? killTree)(pid);
+  }
+
   async setOption(option: SessionOption, value: string): Promise<void> {
     switch (option) {
       case 'mode':
@@ -1052,6 +1106,8 @@ export interface PiDriverOptions {
   spawnFn?: PiRpcOptions['spawnFn'];
   /** Spawn seam for the account helper, in tests. */
   accountsSpawnFn?: PiRpcOptions['spawnFn'];
+  /** Kill seam for background tasks, in tests. */
+  killTree?: (pid: number) => void;
   /** Runs Pi's package commands; tests pass their own. */
   pluginRunner?: PiCliRunner;
   /** `CODEDECK_NPM_REGISTRY`, when the operator set one. */
@@ -1139,7 +1195,8 @@ export class PiDriver implements Driver {
         accounts: true,
         plugins: true,
         mcp: true,
-        tasks: false,
+        // Background shells (extension/background.ts), stopped from the phone.
+        tasks: true,
       },
       credentials: [],
       style: PI_STYLE,
@@ -1163,6 +1220,7 @@ export class PiDriver implements Driver {
       home: this.options.home,
       baseEnv: this.options.baseEnv ?? process.env,
       ...(this.options.spawnFn !== undefined ? { spawnFn: this.options.spawnFn } : {}),
+      ...(this.options.killTree !== undefined ? { killTree: this.options.killTree } : {}),
       log: this.options.log,
     });
   }
