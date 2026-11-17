@@ -307,6 +307,11 @@ update the fake's "verified against" header only for what was re-checked.
   explanation; a new comment that says only "CDX-071 gate" is not.
 - Do not reference the current task, the PR, or "the fix" in code comments — the
   comment outlives all three.
+- **Commits, PRs and comments say only what is true of the repository.** Nothing
+  that matters only on the machine the work was done on: local cleanups
+  (deleted build output, old APKs, scratch files), local paths, disk sizes, the
+  state of a local checkout or toolchain. A reader of the history has none of
+  it. How the change was verified (the checks run, a live run) stays.
 
 
 ## Architecture and layering
