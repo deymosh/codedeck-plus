@@ -27,6 +27,7 @@
     "@types/node": "^22.10.0",
     "esbuild": "^0.25.0",
     "typescript": "^5.7.0",
+    "typescript-language-server": "6.1.0",
     "vitest": "^3.0.0"
   },
   "license": "MIT"
