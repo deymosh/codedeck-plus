@@ -385,6 +385,24 @@ impl Web {
         }
     }
 
+    /// Sign out every browser the identity `by` (an npub) let in: it is no
+    /// longer paired, and what it let in goes with it.
+    pub fn end_by(&self, by: &str) {
+        let keys: Vec<String> = self
+            .browsers
+            .borrow()
+            .iter()
+            .filter(|(_, b)| matches!(&b.access, Access::SignedIn { by: approver, .. } if approver == by))
+            .map(|(key, _)| key.clone())
+            .collect();
+        if !keys.is_empty() {
+            log::info!("[Web] {} browser(s) signed out: the identity that let them in was unpaired", keys.len());
+        }
+        for key in keys {
+            self.sign_out(&key);
+        }
+    }
+
     fn next_order(&self) -> u64 {
         let order = self.order.get();
         self.order.set(order + 1);

@@ -7,7 +7,7 @@
 //! runtime did not provide — the same inputs always give the same effects.
 
 use agent_protocol::{BridgeFrame, HostFrame};
-use protocol::commands::UploadFileMsg;
+use protocol::commands::{PhoneToBridge, UploadFileMsg};
 use protocol::common::TerminalEndReason;
 use protocol::events::BridgeToPhone;
 use serde::{Deserialize, Serialize};
@@ -171,14 +171,31 @@ pub struct Addressee {
     /// session key, or the identity when it has granted none. The copy's
     /// recipient tag is derived from it (`protocol::recipients`). Inside the
     /// engine only, an empty key stands for every present client of the
-    /// identity, until it is addressed.
+    /// identity, until it is addressed. For a browser on the web page, see
+    /// [`Addressee::browser`].
     pub key: String,
 }
+
+/// What a browser's [`Addressee::key`] starts with. A Nostr key is 64 hex
+/// characters, so no client key can be mistaken for one.
+const BROWSER_KEY_PREFIX: &str = "web:";
 
 impl Addressee {
     /// Every present client of `phone`.
     pub(crate) fn identity(phone: &str) -> Self {
         Self { phone: phone.to_string(), key: String::new() }
+    }
+
+    /// The web page's browser `id`, signed in by `identity`: a client of
+    /// that identity whose copies are neither encrypted nor signed — the
+    /// runtime writes them to the browser's stream, over TLS.
+    pub fn browser(identity: &str, id: &str) -> Self {
+        Self { phone: identity.to_string(), key: format!("{BROWSER_KEY_PREFIX}{id}") }
+    }
+
+    /// The browser this copy is for, if it is for one.
+    pub fn browser_id(&self) -> Option<&str> {
+        self.key.strip_prefix(BROWSER_KEY_PREFIX)
     }
 }
 
@@ -259,6 +276,15 @@ pub enum Input {
     /// dropped to make room, before a phone sent it. A phone sending it now
     /// would be told a browser was let in that is no longer there.
     WebSignInWithdrawn { code: String },
+    /// A signed-in browser opened its first stream: it is a present client
+    /// of the identity `by` (an npub) that let it in, and gets a heartbeat.
+    WebBrowserOnline { id: String, by: String },
+    /// A browser's last stream closed: it gets nothing until it opens one.
+    WebBrowserOffline { id: String },
+    /// A command from a browser, its signature already checked by the
+    /// runtime against the key the browser signed in with. `by` is the npub
+    /// of the identity that let it in.
+    WebCommand { id: String, by: String, msg: Box<PhoneToBridge> },
 }
 
 #[derive(Debug)]
@@ -336,6 +362,9 @@ pub enum Effect {
     /// with the fresh list, so an id that matches nothing is still answered
     /// with the truth rather than silence.
     WebBrowserSignOut { id: String, client: Addressee },
+    /// The identity `by` (an npub) is no longer paired: every browser it let
+    /// in is signed out, and its streams closed.
+    WebEndBrowsers { by: String },
 }
 
 /// Well-known [`Store`](crate::ports::Store) keys.

@@ -27,7 +27,7 @@ mod permission_rules;
 mod phone;
 mod session_keys;
 pub use session_keys::MAX_CLIENTS;
-pub use web::MAX_WEB_SIGN_IN_CODES;
+pub use web::{browser_may_send, MAX_WEB_SIGN_IN_CODES};
 mod settings;
 mod terminal;
 pub use terminal::{TerminalAllowlist, TerminalAuditRecord, TerminalAuditWhat, TerminalConfig, PendingDevice};
@@ -177,6 +177,9 @@ pub struct Engine {
     pairing_epoch: u64,
     /// The sign-in codes the web page is showing.
     web_sign_ins: web::WebSignIns,
+    /// The web page's browsers with a stream open: clients of the
+    /// identities that let them in.
+    browsers: web::Browsers,
     nacks: NackBudget,
     started: bool,
     stopped: bool,
@@ -239,6 +242,7 @@ impl Engine {
             terminals,
             pairing: None,
             web_sign_ins: web::WebSignIns::default(),
+            browsers: web::Browsers::new(),
             pairing_epoch: 0,
             nacks: NackBudget::default(),
             started: false,
@@ -288,6 +292,9 @@ impl Engine {
             Input::Shutdown => self.shutdown(),
             Input::WebSignInPending { code, expires_ms } => self.on_web_sign_in_pending(code, expires_ms),
             Input::WebSignInWithdrawn { code } => self.on_web_sign_in_withdrawn(&code),
+            Input::WebBrowserOnline { id, by } => self.on_web_browser_online(id, &by),
+            Input::WebBrowserOffline { id } => self.on_web_browser_offline(&id),
+            Input::WebCommand { id, by, msg } => self.on_web_command(id, &by, *msg),
         }
         self.requester = None;
         self.flush();

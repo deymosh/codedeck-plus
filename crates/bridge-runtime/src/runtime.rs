@@ -411,6 +411,11 @@ impl Runtime {
                 let message = BridgeToPhone::WebBrowsers(WebBrowsersMsg { browsers: self.web_browsers() });
                 self.relays.publish(vec![client], message);
             }
+            Effect::WebEndBrowsers { by } => {
+                if let Some(direct) = &self.direct {
+                    direct.web.end_by(&by);
+                }
+            }
             Effect::Host(frame) => self.host.send(&frame),
             Effect::SetTimer { id, after_ms } => {
                 let inputs = self.inputs.clone();
