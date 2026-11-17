@@ -91,6 +91,7 @@ describe('PiDriver.info', () => {
       providers: true,
       interrupt: true,
       commands: true,
+      accounts: true,
       plugins: false,
       mcp: false,
       tasks: false,

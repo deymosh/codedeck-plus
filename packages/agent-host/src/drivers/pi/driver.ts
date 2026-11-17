@@ -44,6 +44,7 @@ import type {
   StartSession,
   UsageData,
 } from '../../sdk/types';
+import { PiAccounts } from './accounts';
 import { buildPiEnv } from './env';
 import { PI_PERMISSION_PREFIX, installPiExtension } from './extension';
 import { PI_LABEL } from './install';
@@ -793,12 +794,17 @@ export interface PiDriverOptions {
   providerHttp?: ProviderHttp;
   /** Spawn seam for tests. */
   spawnFn?: PiRpcOptions['spawnFn'];
+  /** Spawn seam for the account helper, in tests. */
+  accountsSpawnFn?: PiRpcOptions['spawnFn'];
   log: (message: string) => void;
 }
 
 export class PiDriver implements Driver {
   private unavailable: string | undefined;
   private models?: Promise<{ models: ModelEntry[]; defaultModel?: string }>;
+  /** Pi's provider keys and sign-ins, stored where Pi's own `/login` keeps
+   *  them; a change makes the model list be read again. */
+  readonly accounts: PiAccounts;
 
   constructor(private readonly options: PiDriverOptions) {
     // Pi's state root must exist before the first process starts in it
@@ -812,6 +818,15 @@ export class PiDriver implements Driver {
     // the first session (and the model list the phone asks for before it)
     // finds it ready instead of waiting on a download.
     void options.runtime.prepare();
+    this.accounts = new PiAccounts({
+      home: options.home,
+      entryPoint: () => options.runtime.entryPoint(),
+      env: () => buildPiEnv({}, options.home, options.baseEnv ?? process.env),
+      changed: () => {
+        this.models = undefined;
+      },
+      ...(options.accountsSpawnFn !== undefined ? { spawnFn: options.accountsSpawnFn } : {}),
+    });
   }
 
   /** Mark the driver unusable (a path the operator named is not a file). */
@@ -842,6 +857,7 @@ export class PiDriver implements Driver {
         providers: true,
         interrupt: true,
         commands: true,
+        accounts: true,
         plugins: false,
         mcp: false,
         tasks: false,
@@ -966,6 +982,7 @@ export class PiDriver implements Driver {
   }
 
   async shutdown(): Promise<void> {
+    this.accounts.close();
     await this.options.runtime.close();
   }
 }
