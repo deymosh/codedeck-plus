@@ -11,8 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # --- Android SDK (cmdline-tools) + NDK 28 + platform 37 ---
-# NDK pin matches apps/mobile/docker/Dockerfile's — one cross-compile target
-# triple, two consumers. Platform is versioned "37.2" (Android 17 ships
+# Platform is versioned "37.2" (Android 17 ships
 # minor platform revisions, not one fixed "android-37" the way earlier API
 # levels did); build-tools keeps the older "37.0.0" scheme.
 ENV ANDROID_HOME=/opt/android-sdk

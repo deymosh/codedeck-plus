@@ -8,7 +8,6 @@ pnpm-debug.log*
 .pnpm-store/
 
 # Build outputs
-apps/mobile/dist/
 packages/agent-host/dist/
 packages/vscode-extension/dist/
 # Copied in from the repository root by the extension's tools/package.mjs.
@@ -18,13 +17,7 @@ packages/vscode-extension/media/
 **/target/
 **/*.tsbuildinfo
 
-# NOTE: apps/mobile/src-tauri/gen/ is intentionally NOT ignored — upstream
-# commits the generated Android project scaffold (Gradle needs it present;
-# `**/target/` above already covers Rust's own build output; the Gradle
-# `build/` dir under gen/android is already covered by that project's own
-# gen/android/.gitignore).
-
-# APKs built via apps/mobile/docker/build-apk.sh land here — never commit a
+# Built APKs, release archives and the check logs land here — never commit a
 # built binary.
 /dist/
 # Cargo workspace build output

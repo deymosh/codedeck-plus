@@ -93,8 +93,7 @@ codedeck-plus/
 │   ├── agent-host/        # Node sidecar running the agent SDKs (one driver per agent)
 │   └── vscode-extension/  # VS Code extension: installs, runs and pairs the bridge
 ├── apps/
-│   ├── android/           # the native Android app (Kotlin + the Rust client core)
-│   └── mobile/            # the former Tauri app — frozen (future desktop client)
+│   └── android/           # the native Android app (Kotlin + the Rust client core)
 ├── docker/              # the bridge image (Dockerfile, entrypoint, helpers)
 ├── deploy/              # systemd unit for the bridge
 ├── docs/                # PROTOCOL.md (contract), BRIDGE.md, CLIENT.md, one per agent
