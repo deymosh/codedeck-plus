@@ -9,7 +9,7 @@ import type { DriverSession } from '../../../sdk/driver';
 import type { ProviderBinding, StartSession } from '../../../sdk/types';
 import { QwenDriver } from '../driver';
 import { qwenKeyEnvName } from '../settings';
-import { QwenRuntime } from '../runtime';
+import { QwenRuntime, qwenHomeDir } from '../runtime';
 
 /** The option state a Qwen Code session starts with: its modes, its model and
  *  its reasoning levels, exactly as `session/new` composes them. */
@@ -78,7 +78,7 @@ interface Harness {
   runtime: QwenRuntime;
   agent: FakeAgent;
   home: string;
-  spawns: Array<{ command: string; args: string[]; env: Record<string, string> }>;
+  spawns: Array<{ command: string; args: string[]; env: Record<string, string>; cwd: string | undefined }>;
   session: DriverSession;
 }
 
@@ -93,8 +93,8 @@ function withDriver(options: { env?: NodeJS.ProcessEnv; qwenPath?: string; provi
     home,
     cacheDir: path.join(home, 'agents'),
     installQwen: async () => '/fake/qwen/cli-entry.js',
-    spawnFn: ((command: string, args: string[], opts: { env: Record<string, string> }) => {
-      spawns.push({ command, args, env: opts.env });
+    spawnFn: ((command: string, args: string[], opts: { env: Record<string, string>; cwd?: string }) => {
+      spawns.push({ command, args, env: opts.env, cwd: opts.cwd });
       return agent.child;
     }) as never,
     idleCloseMs: 0,
@@ -302,6 +302,16 @@ describe('QwenSession startup', () => {
     expect(ready.spawns[0]?.env[qwenKeyEnvName('p1', 'https://gateway.example/v1')]).toBe('sk-secret');
     expect(ready.spawns[0]?.env.QWEN_TELEMETRY_ENABLED).toBe('false');
     expect(ready.spawns[0]?.env.KEEP).toBe('yes');
+  });
+
+  it('starts Qwen Code in its home, never the host\'s working directory, while the session keeps its own cwd', async () => {
+    // Qwen Code loads settings and `.env` files from the directory it starts
+    // in before it reads any session's: where the host happens to run is no
+    // project of the user's.
+    const ready = withDriver();
+    await started(ready);
+    expect(ready.spawns[0]?.cwd).toBe(ready.home);
+    expect(ready.agent.newSessions).toEqual([{ cwd: '/work', mcpServers: [] }]);
   });
 
   it('keeps the host’s own OpenAI and Qwen variables out of the session’s process', async () => {
@@ -840,6 +850,11 @@ describe('the Qwen Code runtime', () => {
       await started(ready);
       expect(ready.spawns[0]?.command).toBe(process.execPath);
       expect(ready.spawns[0]?.args).toEqual([cli, '--acp']);
+      // A relative path is the host's: Qwen Code starts in its home, where
+      // the same string would name another file.
+      const relative = withDriver({ qwenPath: path.relative(process.cwd(), cli) });
+      await started(relative);
+      expect(relative.spawns[0]?.args).toEqual([cli, '--acp']);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
@@ -863,5 +878,14 @@ describe('the Qwen Code runtime', () => {
     const ready = withDriver({ qwenPath: '/nope/missing.js' });
     ready.driver.setUnavailable('CODEDECK_QWEN_PATH points at /nope/missing.js, which is not a file.');
     expect(ready.driver.info().unavailableReason).toMatch(/which is not a file/);
+  });
+});
+
+describe('qwenHomeDir', () => {
+  it('resolves a relative home against the host, once', () => {
+    // Qwen Code starts inside its home: a relative QWEN_HOME handed to it
+    // would resolve a second time, against the home itself.
+    expect(qwenHomeDir({ CODEDECK_QWEN_HOME: 'state/qwen' } as NodeJS.ProcessEnv)).toBe(path.resolve('state/qwen'));
+    expect(qwenHomeDir({ CODEDECK_AGENT_CACHE: 'state/agents' } as NodeJS.ProcessEnv)).toBe(path.resolve('state/qwen'));
   });
 });

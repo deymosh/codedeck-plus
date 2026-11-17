@@ -21,6 +21,7 @@
  * whatever it printed.
  */
 import { spawn } from 'node:child_process';
+import { mkdirSync } from 'node:fs';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import type { PluginManager, PluginState } from '../../sdk/driver';
@@ -51,7 +52,9 @@ export interface DshRun {
  * Run `dsh plugin --profile <profile> <args>` in the harness home `home` and
  * answer with its output. The home is set as the sessions' processes have it
  * set: without it the CLI works on the profile of the default home, which
- * is not the one any session runs.
+ * is not the one any session runs. It is also the directory the command
+ * starts in, as the sessions' processes start (runtime.ts): the CLI reads the
+ * `.env` there, and the host's own directory is no project of the user's.
  */
 export function runDshPlugin(
   entry: string,
@@ -62,7 +65,10 @@ export function runDshPlugin(
 ): Promise<DshRun> {
   const command = dshCommand(entry, ['plugin', '--profile', profile, ...args]);
   return new Promise((resolve, reject) => {
+    // A spawn into a missing directory fails as if the command were missing.
+    mkdirSync(home, { recursive: true });
     const child = spawnFn(command.command, command.args, {
+      cwd: home,
       env: { ...process.env, DSH_HOME: home },
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,

@@ -68,9 +68,11 @@ export interface DeepSeekRuntimeOptions {
 }
 
 /** `$DSH_HOME`: the operator's override, else a `dsh` beside the installed
- *  agent binaries (the bridge passes its own home, so this follows it). */
+ *  agent binaries (the bridge passes its own home, so this follows it).
+ *  Absolute: the harness starts inside it, so a relative path would resolve
+ *  a second time, against the home itself. */
 export function dshHomeDir(env: NodeJS.ProcessEnv = process.env): string {
-  return env.CODEDECK_DEEPSEEK_HOME?.trim() || path.join(path.dirname(agentCacheDir(env)), 'dsh');
+  return path.resolve(env.CODEDECK_DEEPSEEK_HOME?.trim() || path.join(path.dirname(agentCacheDir(env)), 'dsh'));
 }
 
 /** The harness's profile directory, where its own configuration lives. */
@@ -116,7 +118,9 @@ export class DeepSeekRuntime extends AcpRuntime<DeepSeekChannel, DeepSeekProcess
   /** The CLI entry point: the operator's own, else the installed tree. */
   override entryPoint(): Promise<string> {
     if (this.dsh.dshPath) {
-      const explicit = this.dsh.dshPath;
+      // The host's path: the harness starts in its home, where a relative
+      // one would name another file.
+      const explicit = path.resolve(this.dsh.dshPath);
       if (!isFile(explicit)) return Promise.reject(new Error(`CODEDECK_DEEPSEEK_PATH points at ${explicit}, which is not a file`));
       return Promise.resolve(explicit);
     }
@@ -147,6 +151,11 @@ export class DeepSeekRuntime extends AcpRuntime<DeepSeekChannel, DeepSeekProcess
       command: command.command,
       args: command.args,
       env: { ...env, DSH_HOME: this.dsh.home, [BRIDGE_SOCKET_ENV]: socket },
+      // The harness reads the `.env` of the directory it starts in, and
+      // refuses to boot when that file sets what only the launching
+      // environment may (DEEPSEEK_BASE_URL, say). In its home, that file is
+      // the one it reads as the user's own anyway.
+      cwd: this.dsh.home,
       handle: { socket, failures: new Map() },
       detail: `profile ${DSH_PROFILE}`,
     };

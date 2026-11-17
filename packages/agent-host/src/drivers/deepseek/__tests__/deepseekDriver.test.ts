@@ -63,7 +63,7 @@ interface Harness {
   runtime: DeepSeekRuntime;
   harness: FakeAgent;
   home: string;
-  spawns: Array<{ command: string; args: string[]; env: Record<string, string> }>;
+  spawns: Array<{ command: string; args: string[]; env: Record<string, string>; cwd: string | undefined }>;
   /** What the runtime logged (the harness's own stderr lines included). */
   logs: string[];
   /** The session the last `started()` call created. */
@@ -88,8 +88,8 @@ function withDriver(
     home,
     cacheDir: path.join(home, 'agents'),
     installDsh: async () => '/fake/dsh/lib/bin.js',
-    spawnFn: ((command: string, args: string[], opts: { env: Record<string, string> }) => {
-      spawns.push({ command, args, env: opts.env });
+    spawnFn: ((command: string, args: string[], opts: { env: Record<string, string>; cwd?: string }) => {
+      spawns.push({ command, args, env: opts.env, cwd: opts.cwd });
       return harness.child;
     }) as never,
     idleCloseMs: options.idleCloseMs ?? 0,
@@ -1190,6 +1190,19 @@ describe('the harness process', () => {
     expect(ready.spawns[0]?.env.DSH_HOME).toBe(ready.home);
   });
 
+  it('starts the harness in its home, never the host\'s working directory, while the session keeps its own cwd', async () => {
+    // The harness reads a `.env` from the directory it starts in and refuses
+    // to boot when that file sets a variable only the launching environment
+    // may set (a project's DEEPSEEK_BASE_URL, say). Started where the host
+    // happens to run, the `.env` of whatever project that is kills every
+    // session; started in its home, the file it reads there is the one it
+    // reads as the user's own anyway.
+    const ready = withDriver();
+    await started(ready);
+    expect(ready.spawns[0]?.cwd).toBe(ready.home);
+    expect(ready.harness.newSessions).toEqual([{ cwd: '/work', mcpServers: [] }]);
+  });
+
   it('gives every process a socket of its own', async () => {
     // Two environments, two processes — a stored GitHub token is enough to
     // tell a session's environment from the model probe's. Sharing one path,
@@ -1238,13 +1251,13 @@ describe('the harness process', () => {
   it('runs a plugin command in the sessions\' home, and puts its own plugin back after it', async () => {
     const ready = withDriver();
     const pluginDir = path.join(ready.home, 'profiles', 'acp', 'node_modules', 'codedeck-dsh-bridge');
-    const runs: Array<Record<string, string>> = [];
+    const runs: Array<{ env: Record<string, string>; cwd: string | undefined }> = [];
     const driver = DeepSeekDriver.create({
       runtime: ready.runtime,
       home: ready.home,
       baseEnv: {} as NodeJS.ProcessEnv,
-      spawnFn: ((_command: string, _args: string[], opts: { env: Record<string, string> }) => {
-        runs.push(opts.env);
+      spawnFn: ((_command: string, _args: string[], opts: { env: Record<string, string>; cwd?: string }) => {
+        runs.push({ env: opts.env, cwd: opts.cwd });
         // What an install may do to a package no lockfile lists.
         rmSync(pluginDir, { recursive: true, force: true });
         const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter(), kill: () => true });
@@ -1255,7 +1268,9 @@ describe('the harness process', () => {
     });
     await vi.waitFor(() => expect(existsSync(path.join(pluginDir, 'index.js'))).toBe(true));
     await driver.plugins.act('install', 'demo-plugin');
-    expect(runs[0]?.DSH_HOME).toBe(ready.home);
+    expect(runs[0]?.env.DSH_HOME).toBe(ready.home);
+    // The same CLI, so the same `.env` rule: it starts in the home too.
+    expect(runs[0]?.cwd).toBe(ready.home);
     expect(existsSync(path.join(pluginDir, 'index.js'))).toBe(true);
   });
 
@@ -1264,6 +1279,14 @@ describe('the harness process', () => {
     const dshPath = path.join(home, 'my-dsh.js');
     writeFileSync(dshPath, '// a standalone harness CLI\n');
     const ready = withDriver({ dshPath });
+    await started(ready);
+    expect(ready.spawns[0]?.args).toEqual([dshPath, '--profile', 'acp']);
+  });
+
+  it('runs a relative entry point as the host resolves it, not from the harness home it starts in', async () => {
+    const dshPath = path.join(harnessHome(), 'my-dsh.js');
+    writeFileSync(dshPath, '// a standalone harness CLI\n');
+    const ready = withDriver({ dshPath: path.relative(process.cwd(), dshPath) });
     await started(ready);
     expect(ready.spawns[0]?.args).toEqual([dshPath, '--profile', 'acp']);
   });
@@ -1278,9 +1301,16 @@ describe('the harness process', () => {
 
 describe('dshHomeDir', () => {
   it('prefers the operator override and otherwise follows the agent cache', () => {
-    expect(dshHomeDir({ CODEDECK_DEEPSEEK_HOME: '/srv/dsh' } as NodeJS.ProcessEnv)).toBe('/srv/dsh');
+    expect(dshHomeDir({ CODEDECK_DEEPSEEK_HOME: '/srv/dsh' } as NodeJS.ProcessEnv)).toBe(path.resolve('/srv/dsh'));
     expect(dshHomeDir({ CODEDECK_AGENT_CACHE: path.join('/srv/home', 'agents') } as NodeJS.ProcessEnv)).toBe(
-      path.join('/srv/home', 'dsh'),
+      path.resolve('/srv/home', 'dsh'),
     );
+  });
+
+  it('resolves a relative home against the host, once', () => {
+    // The harness starts inside its home: a relative DSH_HOME handed to it
+    // would resolve a second time, against the home itself.
+    expect(dshHomeDir({ CODEDECK_DEEPSEEK_HOME: 'state/dsh' } as NodeJS.ProcessEnv)).toBe(path.resolve('state/dsh'));
+    expect(dshHomeDir({ CODEDECK_AGENT_CACHE: 'state/agents' } as NodeJS.ProcessEnv)).toBe(path.resolve('state/dsh'));
   });
 });
