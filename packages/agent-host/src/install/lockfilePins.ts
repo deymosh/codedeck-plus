@@ -308,3 +308,8 @@ export function renderDshPackages(entries: TreePackageEntry[]): string {
 export function renderQwenPackages(entries: TreePackageEntry[]): string {
   return renderTree(entries, 'QWEN_PACKAGES');
 }
+
+/** The generated module's source for the Pi runtime tree. */
+export function renderPiPackages(entries: TreePackageEntry[]): string {
+  return renderTree(entries, 'PI_PACKAGES');
+}

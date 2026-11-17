@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { packageTree, platformPackages, renderDshPackages, renderPlatformPackages, renderQwenPackages } from '../lockfilePins';
+import { packageTree, platformPackages, renderDshPackages, renderPiPackages, renderPlatformPackages, renderQwenPackages } from '../lockfilePins';
 
 const LOCKFILE = `lockfileVersion: '9.0'
 
@@ -65,7 +65,7 @@ const LOCKFILE_PATH = path.resolve(__dirname, '../../../../../pnpm-lock.yaml');
  *  lay down, so the single-binary map leaves them out. */
 function runtimeTreeNames(lockfile: string): Set<string> {
   const names = new Set<string>();
-  for (const root of ['@deepseek-ai/dsh', '@qwen-code/qwen-code']) {
+  for (const root of ['@deepseek-ai/dsh', '@qwen-code/qwen-code', '@earendil-works/pi-coding-agent']) {
     for (const entry of packageTree(lockfile, 'packages/agent-host', root)) names.add(entry.name);
   }
   return names;
@@ -211,5 +211,14 @@ describe('src/generated/qwenPackages.ts', () => {
     await expect(renderQwenPackages(packageTree(lockfile, 'packages/agent-host', '@qwen-code/qwen-code'))).toMatchFileSnapshot(
       '../../generated/qwenPackages.ts',
     );
+  });
+});
+
+describe('src/generated/piPackages.ts', () => {
+  it('matches pnpm-lock.yaml', async () => {
+    const lockfile = fs.readFileSync(LOCKFILE_PATH, 'utf8');
+    await expect(
+      renderPiPackages(packageTree(lockfile, 'packages/agent-host', '@earendil-works/pi-coding-agent')),
+    ).toMatchFileSnapshot('../../generated/piPackages.ts');
   });
 });
