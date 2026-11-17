@@ -3,8 +3,8 @@
  * stdin, responses and session events on stdout, and an extension-UI
  * sub-protocol for dialogs (rpc.ts).
  *
- * What Pi does not have is a permission system of its own. CodeDeck's
- * extension (extension.ts) holds every `tool_call` until this driver answers,
+ * What Pi does not have is a permission system of its own. The CodeDeck Pi
+ * extension (extension/) holds every `tool_call` until this driver answers,
  * which is what turns Pi's tool calls into the phone's permission cards: the
  * driver decides whether a card is needed — `yolo`, Pi's read-only tools, and
  * a tool allowed for the session are answered at once — and the card is built
@@ -49,7 +49,7 @@ import { PiAccounts } from './accounts';
 import { PiMcp } from './mcp';
 import { PiPlugins, piCliRunner, type PiCliRunner } from './plugins';
 import { buildPiEnv } from './env';
-import { PI_PERMISSION_PREFIX, installPiExtension } from './extension';
+import { PI_PERMISSION_PREFIX, bundledPiExtension, installPiExtension } from './extension';
 import { PI_LABEL } from './install';
 import { PiRpc, type PiRecord, type PiRpcOptions } from './rpc';
 import { PI_EDIT_TOOLS, PI_READ_ONLY_TOOLS, piTool } from './tools';
@@ -220,7 +220,7 @@ export class PiSession implements DriverSession {
   private async launch(): Promise<void> {
     const entry = await this.deps.runtime.entryPoint();
     if (this.ended) return;
-    const extension = installPiExtension(this.deps.home);
+    const extension = installPiExtension(this.deps.home, bundledPiExtension());
     // Read before the process starts: a change made while it boots may or
     // may not be in it, and is then reported as not loaded yet.
     this.mcpVersion = this.deps.mcp.version;

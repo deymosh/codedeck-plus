@@ -6,8 +6,15 @@
  *
  * The Claude Agent SDK stays external: it ships its own CLI binary and must
  * resolve its files from node_modules, not from inside a bundle.
+ *
+ * The CodeDeck Pi extension is bundled first, on its own, and carried inside
+ * the host as text (`__CODEDECK_PI_EXTENSION__`): it runs inside Pi's
+ * process, not the host's, and the driver writes it into Pi's home.
  */
 import { build } from 'esbuild';
+import { bundlePiExtension } from './src/drivers/pi/extension/bundle.mjs';
+
+const piExtension = await bundlePiExtension();
 
 await build({
   entryPoints: ['src/host/main.ts'],
@@ -17,6 +24,7 @@ await build({
   format: 'esm',
   outfile: 'dist/main.js',
   external: ['@anthropic-ai/claude-agent-sdk'],
+  define: { __CODEDECK_PI_EXTENSION__: JSON.stringify(piExtension) },
   banner: {
     js: [
       'import { createRequire as __cdxCreateRequire } from "node:module";',
