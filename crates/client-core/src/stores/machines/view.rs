@@ -171,7 +171,8 @@ pub struct MachineView {
     /// Live model lists, by agent id. Kept per agent because agents support
     /// entirely different models — one agent's answer never touches another's.
     #[serde(default)]
-    pub models: BTreeMap<String, AgentModels>,    /// Stripped by `serialize_machines` before persisting and forced back to
+    pub models: BTreeMap<String, AgentModels>,
+    /// Stripped by `serialize_machines` before persisting and forced back to
     /// `None` by `hydrate_machines` on load (CDX-062) — but present here so it
     /// serializes normally into the live `MachinesView` an IPC boundary reads.
     #[serde(default, skip_serializing_if = "Option::is_none")]

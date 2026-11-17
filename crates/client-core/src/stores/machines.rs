@@ -228,7 +228,6 @@ impl MachinesState {
         self.with_machine(machine_pubkey, |m| m.relays = clean)
     }
 
-    /// The agent `machine`'s new sessions start on; `None` clears it.
     /// A message `machine` wrote at `at` was read. True when that cleared a
     /// version mismatch no newer than it.
     pub fn note_read(&mut self, machine_pubkey: &str, at: u64) -> bool {
@@ -259,6 +258,7 @@ impl MachinesState {
         changed
     }
 
+    /// The agent `machine`'s new sessions start on; `None` clears it.
     pub fn set_default_agent(&mut self, machine_pubkey: &str, agent: Option<String>) -> bool {
         let agent = agent.map(|a| a.trim().to_string()).filter(|a| !a.is_empty());
         self.with_machine(machine_pubkey, |m| m.default_agent = agent)
@@ -972,10 +972,6 @@ impl MachinesState {
         }
     }
 
-    /// CDX-035: an EMPTY `models` is a "could not answer" report (it carries a
-    /// reason) — it must never overwrite a good list. A non-empty answer is
-    /// always authoritative and clears any stored reason. Applies only to the
-    /// answering agent's entry, and only for a known machine.
     /// The agent running `session_id` on `machine`, when its bridge names a
     /// style for it that is not cached yet — what to ask that bridge for.
     pub fn missing_style(&self, machine_pubkey: &str, session_id: &str) -> Option<String> {
@@ -999,6 +995,10 @@ impl MachinesState {
         self.agent_styles.insert(hash, style.clone(), &named)
     }
 
+    /// CDX-035: an EMPTY `models` is a "could not answer" report (it carries a
+    /// reason) — it must never overwrite a good list. A non-empty answer is
+    /// always authoritative and clears any stored reason. Applies only to the
+    /// answering agent's entry, and only for a known machine.
     pub fn apply_models(&mut self, machine_pubkey: &str, msg: &ModelsMsg) {
         self.with_machine(machine_pubkey, |m| {
             let entry = m.models.entry(msg.agent.clone()).or_default();
