@@ -25,6 +25,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import type { PluginManager, PluginState } from '../../sdk/driver';
 import type { InstalledPlugin, PluginAction } from '../../sdk/types';
+import type { ConfigVersion } from '../../acp/runtime';
 import { dshCommand, type SpawnFn } from './runtime';
 
 /** The layers a profile composes without any plugin: the shared core and the
@@ -99,6 +100,9 @@ export interface DeepSeekPluginsOptions {
   /** The runtime's own packages directory, for the versions of the bundles a
    *  profile does not install itself (the harness ships them). */
   packagesDir?: () => Promise<string | undefined>;
+  /** The profile's configuration version (the runtime's), bumped by every
+   *  change to the layers a harness composes as it boots. */
+  config: ConfigVersion;
   log: (message: string) => void;
 }
 
@@ -151,11 +155,18 @@ export class DeepSeekPlugins implements PluginManager {
       const installed = Object.prototype.hasOwnProperty.call(dependencies, target);
       if (action !== 'install' && !installed) throw new Error(`The DeepSeek Harness profile has no plugin '${target}'.`);
       const args = action === 'install' ? ['add', target] : action === 'uninstall' ? ['remove', target] : ['update', target];
+      const before = await this.state(manifest, undefined);
       const run = await this.options.run(args);
       const output = lastLines(`${run.stdout}\n${run.stderr}`);
+      // What a plugin command changed is what it installed, removed or moved
+      // to another version; one that found nothing to do must not retire the
+      // warm process the next session would have used. A failed command is
+      // checked too: pnpm can leave part of what it was doing behind.
+      const after = await this.state(await this.manifest(), run.code === 0 ? output : undefined);
+      if (JSON.stringify(after.installed) !== JSON.stringify(before.installed)) this.options.config.bump();
       if (run.code !== 0) throw new Error(`The harness refused the plugin command: ${output || `exit code ${run.code}`}`);
       this.options.log(`[deepseek] dsh plugin ${args.join(' ')}: ${output}`);
-      return this.state(await this.manifest(), output);
+      return after;
     });
   }
 
@@ -190,6 +201,9 @@ export class DeepSeekPlugins implements PluginManager {
     const next = action === 'enable' ? [...bundles, target] : bundles.filter((name) => name !== target);
     const updated: Manifest = { ...manifest, dsh: { ...manifest.dsh, profile: { ...manifest.dsh?.profile, bundles: next } } };
     await this.writeManifest(updated);
+    // A harness composes its layers once, as it boots: the next session needs
+    // a process that has read this list.
+    this.options.config.bump();
     return updated;
   }
 

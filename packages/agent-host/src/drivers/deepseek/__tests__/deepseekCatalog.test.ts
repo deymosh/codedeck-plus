@@ -7,6 +7,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { ConfigVersion } from '../../../acp/runtime';
 import { DeepSeekMcp } from '../mcp';
 import { fetchEndpointCatalog, renderCatalogLayer, syncEndpointCatalog } from '../catalog';
 
@@ -78,7 +79,7 @@ describe('the catalog the harness reads', () => {
 
   it('is written beside the MCP block without disturbing it, and taken back out again', async () => {
     const dir = profile();
-    await new DeepSeekMcp({ profileDir: dir, log: () => {} }).act('add', [{ name: 'demo', setup: { type: 'stdio', command: '/usr/bin/demo' } }], []);
+    await new DeepSeekMcp({ profileDir: dir, config: new ConfigVersion(), log: () => {} }).act('add', [{ name: 'demo', setup: { type: 'stdio', command: '/usr/bin/demo' } }], []);
     await syncEndpointCatalog({ profileDir: dir, log: () => {}, httpGet: answering({ data: [{ id: 'kimi-k2' }] }) }, 'http://gw.example', 'sk-1');
     const both = layerOf(dir);
     expect(both).toMatch(/CodeDeck\+ MCP servers/);
@@ -87,7 +88,7 @@ describe('the catalog the harness reads', () => {
     expect(both).toMatch(/id: kimi-k2/);
 
     // The MCP list still reads exactly what it wrote.
-    expect((await new DeepSeekMcp({ profileDir: dir, log: () => {} }).list()).servers).toEqual([
+    expect((await new DeepSeekMcp({ profileDir: dir, config: new ConfigVersion(), log: () => {} }).list()).servers).toEqual([
       { name: 'demo', transport: 'stdio', target: '/usr/bin/demo', enabled: true },
     ]);
 

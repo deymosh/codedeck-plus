@@ -9,6 +9,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { ConfigVersion } from '../../../acp/runtime';
 import { DeepSeekPlugins, runDshPlugin, type DshRun } from '../plugins';
 import type { SpawnFn } from '../runtime';
 
@@ -40,6 +41,8 @@ const pluginPackage = (version: string, bundle = true): Record<string, unknown> 
 interface Harness {
   plugins: DeepSeekPlugins;
   runs: string[][];
+  /** The configuration version the manager bumps on a change. */
+  config: ConfigVersion;
   manifest(): { dependencies?: Record<string, string>; dsh?: { profile?: { bundles?: string[] } } };
 }
 
@@ -49,15 +52,17 @@ function withPlugins(
   behaviour: (args: string[]) => DshRun | Promise<DshRun> = () => ({ code: 0, stdout: '', stderr: '' }),
 ): Harness {
   const runs: string[][] = [];
+  const config = new ConfigVersion();
   const plugins = new DeepSeekPlugins({
     profileDir: dir,
+    config,
     run: async (args) => {
       runs.push(args);
       return behaviour(args);
     },
     log: () => {},
   });
-  return { plugins, runs, manifest: () => JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8')) };
+  return { plugins, runs, config, manifest: () => JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8')) };
 }
 
 describe('listing', () => {
@@ -182,6 +187,62 @@ describe('switching a plugin off', () => {
     const dir = profile(bundles());
     const harness = withPlugins(dir);
     await expect(harness.plugins.act('disable', '@deepseek-ai/dsh-base')).rejects.toThrow(/cannot be switched off/);
+  });
+});
+
+describe('the configuration version', () => {
+  // A harness composes its layers once, as it boots: a change is what makes
+  // the next session need a fresh process, and nothing else may.
+  it('counts a layer switched on or off, and not one already so', async () => {
+    const dir = profile({ ...bundles(), dependencies: { 'demo-plugin': '1.0.0' } }, { 'demo-plugin': pluginPackage('1.0.0') });
+    const harness = withPlugins(dir);
+    await harness.plugins.act('enable', 'demo-plugin');
+    expect(harness.config.current).toBe(1);
+    await harness.plugins.act('enable', 'demo-plugin');
+    expect(harness.config.current).toBe(1);
+    await harness.plugins.act('disable', 'demo-plugin');
+    expect(harness.config.current).toBe(2);
+  });
+
+  it('counts a command that changed what is installed, and not one that found nothing to do', async () => {
+    const dir = profile({ ...bundles(), dependencies: { 'demo-plugin': '1.0.0' } }, { 'demo-plugin': pluginPackage('1.0.0') });
+    // An update that left everything where it was.
+    const harness = withPlugins(dir, (args) => {
+      if (args[0] === 'remove') writeFileSync(path.join(dir, 'package.json'), JSON.stringify(bundles()));
+      return { code: 0, stdout: '', stderr: '' };
+    });
+    await harness.plugins.act('update', 'demo-plugin');
+    expect(harness.config.current).toBe(0);
+    await harness.plugins.act('uninstall', 'demo-plugin');
+    expect(harness.config.current).toBe(1);
+  });
+
+  it('counts an update that moved a plugin to another version', async () => {
+    const dir = profile({ ...bundles(), dependencies: { 'demo-plugin': '^1.0.0' } }, { 'demo-plugin': pluginPackage('1.0.0') });
+    const harness = withPlugins(dir, () => {
+      writeFileSync(path.join(dir, 'node_modules', 'demo-plugin', 'package.json'), JSON.stringify(pluginPackage('1.1.0')));
+      return { code: 0, stdout: '', stderr: '' };
+    });
+    await harness.plugins.act('update', 'demo-plugin');
+    expect(harness.config.current).toBe(1);
+  });
+
+  it('counts nothing for a command the harness refused', async () => {
+    const dir = profile();
+    const harness = withPlugins(dir, () => ({ code: 1, stdout: '', stderr: 'dsh: no such package\n' }));
+    await expect(harness.plugins.act('install', 'demo-plugin')).rejects.toThrow(/no such package/);
+    expect(harness.config.current).toBe(0);
+  });
+
+  it('counts a failed command that still changed what is installed', async () => {
+    const dir = profile({ ...bundles(), dependencies: { 'demo-plugin': '1.0.0' } }, { 'demo-plugin': pluginPackage('1.0.0') });
+    const harness = withPlugins(dir, () => {
+      // The removal got as far as the manifest before the command failed.
+      writeFileSync(path.join(dir, 'package.json'), JSON.stringify(bundles()));
+      return { code: 1, stdout: '', stderr: 'ERR_PNPM_LINKING interrupted\n' };
+    });
+    await expect(harness.plugins.act('uninstall', 'demo-plugin')).rejects.toThrow(/interrupted/);
+    expect(harness.config.current).toBe(1);
   });
 });
 

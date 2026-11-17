@@ -15,7 +15,7 @@
 import { randomBytes } from 'node:crypto';
 import { rmSync } from 'node:fs';
 import * as path from 'node:path';
-import { AcpRuntime, type AcpProcess, type AcpProcessEvents, type AcpProcessSpec, type SpawnFn } from '../../acp/runtime';
+import { AcpRuntime, ConfigVersion, type AcpProcess, type AcpProcessEvents, type AcpProcessSpec, type SpawnFn } from '../../acp/runtime';
 import { agentCacheDir } from '../../install/agentInstall';
 import { isFile } from '../../sdk/executable';
 import { packageVersionOf } from '../../sdk/version';
@@ -63,10 +63,6 @@ export interface DeepSeekRuntimeOptions {
   installDsh: (options: { cacheDir: string; registry?: string; log: (message: string) => void }) => Promise<string>;
   /** Spawn seam for tests. */
   spawnFn?: SpawnFn;
-  /** A counter that changes when the configuration a process loads
-   *  changes, read at each spawn. The runtime does not know what that
-   *  configuration is; the driver that owns it does. */
-  configVersion?: () => number;
   /** How long a process outlives its last session (0 to close at once). */
   idleCloseMs?: number;
 }
@@ -96,13 +92,23 @@ export class DeepSeekRuntime extends AcpRuntime<DeepSeekChannel, DeepSeekProcess
   private entry: Promise<string> | null = null;
   private knownVersion?: string;
 
-  constructor(private readonly dsh: DeepSeekRuntimeOptions) {
+  /**
+   * @param config The version of everything a harness composes as it boots
+   *   from its profile — the MCP servers in its patch layer, the plugin
+   *   layers in its manifest. Every manager that changes the profile bumps
+   *   this one counter (the driver hands it to each), so a session started
+   *   after any change gets a process that has loaded it.
+   */
+  constructor(
+    private readonly dsh: DeepSeekRuntimeOptions,
+    readonly config: ConfigVersion = new ConfigVersion(),
+  ) {
     super({
       log: dsh.log,
       tag: 'deepseek',
       label: DSH_LABEL,
       spawnFn: dsh.spawnFn,
-      configVersion: dsh.configVersion,
+      configVersion: () => config.current,
       idleCloseMs: dsh.idleCloseMs,
     });
   }

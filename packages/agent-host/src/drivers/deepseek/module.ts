@@ -10,8 +10,7 @@ import { DeepSeekDriver } from './driver';
 import { takeDeepSeekEnv } from './env';
 import { removePackageTree } from '../../install/agentInstall';
 import { DSH_PACKAGE, installDshTree, installedDshTree } from './install';
-import { DeepSeekMcp } from './mcp';
-import { DeepSeekRuntime, dshHomeDir, dshProfileDir } from './runtime';
+import { DeepSeekRuntime, dshHomeDir } from './runtime';
 
 const explicitPath = (ctx: DriverEnv): string | undefined => ctx.env.CODEDECK_DEEPSEEK_PATH?.trim() || undefined;
 
@@ -23,10 +22,6 @@ export const deepSeekModule: DriverModule = {
   create(ctx) {
     const home = dshHomeDir(ctx.lookupEnv);
     const dshPath = explicitPath(ctx);
-    // The MCP servers live in this profile layer, and a harness process is
-    // told the layer's version as it starts: the same manager serves both,
-    // so a change after a process started is configuration it has not loaded.
-    const mcp = new DeepSeekMcp({ profileDir: dshProfileDir(home), log: ctx.log });
     const driver = DeepSeekDriver.create({
       runtime: new DeepSeekRuntime({
         // An explicit path is the operator's own harness; without one the
@@ -37,11 +32,9 @@ export const deepSeekModule: DriverModule = {
         cacheDir: ctx.cacheDir,
         registry: ctx.registry,
         installDsh: installDshTree,
-        configVersion: () => mcp.version,
         log: ctx.log,
       }),
       home,
-      mcp,
       baseEnv: ctx.ownEnv,
       httpGet,
       providerHttp,
