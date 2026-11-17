@@ -9,11 +9,23 @@
  * its own copies, which the bundle leaves external — and Node's built-ins.
  * Nothing of the host exists there.
  */
+import { getBuiltinModels, getBuiltinProviders } from '@earendil-works/pi-ai/providers/all';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import type { CatalogModel } from './catalog';
 import { installGate } from './gate';
 import { registerProfile } from './provider';
 
+/** Every chat model of the running Pi's own catalog. A catalog that cannot
+ *  be read describes nothing: profile models then run at the fallbacks. */
+function builtinCatalog(): CatalogModel[] {
+  try {
+    return getBuiltinProviders().flatMap((provider) => getBuiltinModels(provider));
+  } catch {
+    return [];
+  }
+}
+
 export default function codedeckPi(pi: ExtensionAPI): void {
-  registerProfile(pi, process.env);
+  registerProfile(pi, process.env, builtinCatalog);
   installGate(pi);
 }

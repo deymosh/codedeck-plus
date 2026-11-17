@@ -10,6 +10,7 @@
  * become selectable as `<provider>/<model>`.
  */
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import { describeModel, type CatalogModel } from './catalog';
 
 /** The variable the profile travels in (env.ts sets it). */
 export const PROVIDER_ENV = 'CODEDECK_PI_PROVIDER';
@@ -64,29 +65,54 @@ export function readProfile(
   };
 }
 
+/** The API a profile is spoken to with: the OpenAI-compatible one every
+ *  profile endpoint answers. */
+const PROFILE_API = 'openai-completions';
+
+/**
+ * One profile model as Pi registers it. The endpoint's own context size wins
+ * when its list stated one; everything else comes from what Pi's catalog
+ * knows of the model (catalog.ts). A model Pi does not know runs at the
+ * fallback sizes, without reasoning: no thinking parameters are sent, so an
+ * endpoint that does not take them is never refused for them.
+ */
+export function profileModel(model: ProfileModel, catalog: readonly CatalogModel[]): Record<string, unknown> {
+  const known = describeModel(model.id, catalog);
+  const contextWindow = model.contextWindow ?? known?.contextWindow ?? FALLBACK_CONTEXT_WINDOW;
+  return {
+    id: model.id,
+    name: model.label ?? model.id,
+    reasoning: known?.reasoning ?? false,
+    ...(known?.thinkingLevelMap ? { thinkingLevelMap: known.thinkingLevelMap } : {}),
+    input: known?.input && known.input.length > 0 ? known.input : ['text'],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow,
+    maxTokens: Math.min(known?.maxTokens ?? FALLBACK_MAX_TOKENS, contextWindow),
+    // Compatibility switches describe one API's wire; they apply only when
+    // Pi's own entry speaks the same API as the profile.
+    ...(known?.compat && known.api === PROFILE_API ? { compat: known.compat } : {}),
+  };
+}
+
 /**
  * Register the bound profile, when there is one. A malformed profile is not
  * a reason to keep Pi from starting: the session then runs Pi's own models
- * and reports what it cannot do.
+ * and reports what it cannot do. `catalog` is read only when there is a
+ * profile to describe.
  */
-export function registerProfile(pi: Pick<ExtensionAPI, 'registerProvider'>, env: Record<string, string | undefined>): void {
+export function registerProfile(
+  pi: Pick<ExtensionAPI, 'registerProvider'>,
+  env: Record<string, string | undefined>,
+  catalog: () => readonly CatalogModel[] = () => [],
+): void {
   const profile = readProfile(env);
   if (!profile) return;
+  const known = catalog();
   pi.registerProvider(profile.id, {
     name: profile.label,
     baseUrl: profile.baseUrl,
-    api: 'openai-completions',
+    api: PROFILE_API,
     apiKey: '$' + PROVIDER_TOKEN_ENV,
-    models: profile.models.map((model) => ({
-      id: model.id,
-      name: model.label ?? model.id,
-      // A profile carries no reasoning metadata: Pi sends no thinking
-      // parameters, and the model clamps every level to off.
-      reasoning: false,
-      input: ['text'],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: model.contextWindow ?? FALLBACK_CONTEXT_WINDOW,
-      maxTokens: FALLBACK_MAX_TOKENS,
-    })),
+    models: profile.models.map((model) => profileModel(model, known)) as never,
   });
 }

@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { bundledPiExtension, installPiExtension, PI_PERMISSION_PREFIX, piExtensionPath } from '../extension';
+import type { CatalogModel } from '../extension/catalog';
 import { installGate } from '../extension/gate';
 import { registerProfile } from '../extension/provider';
 
@@ -49,7 +50,10 @@ describe('installPiExtension', () => {
 });
 
 describe('the provider profile', () => {
-  function registered(env: Record<string, string | undefined>): { id: string; config: Record<string, unknown> } | undefined {
+  function registered(
+    env: Record<string, string | undefined>,
+    catalog: () => CatalogModel[] = () => [],
+  ): { id: string; config: Record<string, unknown> } | undefined {
     let provider: { id: string; config: Record<string, unknown> } | undefined;
     registerProfile(
       {
@@ -58,6 +62,7 @@ describe('the provider profile', () => {
         }) as never,
       },
       env,
+      catalog,
     );
     return provider;
   }
@@ -82,6 +87,38 @@ describe('the provider profile', () => {
     });
     // The secret itself never reaches the registration.
     expect(JSON.stringify(provider)).not.toContain('sk-value');
+  });
+
+  it('takes what Pi knows of a model, through a gateway route or a vendor prefix', () => {
+    const catalog: CatalogModel[] = [
+      // The same model at two of Pi's providers, with different limits.
+      { id: 'deepseek-v4.1-flash', provider: 'opencode-go', api: 'openai-completions', reasoning: true, contextWindow: 1_000_000, maxTokens: 384_000, compat: { supportsStore: false } },
+      { id: 'deepseek/deepseek-v4.1-flash', provider: 'openrouter', api: 'openai-completions', reasoning: true, contextWindow: 640_000, maxTokens: 64_000 },
+      { id: 'claude-sonnet-5', provider: 'anthropic', api: 'anthropic-messages', reasoning: true, contextWindow: 200_000, maxTokens: 64_000, input: ['text', 'image'], compat: { x: 1 } },
+    ];
+    const provider = registered(
+      {
+        CODEDECK_PI_PROVIDER: JSON.stringify({
+          id: 'router',
+          baseUrl: 'https://gateway.example/v1',
+          models: [
+            { id: 'OpenCode Go/deepseek-v4.1-flash' }, // the route names Pi's provider
+            { id: 'Some Gateway/deepseek-v4.1-flash' }, // it does not: the smallest window
+            { id: 'deepseek-v4.1-flash', contextWindow: 131_072 }, // the endpoint said: it wins
+            { id: 'anthropic/claude-sonnet-5' }, // another API: no compat borrowed
+            { id: 'unknown/model-x' },
+          ],
+        }),
+      },
+      () => catalog,
+    );
+    const models = provider?.config.models as Array<Record<string, unknown>>;
+    expect(models[0]).toMatchObject({ reasoning: true, contextWindow: 1_000_000, maxTokens: 384_000, compat: { supportsStore: false } });
+    expect(models[1]).toMatchObject({ reasoning: true, contextWindow: 640_000, maxTokens: 64_000 });
+    expect(models[2]).toMatchObject({ contextWindow: 131_072, maxTokens: 64_000 });
+    expect(models[3]).toMatchObject({ reasoning: true, contextWindow: 200_000, input: ['text', 'image'] });
+    expect(models[3]).not.toHaveProperty('compat');
+    expect(models[4]).toMatchObject({ reasoning: false, contextWindow: 128_000, maxTokens: 32_768, input: ['text'] });
   });
 
   it('registers nothing without a profile, and a malformed one does not throw', () => {

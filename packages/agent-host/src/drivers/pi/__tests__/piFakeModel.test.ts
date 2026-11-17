@@ -191,4 +191,31 @@ live('Pi against the fake model', () => {
     },
     TURN_MS,
   );
+
+  it(
+    "sizes a gateway's model from Pi's own catalog, which the extension reads inside Pi",
+    async () => {
+      // A gateway's id names its route before the model; the pinned Pi's
+      // catalog serves this model at 1M tokens (opencode-go). The endpoint's
+      // list said nothing about its size, as OpenCode Go's does not.
+      const routed = 'OpenCode Go/deepseek-v4.1-flash';
+      const ctx = start(
+        {},
+        {
+          model: routed,
+          provider: {
+            id: 'codedeck-fake',
+            label: 'Fake gateway',
+            baseUrl: modelUrl,
+            authToken: 'codedeck-fake-model',
+            models: [{ id: routed }],
+            defaultModel: routed,
+          },
+        },
+      );
+      const info = await ctx.waitFor((event) => event.type === 'info' && event.contextWindow !== undefined, TURN_MS);
+      expect(info).toMatchObject({ contextWindow: 1_000_000 });
+    },
+    TURN_MS,
+  );
 });
