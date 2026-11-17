@@ -272,6 +272,15 @@ update the fake's "verified against" header only for what was re-checked.
   summary. Leave the PR open for the user to merge
   unless they explicitly say to merge it. Small doc/config housekeeping the user
   is directing turn-by-turn may go straight to the working branch they name.
+  The one exception to the PR: a minimal change with nothing to review or
+  test — a doc line, a comment, a typo — may be committed straight to
+  `master`, but only after asking the maintainer, every time.
+- **One good PR per feature, not one per piece.** A feature and the parts it
+  needs to be whole — its settings screens, its follow-ups found along the
+  way, its docs — land in one PR, one commit per part (the Pi agent: driver,
+  accounts, MCP, packages and approval tiers, eight commits, one PR). A
+  series of small PRs for one thing costs review, CI runs and merge order for
+  nothing; split only work that is truly independent.
 - **Multi-part requests: one task at a time.** Implement, verify with
   `./codedeck check` (or the narrowest sufficient subset), commit that task, then
   start the next. Do not batch unrelated changes into one commit.
