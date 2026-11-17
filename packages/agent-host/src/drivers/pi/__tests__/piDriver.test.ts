@@ -93,7 +93,7 @@ describe('PiDriver.info', () => {
       commands: true,
       accounts: true,
       plugins: false,
-      mcp: false,
+      mcp: true,
       tasks: false,
     });
     // Pi's own auth in its home applies; there is no CodeDeck credential.
@@ -373,6 +373,19 @@ describe('PiSession commands and options', () => {
     const h = withDriver();
     await ready(h);
     expect(await h.session!.listCommands!()).toEqual([{ name: 'fix-tests', description: 'Fix failing tests' }]);
+  });
+
+  it('shows the MCP servers the session’s Pi loaded, and one added since as not loaded yet', async () => {
+    const h = withDriver();
+    await h.driver.mcp.act('add', [{ name: 'first', setup: { type: 'stdio', command: 'node' } }], []);
+    await ready(h);
+    expect((await h.session!.mcpStatus!()).servers).toEqual([{ name: 'first', status: 'connected' }]);
+    await h.driver.mcp.act('add', [{ name: 'second', setup: { type: 'stdio', command: 'node' } }], []);
+    await h.driver.mcp.act('disable', [], ['first']);
+    expect((await h.session!.mcpStatus!()).servers).toEqual([
+      { name: 'first', status: 'disabled' },
+      { name: 'second', status: 'pending' },
+    ]);
   });
 
   it('applies a thinking level through Pi’s own command', async () => {

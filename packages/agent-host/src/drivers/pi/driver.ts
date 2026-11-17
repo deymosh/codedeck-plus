@@ -21,7 +21,7 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { Driver, DriverSession, SessionContext } from '../../sdk/driver';
+import type { Driver, DriverSession, SessionContext, SessionMcpState } from '../../sdk/driver';
 import type { ProviderHttp } from '../../sdk/net';
 import { OPENAI_API, checkToken, listModels } from '../../sdk/providerApi';
 import type { EndpointModel } from '../../sdk/providerModels';
@@ -39,12 +39,14 @@ import type {
   QuestionOutcome,
   QuestionSpec,
   SelectOutcome,
+  SessionMcpServer,
   SessionOption,
   SlashCommand,
   StartSession,
   UsageData,
 } from '../../sdk/types';
 import { PiAccounts } from './accounts';
+import { PiMcp } from './mcp';
 import { buildPiEnv } from './env';
 import { PI_PERMISSION_PREFIX, installPiExtension } from './extension';
 import { PI_LABEL } from './install';
@@ -133,6 +135,7 @@ function splitModel(model: string, boundProvider: string | undefined): { provide
 /** What one Pi session is built with. */
 interface PiSessionDeps {
   runtime: PiRuntime;
+  mcp: PiMcp;
   home: string;
   baseEnv: NodeJS.ProcessEnv;
   spawnFn?: PiRpcOptions['spawnFn'];
@@ -167,6 +170,8 @@ export class PiSession implements DriverSession {
    *  content indexes that streamed under it. */
   private assistant: { key: string; parts: Map<number, 'text' | 'thinking'> } | undefined;
   private lastStderr = '';
+  /** The MCP configuration this session's Pi loaded as it started. */
+  private mcpVersion = Number.POSITIVE_INFINITY;
   /** The last failed attempt's error, until Pi says whether it retries. */
   private heldError: string | undefined;
   /** Pi said the conversation `--session` names does not exist. */
@@ -213,6 +218,9 @@ export class PiSession implements DriverSession {
     const entry = await this.deps.runtime.entryPoint();
     if (this.ended) return;
     const extension = installPiExtension(this.deps.home);
+    // Read before the process starts: a change made while it boots may or
+    // may not be in it, and is then reported as not loaded yet.
+    this.mcpVersion = this.deps.mcp.version;
     const command = piCommand(entry, this.arguments(extension));
     this.rpc = new PiRpc({
       command: command.command,
@@ -750,6 +758,21 @@ export class PiSession implements DriverSession {
     }
   }
 
+  /**
+   * The session's MCP servers. Pi connects them as its session starts and
+   * reports nothing about them over RPC, so this says what the running
+   * process has: a server changed after it started is not in it yet.
+   */
+  async mcpStatus(): Promise<SessionMcpState> {
+    const state = await this.deps.mcp.list();
+    const current = !this.ended && this.rpc?.alive === true && this.deps.mcp.version <= this.mcpVersion;
+    const servers: SessionMcpServer[] = state.servers.map((server) => ({
+      name: server.name,
+      status: !server.enabled ? 'disabled' : current ? 'connected' : 'pending',
+    }));
+    return { servers, toggles: false, projectWide: false };
+  }
+
   async getUsage(): Promise<UsageData | null> {
     return null;
   }
@@ -805,6 +828,8 @@ export class PiDriver implements Driver {
   /** Pi's provider keys and sign-ins, stored where Pi's own `/login` keeps
    *  them; a change makes the model list be read again. */
   readonly accounts: PiAccounts;
+  /** Pi's MCP servers, in `mcp.json` in its home. */
+  readonly mcp: PiMcp;
 
   constructor(private readonly options: PiDriverOptions) {
     // Pi's state root must exist before the first process starts in it
@@ -818,6 +843,7 @@ export class PiDriver implements Driver {
     // the first session (and the model list the phone asks for before it)
     // finds it ready instead of waiting on a download.
     void options.runtime.prepare();
+    this.mcp = new PiMcp(options.home, options.log);
     this.accounts = new PiAccounts({
       home: options.home,
       entryPoint: () => options.runtime.entryPoint(),
@@ -859,7 +885,7 @@ export class PiDriver implements Driver {
         commands: true,
         accounts: true,
         plugins: false,
-        mcp: false,
+        mcp: true,
         tasks: false,
       },
       credentials: [],
@@ -880,6 +906,7 @@ export class PiDriver implements Driver {
     // session before it starts, rather than after an error entry.
     return new PiSession(params, ctx, {
       runtime: this.options.runtime,
+      mcp: this.mcp,
       home: this.options.home,
       baseEnv: this.options.baseEnv ?? process.env,
       ...(this.options.spawnFn !== undefined ? { spawnFn: this.options.spawnFn } : {}),
