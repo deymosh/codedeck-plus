@@ -158,6 +158,8 @@ agent uses:
 | `/tool [command]` | call its own shell tool (a permission card on OpenCode) |
 | `/question` | ask one multiple-choice question (a question form/card) |
 | `/plan-approval` | propose a plan for approval (a plan card; needs plan mode) |
+| `/task [brief]` | start a sub-agent whose prompt is the brief (Pi; `/task /tool` makes it run a command) |
+| `/background [command]` | run a shell command in the background (Qwen Code, Pi) |
 | `/error` | answer with a 400, exercising the failure path |
 | `/long` | answer with a long text and a large context figure |
 | anything else | echoed back as the agent's text |
