@@ -21,8 +21,17 @@ A session needs a model Pi can reach, any of:
   others). Pi's own code stores it, in its home (below), exactly where its
   `/login` would. The model picker then lists that provider's models.
 - **A provider profile** added on the phone (the agent's page → AI
-  providers): any OpenAI-compatible endpoint. A session bound to one runs on
-  it, and its models are the ones the picker offers.
+  providers): any OpenAI-compatible endpoint — a provider's own API or a
+  gateway in front of several (claude-code-router, LiteLLM). A session bound
+  to one runs on it, and its models are the ones the picker offers. A
+  profile's model list rarely says how large a model's context is or
+  whether it reasons, so each model borrows those facts from Pi's own
+  catalog: matched on the part of its id after the last `/` (a gateway's
+  `OpenCode Go/deepseek-v4.1-flash` is Pi's `deepseek-v4.1-flash`), from the
+  provider the route names when Pi has it, else the entry with the smallest
+  context. That sets the context meter, when Pi compacts, the reasoning
+  levels and the longest answer. A size the endpoint states wins; a model Pi
+  does not know runs at 128k context without reasoning.
 - **The bridge's environment**: the keys Pi reads itself, such as
   `ANTHROPIC_API_KEY` or `OPENROUTER_API_KEY`. Accounts shows them as the
   machine's, which only the machine can change.
@@ -62,23 +71,64 @@ the one its release shipped with, plus your own `models.json`.
 ## Permissions
 
 Pi has no permission system of its own: it runs every tool call it decides
-on. CodeDeck installs an extension into every session —
-`<home>/codedeck/codedeck-pi.js`, rewritten when the bridge's version of it
-changes and loaded with `-e` — that holds each tool call until the phone
-answers:
+on. CodeDeck installs an extension into every session — the CodeDeck Pi
+extension, `<home>/codedeck/codedeck-pi.js`, rewritten when the bridge's
+version of it changes and loaded with `-e` — that holds each tool call until
+the phone answers:
 
 - **Ask** (the default): a card for every tool call, except Pi's read-only
-  tools (`read`, `grep`, `find`, `ls`), which run without one. The card
-  offers Allow, Allow `<tool>` for this session, and Deny; a denied call
-  never runs, and Pi tells the model it was denied. A tool that another
-  extension or an MCP server adds asks like any other.
+  tools (`read`, `grep`, `find`, `ls`) and the extension's own tools that
+  change nothing (below), which run without one. The card offers Allow,
+  Allow `<tool>` for this session, and Deny; a denied call never runs, and
+  Pi tells the model it was denied. A tool that another extension or an MCP
+  server adds asks like any other.
 - **Auto edit**: Pi's own file tools (`edit`, `write`) also run without a
-  card; a command, and any tool an extension or an MCP server adds, still
-  asks.
+  card; a command, a web fetch, and any tool an extension or an MCP server
+  adds, still asks.
+- **Plan**: the session explores and changes nothing. Read-only tools and
+  read-only shell commands (`git status`, `git diff`, `cat`, `grep`… without
+  their writing options, no redirection) run; anything else is refused, and
+  the model is told to present its plan instead. The plan arrives as a plan
+  card: approve it to switch the session to Ask or Auto edit, or send it
+  back with what to change.
 - **YOLO**: every tool call runs without a card.
 
 What "for this session" allows is kept by the session only: Pi saves no
 rules, so the next session asks again.
+
+## Tools
+
+Pi ships `read`, `bash`, `edit` and `write` on by default. A session also
+turns on its `ls`, and its `grep` and `find` where ripgrep and fd are on the
+machine (the container image has both; Pi runs offline, so it never
+downloads them). The CodeDeck Pi extension adds what a session driven from a
+phone needs, shown with the same cards as the other agents:
+
+- **`todo`**: the model's checklist, shown as the session's checklist.
+- **`ask`**: up to four questions with options, shown as a question card.
+- **`exit_plan`**: the plan card of Plan mode.
+- **`task`**: a sub-agent — a second Pi with a fresh context — for one job,
+  answering with its conclusion; several run in parallel. `explore` has the
+  read-only tools only, so it changes nothing and never asks; `general` has
+  the session's tools, and each of its tool calls asks exactly as the
+  session's own would, on a card that names the sub-agent. Its work shows
+  under its call.
+- **`bash_background`**, **`task_output`**, **`task_stop`**: a command that
+  keeps running after its call (a dev server, a watcher), whose output the
+  model reads later. Each is a background task the phone can stop; whatever
+  still runs when the session's Pi exits is stopped with it.
+- **`web_fetch`**: one web page read as text, asking first every time. It
+  sends no cookies or credentials, follows at most five redirects and
+  never into a local or private address the first URL did not name, reads
+  text only, and tells the model the page is data, not instructions.
+- **`memory`**: notes about the project that later sessions start with —
+  one file per note and an index the system prompt carries, in Pi's home
+  under `codedeck/memory/<project>/`, never in the working tree. Each save
+  shows on the phone as a `memory` call; a note that looks like it holds a
+  secret is refused.
+
+The checklist, questions, sub-agents and background shells need no card of
+their own beyond what they start.
 
 ## Reasoning and messages
 
@@ -115,8 +165,8 @@ and macOS.
 The Plugins screen manages Pi's packages, through Pi's own `pi install`,
 `pi update` and `pi remove`. A package bundles extensions, skills, prompt
 templates and themes from npm (`npm:<package>`), git (`git:github.com/…` or
-a URL) or a path, and is how Pi gains tools it does not ship — subagents,
-LSP diagnostics and the like come from packages rather than from CodeDeck.
+a URL) or a path, and is how Pi gains tools neither it nor CodeDeck ships,
+such as LSP diagnostics.
 A package runs code with the bridge's permissions: install only ones you
 trust. An npm package needs `npm` on the machine (the container image has
 it, a release archive does not); `CODEDECK_NPM_REGISTRY` is passed on to it.
@@ -125,10 +175,9 @@ change load it.
 
 ## What this does not have
 
-- **No question or plan tool**: Pi has neither, so the session shows no
-  question forms or plan cards of its own.
-- **No subscription usage** to ask for (the context meter still works), no
-  background tasks and no saved permission rules.
+- **No subscription usage** to ask for (the context meter still works) and
+  no saved permission rules.
+- **No LSP diagnostics** of CodeDeck's own: a Pi package can add them.
 - **Accounts need Pi's package**: with `CODEDECK_PI_PATH` naming an
   executable rather than a `cli.js`, they cannot be listed or changed.
 

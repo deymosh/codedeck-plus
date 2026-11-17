@@ -24,7 +24,7 @@ interface Harness {
   session?: DriverSession;
 }
 
-function withDriver(options: { fake?: FakePiOptions } = {}): Harness {
+function withDriver(options: { fake?: FakePiOptions; killTree?: (pid: number) => void } = {}): Harness {
   const root = mkdtempSync(path.join(tmpdir(), 'codedeck-pi-'));
   const home = path.join(root, 'home');
   const cli = path.join(root, 'pi.js');
@@ -46,6 +46,7 @@ function withDriver(options: { fake?: FakePiOptions } = {}): Harness {
       spawns.push({ command, args, env: opts.env, cwd: opts.cwd });
       return fake.child;
     }) as never,
+    ...(options.killTree ? { killTree: options.killTree } : {}),
     log: (line) => logs.push(line),
   });
   return { driver, fake, home, spawns, logs };
@@ -81,7 +82,7 @@ describe('PiDriver.info', () => {
     const info = driver.info();
     expect(info.id).toBe('pi');
     expect(info.displayName).toBe('Pi');
-    expect(info.modes?.map((mode) => mode.id)).toEqual(['ask', 'auto-edit', 'yolo']);
+    expect(info.modes?.map((mode) => mode.id)).toEqual(['ask', 'auto-edit', 'plan', 'yolo']);
     expect(info.efforts?.map((effort) => effort.id)).toEqual(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
     expect(info.defaultMode).toBe('ask');
     expect(info.defaultEffort).toBe('medium');
@@ -94,7 +95,7 @@ describe('PiDriver.info', () => {
       accounts: true,
       plugins: true,
       mcp: true,
-      tasks: false,
+      tasks: true,
     });
     // Pi's own auth in its home applies; there is no CodeDeck credential.
     expect(info.credentials).toEqual([]);
@@ -117,6 +118,10 @@ describe('PiSession startup', () => {
     expect(spawn.args.slice(1, 4)).toEqual(['--mode', 'rpc', '--offline']);
     const extension = spawn.args[spawn.args.indexOf('-e') + 1]!;
     expect(extension.endsWith(path.join('codedeck', 'codedeck-pi.js'))).toBe(true);
+    // Added to Pi's defaults, never in place of them (`+name` entries).
+    const tools = spawn.args[spawn.args.indexOf('--tools') + 1]!;
+    expect(tools.split(',')).toContain('+ls');
+    expect(tools.split(',').every((entry) => entry.startsWith('+'))).toBe(true);
     expect(spawn.args).toContain('--model');
     expect(spawn.args[spawn.args.indexOf('--model') + 1]).toBe('claude-sonnet-5');
     expect(spawn.env.PI_CODING_AGENT_DIR).toBe(h.home);
@@ -455,7 +460,7 @@ describe('PiSession commands and options', () => {
   it('refuses a mode or effort Pi does not have', async () => {
     const h = withDriver();
     await ready(h);
-    await expect(h.session!.setOption('mode', 'plan')).rejects.toThrow(/no mode 'plan'/);
+    await expect(h.session!.setOption('mode', 'bypass')).rejects.toThrow(/no mode 'bypass'/);
     await expect(h.session!.setOption('effort', 'turbo')).rejects.toThrow(/no thinking level 'turbo'/);
   });
 });
@@ -483,5 +488,67 @@ describe('PiDriver models and conversations', () => {
   it('refuses to delete a path that is not a session id', async () => {
     const h = withDriver();
     await expect(h.driver.deleteConversation('../state', '/work')).rejects.toThrow(/not a Pi session id/);
+  });
+});
+
+describe('PiSession background tasks', () => {
+  const task = (data: Record<string, unknown>) => ({
+    type: 'entry_appended',
+    entry: { type: 'custom', id: 'e1', customType: 'codedeck', data: { kind: 'task', taskId: 'bg-1', title: 'Dev server', ...data } },
+  });
+
+  it('kills a task the phone stops, and shows it stopped however its shell exits', async () => {
+    const killed: number[] = [];
+    const h = withDriver({ killTree: (pid) => killed.push(pid) });
+    const ctx = await ready(h);
+    h.fake.emit(task({ status: 'running', pid: 4321, callId: 'call_b' }));
+    await ctx.waitFor((e) => e.type === 'entries' && e.entries.some((entry) => entry.entryType === 'background_task'));
+
+    await h.session!.stopTask!('bg-1');
+    expect(killed).toEqual([4321]);
+    // A shell that traps the stop may still exit 0.
+    h.fake.emit(task({ status: 'completed', summary: 'Exited with code 0' }));
+    await ctx.waitFor((e) => e.type === 'entries' && e.entries.some((entry) => entry.entryType === 'background_task' && entry.status !== 'running'));
+    expect(entries(ctx).filter((entry) => entry.entryType === 'background_task').at(-1)).toMatchObject({
+      status: 'stopped',
+      summary: 'Stopped',
+    });
+    await expect(h.session!.stopTask!('bg-1')).rejects.toThrow(/no running task/);
+  });
+});
+
+describe('PiSession checklist', () => {
+  it('shows a todo call as the checklist, not as a tool row', async () => {
+    const h = withDriver();
+    const ctx = await ready(h);
+    const todos = [
+      { content: 'Read the code', status: 'completed' },
+      { content: 'Run the tests', status: 'in_progress', activeForm: 'Running the tests' },
+      { content: '', status: 'pending' },
+      { content: 'Ship it', status: 'later' },
+    ];
+    h.fake.emit({ type: 'tool_execution_start', toolCallId: 'call_t', toolName: 'todo', args: { todos } });
+    h.fake.emit({
+      type: 'tool_execution_end',
+      toolCallId: 'call_t',
+      toolName: 'todo',
+      result: { content: [{ type: 'text', text: 'Checklist updated' }] },
+      isError: false,
+    });
+    await ctx.waitFor((event) => event.type === 'entries' && event.entries.some((entry) => entry.entryType === 'todos'));
+
+    expect(entries(ctx)).toContainEqual(
+      expect.objectContaining({
+        entryType: 'todos',
+        callId: 'call_t',
+        items: [
+          { text: 'Read the code', status: 'completed' },
+          { text: 'Run the tests', status: 'in_progress', activeText: 'Running the tests' },
+          // A blank item is dropped; an unknown status reads as pending.
+          { text: 'Ship it', status: 'pending' },
+        ],
+      }),
+    );
+    expect(entries(ctx).some((entry) => entry.entryType === 'tool_call' || entry.entryType === 'tool_result')).toBe(false);
   });
 });

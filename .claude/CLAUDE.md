@@ -185,8 +185,9 @@ credentials (`--env` is for the agent's own paths, not its keys).
    (`packages/agent-host/tools/fake-model.mjs`). The session is real, the
    model is not: each prompt is a scenario — `/tool` (a tool call; OpenCode
    and Pi ask permission for it), `/question` (a question form), `/plan-approval`
-   (a plan card), `/error` (an API failure), `/long` (a long answer and a
-   large context) — and anything else is echoed. Nothing reaches an account,
+   (a plan card), `/task <brief>` (a Pi sub-agent running the brief),
+   `/background` (a background shell), `/error` (an API failure), `/long` (a
+   long answer and a large context) — and anything else is echoed. Nothing reaches an account,
    and CI runs the same thing for claude-code and pi
    (`src/drivers/claude/__tests__/claudeFakeModel.test.ts`,
    `src/drivers/pi/__tests__/piFakeModel.test.ts`).

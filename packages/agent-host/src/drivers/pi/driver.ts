@@ -3,8 +3,8 @@
  * stdin, responses and session events on stdout, and an extension-UI
  * sub-protocol for dialogs (rpc.ts).
  *
- * What Pi does not have is a permission system of its own. CodeDeck's
- * extension (extension.ts) holds every `tool_call` until this driver answers,
+ * What Pi does not have is a permission system of its own. The CodeDeck Pi
+ * extension (extension/) holds every `tool_call` until this driver answers,
  * which is what turns Pi's tool calls into the phone's permission cards: the
  * driver decides whether a card is needed — `yolo`, Pi's read-only tools, and
  * a tool allowed for the session are answered at once — and the card is built
@@ -14,10 +14,17 @@
  * is Pi's own on disk: `get_state` reports its id and file, and a resume
  * opens it again with `--session`.
  *
- * Deliberate limits, all of them this driver's for now: no plugins or MCP
- * management (Pi reads its own configuration), no subscription usage (there
- * is none to ask), no background-task control. Provider profiles are session
- * bindings only; their models are not added to Pi's own catalog.
+ * The extension also adds what Pi does not ship and a phone-driven session
+ * needs — a checklist, questions, Plan mode, sub-agents, background shells,
+ * a web fetch and a project memory (extension/index.ts) — and this driver
+ * turns them into the phone's cards and entries: requests that wait for the
+ * phone through `codedeck-request:` dialogs, a sub-agent's progress through
+ * its `task` call's updates, a background task's start and end through
+ * `entry_appended` (extension/protocol.ts).
+ *
+ * Deliberate limits: no subscription usage (there is none to ask). Provider
+ * profiles are session bindings only; their models are not added to Pi's own
+ * catalog.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -49,10 +56,33 @@ import { PiAccounts } from './accounts';
 import { PiMcp } from './mcp';
 import { PiPlugins, piCliRunner, type PiCliRunner } from './plugins';
 import { buildPiEnv } from './env';
-import { PI_PERMISSION_PREFIX, installPiExtension } from './extension';
+import { PI_PERMISSION_PREFIX, bundledPiExtension, installPiExtension } from './extension';
+import { GATE } from './extension/gate';
+import {
+  PI_ENTRY_TYPE,
+  PI_PLAN_MODE,
+  PI_REQUEST_PREFIX,
+  PI_TOOL,
+  type PiAskReply,
+  type PiPermissionReply,
+  type PiPlanReply,
+  type PiRequest,
+  type PiSessionReply,
+  type PiSubagent,
+} from './extension/protocol';
+import { killTree, type TaskEvent } from './extension/background';
+import { EXTENSION_ENV, type SubagentUpdate } from './extension/task';
+import { todoItems } from './extension/todo';
 import { PI_LABEL } from './install';
 import { PiRpc, type PiRecord, type PiRpcOptions } from './rpc';
-import { PI_EDIT_TOOLS, PI_READ_ONLY_TOOLS, piTool } from './tools';
+import {
+  CODEDECK_SAFE_TOOLS,
+  PI_EDIT_TOOLS,
+  PI_READ_ONLY_TOOLS,
+  isReadOnlyShellCall,
+  piExtraTools,
+  piTool,
+} from './tools';
 import { PI_STYLE } from './style';
 import { PiRuntime, piCommand, type PiRuntimeOptions } from './runtime';
 
@@ -61,12 +91,26 @@ export const PI_AGENT_ID = 'pi';
 const ASK_MODE = 'ask';
 const AUTO_EDIT_MODE = 'auto-edit';
 const YOLO_MODE = 'yolo';
+const PLAN_MODE = PI_PLAN_MODE;
 const DEFAULT_MODE = ASK_MODE;
 const PI_MODES = [
   { id: ASK_MODE, label: 'Ask', description: 'Ask before each tool call, except for read-only tools' },
   { id: AUTO_EDIT_MODE, label: 'Auto edit', description: 'Edit files without asking; ask before running commands' },
+  { id: PLAN_MODE, label: 'Plan', description: 'Explore read-only, then present a plan to approve before anything changes' },
   { id: YOLO_MODE, label: 'YOLO', description: 'Run every tool without asking' },
 ];
+
+/** The plan card's choices: approving picks the mode the work runs in. */
+const PLAN_REVISE = 'revise';
+const PLAN_OPTIONS: OptionChoice[] = [
+  { id: ASK_MODE, label: 'Approve, ask before each change' },
+  { id: AUTO_EDIT_MODE, label: 'Approve, edit without asking' },
+  { id: PLAN_REVISE, label: 'Keep planning' },
+];
+
+/** The extension's tools whose own card stands in for the tool call: the
+ *  question card, the plan card, the checklist. */
+const CARD_TOOLS: ReadonlySet<string> = new Set([PI_TOOL.ask, PI_TOOL.exitPlan, PI_TOOL.todo]);
 
 /** Pi's thinking levels (`--thinking`, `set_thinking_level`). A model that
  *  does not support one clamps it, as Pi does in its own UI; the list is the
@@ -142,6 +186,8 @@ interface PiSessionDeps {
   home: string;
   baseEnv: NodeJS.ProcessEnv;
   spawnFn?: PiRpcOptions['spawnFn'];
+  /** Stops a background task's process tree; tests pass their own. */
+  killTree?: (pid: number) => void;
   log: (message: string) => void;
 }
 
@@ -150,6 +196,14 @@ export class PiSession implements DriverSession {
   private sessionMode: string;
   private readonly allowedTools = new Set<string>();
   private readonly toolFacts = new Map<string, { name: string; input: Record<string, unknown> }>();
+  /** Calls shown as their own card (CARD_TOOLS) rather than a tool row. */
+  private readonly cardCalls = new Set<string>();
+  /** The last progress event shown per sub-agent, by its `task` call. */
+  private readonly subagentSeq = new Map<string, number>();
+  /** Running background tasks' process ids, by task id. */
+  private readonly taskPids = new Map<string, number>();
+  /** Tasks the user stopped from the phone, until their end is reported. */
+  private readonly stoppedTasks = new Set<string>();
   /** Dialog requests Pi is waiting on, by id, so an interrupt or the
    *  session's end answers every one. */
   private readonly openUi = new Set<string>();
@@ -220,7 +274,9 @@ export class PiSession implements DriverSession {
   private async launch(): Promise<void> {
     const entry = await this.deps.runtime.entryPoint();
     if (this.ended) return;
-    const extension = installPiExtension(this.deps.home);
+    const extension = installPiExtension(this.deps.home, bundledPiExtension());
+    // A sub-agent's Pi loads the same file (extension/task.ts).
+    this.env[EXTENSION_ENV] = extension;
     // Read before the process starts: a change made while it boots may or
     // may not be in it, and is then reported as not loaded yet.
     this.mcpVersion = this.deps.mcp.version;
@@ -270,6 +326,8 @@ export class PiSession implements DriverSession {
 
   private arguments(extension: string): string[] {
     const args = ['--mode', 'rpc', '--offline', '-e', extension];
+    const tools = piExtraTools(this.deps.home, this.env);
+    if (tools.length > 0) args.push('--tools', tools.join(','));
     if (this.params.resume) args.push('--session', this.params.resume);
     const model = this.params.model?.trim();
     if (model) args.push('--model', this.modelArgument(model));
@@ -347,6 +405,12 @@ export class PiSession implements DriverSession {
         return;
       case 'tool_execution_start':
         this.toolStart(record);
+        return;
+      case 'tool_execution_update':
+        this.toolUpdate(record);
+        return;
+      case 'entry_appended':
+        this.appended(record.entry);
         return;
       case 'tool_execution_end':
         this.toolEnd(record);
@@ -458,6 +522,18 @@ export class PiSession implements DriverSession {
     if (callId === undefined || toolName === undefined) return;
     const input = recordOf(record.args) ?? {};
     this.toolFacts.set(callId, { name: toolName, input });
+    if (CARD_TOOLS.has(toolName)) {
+      this.cardCalls.add(callId);
+      if (toolName === PI_TOOL.todo) {
+        const items = todoItems(input).map((item) => ({
+          text: item.content,
+          status: item.status,
+          ...(item.activeForm !== undefined ? { activeText: item.activeForm } : {}),
+        }));
+        this.emit([{ entryType: 'todos', items, callId, timestamp: now() }]);
+      }
+      return;
+    }
     const call = piTool(toolName, input, this.reportUnknownTool);
     const locations = toolLocations(input);
     this.emit([
@@ -478,15 +554,107 @@ export class PiSession implements DriverSession {
     const callId = str(record.toolCallId);
     if (callId === undefined) return;
     this.toolFacts.delete(callId);
-    // The facts are gone by now; a call the permission gate hid would be
-    // known here, but nothing is hidden: Pi's own question tools are none.
+    this.subagentSeq.delete(callId);
     const text = resultText(record.result);
+    if (this.cardCalls.delete(callId)) {
+      // The card was the call; only a failure is news (the question went
+      // unanswered, the plan was empty).
+      if (record.isError === true && text !== '') this.emit([{ entryType: 'status', text, timestamp: now() }]);
+      return;
+    }
     this.emit([
       {
         entryType: 'tool_result',
         callId,
         text: text === '' ? (record.isError === true ? 'The tool failed.' : '(no output)') : truncateToolResult(text),
         ...(record.isError === true ? { isError: true } : {}),
+        timestamp: now(),
+      },
+    ]);
+  }
+
+  /**
+   * A sub-agent's progress (extension/task.ts): each update carries one thing
+   * it did, numbered, and becomes an entry under the parent's `task` call.
+   * Its call ids are the child's own, so they are put under the parent's to
+   * stay apart from the session's (and from a parallel sub-agent's).
+   */
+  private toolUpdate(record: PiRecord): void {
+    if (record.toolName !== PI_TOOL.task) return;
+    const details = recordOf(recordOf(record.partialResult)?.details) as Partial<SubagentUpdate> | undefined;
+    const subagent = details?.subagent;
+    const event = details?.event;
+    const seq = num(details?.seq);
+    if (!subagent || typeof subagent.parentCallId !== 'string' || !event || seq === undefined) return;
+    // One update replaces the last in Pi's own UI; here each is one event,
+    // so an update seen twice must not show twice.
+    const last = this.subagentSeq.get(subagent.parentCallId) ?? 0;
+    if (seq <= last) return;
+    this.subagentSeq.set(subagent.parentCallId, seq);
+    const tag = { subagent: { label: subagent.label, parentCallId: subagent.parentCallId } };
+    const timestamp = now();
+    const childId = (id: string): string => `${subagent.parentCallId}/${id}`;
+    if (event.kind === 'text') {
+      this.emit([{ entryType: 'text', role: 'agent', text: event.text, ...tag, timestamp }]);
+    } else if (event.kind === 'tool_call') {
+      const call = piTool(event.toolName, event.args, this.reportUnknownTool);
+      const locations = toolLocations(event.args);
+      this.emit([
+        {
+          entryType: 'tool_call',
+          callId: childId(event.callId),
+          toolName: event.toolName,
+          kind: call.kind,
+          title: call.title,
+          ...(locations.length > 0 ? { locations } : {}),
+          ...(call.input !== undefined ? { input: call.input } : {}),
+          ...tag,
+          timestamp,
+        },
+      ]);
+    } else if (event.kind === 'tool_result') {
+      this.emit([
+        {
+          entryType: 'tool_result',
+          callId: childId(event.callId),
+          text: event.text === '' ? (event.isError ? 'The tool failed.' : '(no output)') : truncateToolResult(event.text),
+          ...(event.isError ? { isError: true } : {}),
+          ...tag,
+          timestamp,
+        },
+      ]);
+    }
+  }
+
+  /**
+   * One of the extension's out-of-turn events: a background task starting or
+   * ending (extension/background.ts) becomes the phone's background-task
+   * entry. A task the user stopped from the phone ends as stopped, whatever
+   * exit its killed shell reports.
+   */
+  private appended(entry: unknown): void {
+    const appended = recordOf(entry);
+    if (appended?.customType !== PI_ENTRY_TYPE) return;
+    const event = recordOf(appended.data) as Partial<TaskEvent> | undefined;
+    if (event?.kind !== 'task' || typeof event.taskId !== 'string' || typeof event.status !== 'string') return;
+    const taskId = event.taskId;
+    if (event.status === 'running') {
+      if (typeof event.pid === 'number') this.taskPids.set(taskId, event.pid);
+    } else {
+      this.taskPids.delete(taskId);
+    }
+    // Even a clean exit: a shell that traps the stop and exits 0 was still
+    // stopped by the user.
+    const status = event.status !== 'running' && this.stoppedTasks.delete(taskId) ? 'stopped' : event.status;
+    this.emit([
+      {
+        entryType: 'background_task',
+        taskId,
+        kind: 'shell',
+        title: typeof event.title === 'string' && event.title !== '' ? event.title : taskId,
+        status,
+        ...(typeof event.callId === 'string' ? { callId: event.callId } : {}),
+        ...(status === 'stopped' ? { summary: 'Stopped' } : typeof event.summary === 'string' ? { summary: event.summary } : {}),
         timestamp: now(),
       },
     ]);
@@ -585,6 +753,10 @@ export class PiSession implements DriverSession {
       await this.answerPermission(id, title.slice(PI_PERMISSION_PREFIX.length));
       return;
     }
+    if (method === 'editor' && title.startsWith(PI_REQUEST_PREFIX)) {
+      await this.answerRequest(id, str(record.prefill) ?? '');
+      return;
+    }
     if (method === 'select') {
       const options = Array.isArray(record.options) ? record.options.filter((o): o is string => typeof o === 'string') : [];
       const outcome = await this.ask(id, title || 'Pi asks', options);
@@ -639,38 +811,143 @@ export class PiSession implements DriverSession {
   private async answerPermission(id: string, callId: string): Promise<void> {
     const facts = this.toolFacts.get(callId);
     const toolName = facts?.name ?? 'tool';
-    if (
-      this.sessionMode === YOLO_MODE ||
-      this.allowedTools.has(toolName) ||
-      PI_READ_ONLY_TOOLS.has(toolName) ||
-      (this.sessionMode === AUTO_EDIT_MODE && PI_EDIT_TOOLS.has(toolName))
-    ) {
-      this.respond({ type: 'extension_ui_response', id, value: 'allow' });
+    const input = facts?.input ?? {};
+    const decision = this.decide(toolName, input);
+    if (decision !== 'ask') {
+      this.respond({ type: 'extension_ui_response', id, value: decision === 'allow' ? GATE.allow : GATE.plan });
       return;
     }
-    const input = facts?.input ?? {};
+    const answer = await this.card(id, toolName, input);
+    if (this.cancelledUi.has(id)) return;
+    if (answer === 'cancelled') {
+      this.respond({ type: 'extension_ui_response', id, cancelled: true });
+      return;
+    }
+    this.respond({ type: 'extension_ui_response', id, value: answer === 'allow' ? GATE.allow : GATE.deny });
+  }
+
+  /** The phone's permission card for one call, and what the user chose. A
+   *  sub-agent's call names the sub-agent, so the card says who asks. */
+  private async card(
+    requestId: string,
+    toolName: string,
+    input: Record<string, unknown>,
+    subagent?: PiSubagent,
+  ): Promise<'allow' | 'deny' | 'cancelled'> {
     const call = piTool(toolName, input, this.reportUnknownTool);
     const locations = toolLocations(input);
     const request: Omit<PermissionRequest, 'sessionId'> = {
-      requestId: id,
+      requestId,
       toolName,
       kind: call.kind,
       title: call.title,
       ...(locations.length > 0 ? { locations } : {}),
+      ...(subagent ? { subagent: { label: subagent.label, parentCallId: subagent.parentCallId } } : {}),
       options: [PERMISSION_ALLOW, { ...ALLOW_SESSION, label: `Allow ${toolName} for this session` }, PERMISSION_DENY],
     };
     const outcome: SelectOutcome = await this.ctx.requestPermission(request);
+    if (outcome.outcome === 'cancelled') return 'cancelled';
+    if (outcome.optionId === PERMISSION_ALLOW.id || outcome.optionId === ALLOW_SESSION.id) {
+      if (outcome.optionId === ALLOW_SESSION.id) this.allowedTools.add(toolName);
+      return 'allow';
+    }
+    return 'deny';
+  }
+
+  /**
+   * What the session's mode says of one call, before any card: run it, refuse
+   * it as plan mode does, or ask the phone. Plan mode lets through only what
+   * reads (Pi's read-only tools, a read-only shell command, the extension's
+   * own safe tools) and asks before a fetch; everything else is refused with
+   * the plan reason, which tells the model to present its plan.
+   */
+  private decide(toolName: string, input: Record<string, unknown>): 'allow' | 'plan' | 'ask' {
+    const reads = PI_READ_ONLY_TOOLS.has(toolName) || CODEDECK_SAFE_TOOLS.has(toolName);
+    if (this.sessionMode === PLAN_MODE) {
+      if (reads) return 'allow';
+      if (isReadOnlyShellCall(toolName, input)) return 'allow';
+      return toolName === PI_TOOL.webFetch ? 'ask' : 'plan';
+    }
+    if (
+      this.sessionMode === YOLO_MODE ||
+      reads ||
+      this.allowedTools.has(toolName) ||
+      (this.sessionMode === AUTO_EDIT_MODE && PI_EDIT_TOOLS.has(toolName))
+    ) {
+      return 'allow';
+    }
+    return 'ask';
+  }
+
+  /**
+   * One request from the extension (extension/protocol.ts): answered with the
+   * reply as JSON, or cancelled when there is none to give — the phone did
+   * not answer, or the request is not one this driver serves.
+   */
+  private async answerRequest(id: string, prefill: string): Promise<void> {
+    let body: PiRequest | undefined;
+    try {
+      body = JSON.parse(prefill) as PiRequest;
+    } catch {
+      body = undefined;
+    }
+    const reply = body !== undefined ? await this.serve(body) : undefined;
     if (this.cancelledUi.has(id)) return;
-    if (outcome.outcome === 'cancelled') {
+    if (reply === undefined) {
       this.respond({ type: 'extension_ui_response', id, cancelled: true });
       return;
     }
-    if (outcome.optionId === PERMISSION_ALLOW.id || outcome.optionId === ALLOW_SESSION.id) {
-      if (outcome.optionId === ALLOW_SESSION.id) this.allowedTools.add(toolName);
-      this.respond({ type: 'extension_ui_response', id, value: 'allow' });
-      return;
+    this.respond({ type: 'extension_ui_response', id, value: JSON.stringify(reply) });
+  }
+
+  private async serve(body: PiRequest): Promise<unknown> {
+    switch (body.op) {
+      case 'session':
+        return { mode: this.sessionMode } satisfies PiSessionReply;
+      case 'ask': {
+        const specs: QuestionSpec[] = body.questions.map((q) => ({
+          question: q.question,
+          ...(q.header !== undefined ? { header: q.header } : {}),
+          ...(q.options !== undefined ? { options: q.options } : {}),
+          ...(q.multiSelect === true ? { multiSelect: true } : {}),
+        }));
+        const outcome = await this.ctx.askQuestion(body.callId, specs);
+        if (outcome.outcome === 'cancelled') return undefined;
+        return {
+          answers: outcome.answers.map((answer) => (answer.type === 'selected' ? { selected: answer.labels } : { text: answer.text })),
+        } satisfies PiAskReply;
+      }
+      case 'plan': {
+        this.emit([{ entryType: 'plan', text: body.plan, timestamp: now() }]);
+        const outcome = await this.ctx.requestPlanApproval(body.callId, PLAN_OPTIONS, PLAN_REVISE);
+        if (outcome.outcome !== 'selected') return undefined;
+        if (outcome.optionId === PLAN_REVISE) {
+          const feedback = outcome.feedback?.trim();
+          return { approved: false, ...(feedback ? { feedback } : {}) } satisfies PiPlanReply;
+        }
+        if (!PLAN_OPTIONS.some((option) => option.id === outcome.optionId)) return undefined;
+        this.sessionMode = outcome.optionId;
+        this.ctx.emit({ type: 'info', mode: this.sessionMode });
+        return { approved: true, mode: this.sessionMode } satisfies PiPlanReply;
+      }
+      case 'permission': {
+        // A sub-agent's call, held by its own gate: the session's mode
+        // decides it exactly as it decides the session's own calls.
+        const decision = this.decide(body.toolName, body.input ?? {});
+        if (decision === 'allow') return { allow: true } satisfies PiPermissionReply;
+        if (decision === 'plan') return { allow: false, plan: true } satisfies PiPermissionReply;
+        const answer = await this.card(
+          `${body.subagent.parentCallId}/${body.callId}`,
+          body.toolName,
+          body.input ?? {},
+          body.subagent,
+        );
+        if (answer === 'cancelled') return undefined;
+        return { allow: answer === 'allow' } satisfies PiPermissionReply;
+      }
+      default:
+        return undefined;
     }
-    this.respond({ type: 'extension_ui_response', id, value: 'deny' });
   }
 
   /** Answer every dialog still waiting with "cancelled". Pi does not settle
@@ -740,6 +1017,15 @@ export class PiSession implements DriverSession {
     } catch (error: unknown) {
       this.deps.log(`[pi] could not abort the turn: ${error instanceof Error ? error.message : String(error)}`);
     }
+  }
+
+  /** Stop one background task: its process and everything it started, on
+   *  this machine. Its end arrives from the extension as it exits. */
+  async stopTask(taskId: string): Promise<void> {
+    const pid = this.taskPids.get(taskId);
+    if (pid === undefined) throw new Error(`${PI_LABEL} has no running task '${taskId}'`);
+    this.stoppedTasks.add(taskId);
+    (this.deps.killTree ?? killTree)(pid);
   }
 
   async setOption(option: SessionOption, value: string): Promise<void> {
@@ -827,6 +1113,8 @@ export interface PiDriverOptions {
   spawnFn?: PiRpcOptions['spawnFn'];
   /** Spawn seam for the account helper, in tests. */
   accountsSpawnFn?: PiRpcOptions['spawnFn'];
+  /** Kill seam for background tasks, in tests. */
+  killTree?: (pid: number) => void;
   /** Runs Pi's package commands; tests pass their own. */
   pluginRunner?: PiCliRunner;
   /** `CODEDECK_NPM_REGISTRY`, when the operator set one. */
@@ -914,7 +1202,8 @@ export class PiDriver implements Driver {
         accounts: true,
         plugins: true,
         mcp: true,
-        tasks: false,
+        // Background shells (extension/background.ts), stopped from the phone.
+        tasks: true,
       },
       credentials: [],
       style: PI_STYLE,
@@ -938,6 +1227,7 @@ export class PiDriver implements Driver {
       home: this.options.home,
       baseEnv: this.options.baseEnv ?? process.env,
       ...(this.options.spawnFn !== undefined ? { spawnFn: this.options.spawnFn } : {}),
+      ...(this.options.killTree !== undefined ? { killTree: this.options.killTree } : {}),
       log: this.options.log,
     });
   }

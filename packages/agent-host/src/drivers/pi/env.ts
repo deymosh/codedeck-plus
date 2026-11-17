@@ -19,13 +19,14 @@
 import { isValidProviderBaseUrl, PROVIDER_BASE_URL_ERROR } from '../../sdk/provider';
 import { providerApiRoot } from '../../sdk/providerModels';
 import type { ProviderBinding, StartSession } from '../../sdk/types';
+import { PROVIDER_ENV, PROVIDER_TOKEN_ENV } from './extension/provider';
 import { PI_AGENT_DIR_ENV } from './runtime';
 
 /** The profile (no secret) the extension registers, when a session is bound
  *  to one. */
-export const PI_PROVIDER_ENV = 'CODEDECK_PI_PROVIDER';
+export const PI_PROVIDER_ENV = PROVIDER_ENV;
 /** The profile's auth token, read by the extension through `$`-interpolation. */
-export const PI_PROVIDER_TOKEN_ENV = 'CODEDECK_PI_PROVIDER_TOKEN';
+export const PI_PROVIDER_TOKEN_ENV = PROVIDER_TOKEN_ENV;
 
 /** The provider registration as the extension's JSON variable carries it. */
 export interface PiProviderProfile {

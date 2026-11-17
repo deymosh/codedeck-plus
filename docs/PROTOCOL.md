@@ -1013,8 +1013,9 @@ restart.
    The host ships five: `drivers/opencode/`, `drivers/claude/`,
    `drivers/deepseek/`, `drivers/qwen/` (those two over the shared `acp/`
    machinery, which is what an ACP agent's driver reuses) and `drivers/pi/`
-   (Pi's own RPC mode, with an extension the driver writes for the
-   permission gate).
+   (Pi's own RPC mode, with the CodeDeck Pi extension the driver writes
+   for the permission gate and the tools Pi lacks — bundled from
+   `drivers/pi/extension/`).
 4. Test it beside the driver, in `src/drivers/<agent>/__tests__/`, like
    `drivers/claude/__tests__/claudeDriver.test.ts` and
    `drivers/opencode/__tests__/opencodeDriver.test.ts` do, with the

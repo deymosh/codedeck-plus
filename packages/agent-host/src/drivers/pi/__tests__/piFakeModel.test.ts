@@ -191,4 +191,149 @@ live('Pi against the fake model', () => {
     },
     TURN_MS,
   );
+
+  it(
+    'asks through the question card and gives the model the answer, with no tool row',
+    async () => {
+      const ctx = start({
+        question: () => ({ outcome: 'answered', answers: [{ type: 'selected', labels: ['Blue'] }] }),
+      });
+      await turn(ctx, '/question');
+
+      // No permission card: asking is the card.
+      expect(ctx.permissions).toHaveLength(0);
+      expect(ctx.questions).toHaveLength(1);
+      expect(ctx.questions[0]!.questions[0]).toMatchObject({ question: 'Which color?', header: 'Color' });
+      expect(ctx.questions[0]!.questions[0]!.options?.map((option) => option.label)).toContain('Blue');
+      expect(ctx.entries().some((entry) => entry.entryType === 'tool_call' && entry.toolName === 'ask')).toBe(false);
+      // The fake model echoes the tool result it was sent.
+      expect(ctx.entries()).toContainEqual(
+        expect.objectContaining({ entryType: 'text', role: 'agent', text: expect.stringContaining('Blue') }),
+      );
+    },
+    TURN_MS,
+  );
+
+  it(
+    'in plan mode, refuses a command that writes and presents the plan as a card whose approval switches the mode',
+    async () => {
+      const ctx = start(
+        { plan: () => ({ outcome: 'selected', optionId: 'auto-edit' }) },
+        { mode: 'plan' },
+      );
+      await turn(ctx, '/tool');
+      // The write is refused without a card, with the reason that says what to do.
+      expect(ctx.permissions).toHaveLength(0);
+      expect(ctx.entries()).toContainEqual(
+        expect.objectContaining({ entryType: 'tool_result', isError: true, text: expect.stringContaining('plan mode') }),
+      );
+      expect(existsSync(path.join(cwd, 'codedeck-fake-model.txt'))).toBe(false);
+
+      await turn(ctx, '/plan-approval');
+      expect(ctx.plans).toHaveLength(1);
+      expect(ctx.plans[0]!.options.map((option) => option.id)).toEqual(['ask', 'auto-edit', 'revise']);
+      expect(ctx.plans[0]!.revise).toBe('revise');
+      expect(ctx.entries()).toContainEqual(expect.objectContaining({ entryType: 'plan', text: expect.stringContaining('Do the thing') }));
+      expect(ctx.events).toContainEqual(expect.objectContaining({ type: 'info', mode: 'auto-edit' }));
+    },
+    TURN_MS,
+  );
+
+  it(
+    "runs a sub-agent whose own command asks through the parent's card, tagged with the sub-agent",
+    async () => {
+      const ctx = start({ permission: () => ({ outcome: 'selected', optionId: 'allow' }) });
+      await turn(ctx, '/task /tool');
+
+      const task = ctx.entries().find((entry) => entry.entryType === 'tool_call' && entry.toolName === 'task');
+      expect(task, 'the parent called task').toBeDefined();
+      const parentCallId = task!.entryType === 'tool_call' ? task!.callId : '';
+      // The task call itself needs no card; the child's command does, and
+      // the card says which sub-agent asks.
+      expect(ctx.permissions).toHaveLength(1);
+      expect(ctx.permissions[0]).toMatchObject({ toolName: 'bash', subagent: { label: 'general', parentCallId } });
+      expect(existsSync(path.join(cwd, 'codedeck-fake-model.txt'))).toBe(true);
+      // The child's work shows under the parent's call.
+      expect(ctx.entries()).toContainEqual(
+        expect.objectContaining({ entryType: 'tool_call', toolName: 'bash', subagent: { label: 'general', parentCallId } }),
+      );
+      expect(ctx.entries()).toContainEqual(
+        expect.objectContaining({ entryType: 'text', text: expect.stringContaining('tool-finished'), subagent: expect.anything() }),
+      );
+      // Its answer is the task's result, which the parent's model answers.
+      expect(ctx.entries()).toContainEqual(
+        expect.objectContaining({ entryType: 'tool_result', callId: parentCallId, text: expect.stringContaining('tool-finished') }),
+      );
+    },
+    TURN_MS,
+  );
+
+  it(
+    'runs a background shell past the turn, reporting its start and its end as a background task',
+    async () => {
+      const ctx = start({ permission: () => ({ outcome: 'selected', optionId: 'allow' }) });
+      await turn(ctx, '/background');
+      expect(ctx.permissions).toHaveLength(1);
+      expect(ctx.permissions[0]).toMatchObject({ toolName: 'bash_background', kind: 'execute' });
+      const call = ctx.entries().find((entry) => entry.entryType === 'tool_call' && entry.toolName === 'bash_background');
+      const callId = call?.entryType === 'tool_call' ? call.callId : undefined;
+      expect(ctx.entries()).toContainEqual(
+        expect.objectContaining({ entryType: 'background_task', kind: 'shell', status: 'running', callId }),
+      );
+      // The command prints for about three seconds: it ends after the turn.
+      await ctx.waitFor(
+        (event) => event.type === 'entries' && event.entries.some((entry) => entry.entryType === 'background_task' && entry.status === 'completed'),
+        TURN_MS,
+      );
+      expect(ctx.entries()).toContainEqual(
+        expect.objectContaining({ entryType: 'background_task', status: 'completed', summary: 'Exited with code 0' }),
+      );
+    },
+    TURN_MS,
+  );
+
+  it(
+    "stops a background task from the phone, with what it started, and says it was stopped",
+    async () => {
+      const ctx = start({ permission: () => ({ outcome: 'selected', optionId: 'allow' }) });
+      await turn(ctx, '/background node -e "setInterval(function(){},1000)"');
+      const running = ctx.entries().find((entry) => entry.entryType === 'background_task' && entry.status === 'running');
+      expect(running).toBeDefined();
+      const taskId = running!.entryType === 'background_task' ? running!.taskId : '';
+      await session!.stopTask!(taskId);
+      await ctx.waitFor(
+        (event) => event.type === 'entries' && event.entries.some((entry) => entry.entryType === 'background_task' && entry.status === 'stopped'),
+        TURN_MS,
+      );
+      await expect(session!.stopTask!(taskId)).rejects.toThrow(/no running task/);
+    },
+    TURN_MS,
+  );
+
+  it(
+    "sizes a gateway's model from Pi's own catalog, which the extension reads inside Pi",
+    async () => {
+      // A gateway's id names its route before the model; the pinned Pi's
+      // catalog serves this model at 1M tokens (opencode-go). The endpoint's
+      // list said nothing about its size, as OpenCode Go's does not.
+      const routed = 'OpenCode Go/deepseek-v4.1-flash';
+      const ctx = start(
+        {},
+        {
+          model: routed,
+          provider: {
+            id: 'codedeck-fake',
+            label: 'Fake gateway',
+            baseUrl: modelUrl,
+            authToken: 'codedeck-fake-model',
+            models: [{ id: routed }],
+            defaultModel: routed,
+          },
+        },
+      );
+      const info = await ctx.waitFor((event) => event.type === 'info' && event.contextWindow !== undefined, TURN_MS);
+      expect(info).toMatchObject({ contextWindow: 1_000_000 });
+    },
+    TURN_MS,
+  );
 });

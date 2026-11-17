@@ -27,6 +27,10 @@
  *                    hands back
  *   /plan-approval   propose a plan for the agent's own plan tool, for the
  *                    card the approval travels through
+ *   /task [brief]    start a sub-agent with the agent's own sub-agent tool
+ *                    (the CodeDeck Pi extension's `task`); the brief is the
+ *                    sub-agent's prompt, so `/task /tool` makes the
+ *                    sub-agent run the shell scenario against this server
  *   /error           answer with a 400 API error, so the failure path is
  *                    exercised
  *   /long            answer with a lot of text, for the transcript and for a
@@ -85,7 +89,7 @@ export const LONG_TEXT = Array.from(
 ).join('\n');
 
 /** The scenario commands, in the order the vocabulary lists them. */
-export const SCENARIOS = ['tool', 'background', 'question', 'plan-approval', 'error', 'long'];
+export const SCENARIOS = ['tool', 'background', 'question', 'plan-approval', 'task', 'error', 'long'];
 
 /**
  * How long a streamed reply is held between pieces, and the longest a text can
@@ -240,14 +244,26 @@ export function offeredTools(body, shape) {
  *  instead of `bash` on Windows (same `command` + `description`); without
  *  it, `/tool` there would fall back to the first tool offered, which is
  *  its question tool. */
-const SHELL_TOOLS = ['Bash', 'bash', 'pwsh', 'shell', 'execute', 'run_command', 'run_shell_command'];
-/** Names that ask the user a question. */
-const QUESTION_TOOLS = ['AskUserQuestion', 'ask_user_question', 'question', 'ask_user'];
-/** Names that propose a plan for approval. */
-const PLAN_TOOLS = ['ExitPlanMode', 'exit_plan_mode'];
+const SHELL_TOOLS = ['Bash', 'bash', 'pwsh', 'powershell', 'shell', 'execute', 'run_command', 'run_shell_command'];
+/** Names that ask the user a question (`ask` is the CodeDeck Pi
+ *  extension's, which takes AskUserQuestion's shape). */
+const QUESTION_TOOLS = ['AskUserQuestion', 'ask_user_question', 'question', 'ask_user', 'ask'];
+/** Names that propose a plan for approval (`exit_plan` is the CodeDeck Pi
+ *  extension's, which takes `{plan}` too). */
+const PLAN_TOOLS = ['ExitPlanMode', 'exit_plan_mode', 'exit_plan'];
+/** Names that start a sub-agent. */
+const TASK_TOOLS = ['task'];
 /** What each scenario's call prefers to be named — the agent's own tool for
  *  it, when the request offers one. */
-const SCENARIO_TOOLS = { question: QUESTION_TOOLS, 'plan-approval': PLAN_TOOLS, tool: SHELL_TOOLS, background: SHELL_TOOLS };
+const SCENARIO_TOOLS = {
+  question: QUESTION_TOOLS,
+  'plan-approval': PLAN_TOOLS,
+  task: TASK_TOOLS,
+  tool: SHELL_TOOLS,
+  // The CodeDeck Pi extension's background shell first, when offered: its
+  // plain `bash` would run the command in the foreground.
+  background: ['bash_background', ...SHELL_TOOLS],
+};
 
 /**
  * The tool a scenario calls, or null when the request offers none this server
@@ -306,6 +322,7 @@ function questionArguments(name, question) {
  *  `/tool <command>` names the command to run instead of the default. */
 export function toolArguments(name, scenario, argument = '') {
   if (scenario === 'plan-approval') return { plan: argument || PLAN_TEXT };
+  if (scenario === 'task') return { description: 'Fake sub-agent', prompt: argument || '/tool', agent: 'general' };
   if (scenario === 'question') return questionArguments(name, argument || 'Which color?');
   if (scenario === 'background') return { command: argument || BACKGROUND_COMMAND, description: `A background ${name} call from the fake model`, ...BACKGROUND_FLAG[name] };
   return { command: argument || TOOL_COMMAND, description: `A ${name} call from the fake model` };

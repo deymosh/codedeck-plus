@@ -71,12 +71,14 @@ FROM ${NODE_IMAGE}
 ARG USER_ID=1000
 ARG GROUP_ID=1000
 
-# git/gh/python3/curl are for the agent's own tool use inside sessions. The
+# git/gh/python3/curl are for the agent's own tool use inside sessions, and
+# ripgrep/fd are Pi's `grep` and `find` (Debian names fd `fdfind`, which Pi
+# looks for too; Pi runs offline, so it never downloads them itself). The
 # GitHub CLI keyring is served already dearmored, so no gnupg is needed.
 # yarn and corepack ship with the node image and nothing here uses them (npm
 # stays, for the agents' own use in sessions).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl git python3 \
+    && apt-get install -y --no-install-recommends ca-certificates curl git python3 ripgrep fd-find \
     && install -d -m 0755 /etc/apt/keyrings \
     && curl -fsSL -o /etc/apt/keyrings/githubcli-archive-keyring.gpg https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
