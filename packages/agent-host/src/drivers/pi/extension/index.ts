@@ -14,6 +14,7 @@ import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import type { CatalogModel } from './catalog';
 import { registerAsk } from './ask';
 import { installGate } from './gate';
+import { registerMemory } from './memory';
 import { registerPlanMode } from './plan';
 import { registerProfile } from './provider';
 import { registerTodo } from './todo';
@@ -36,4 +37,8 @@ export default function codedeckPi(pi: ExtensionAPI): void {
   registerAsk(pi);
   registerPlanMode(pi);
   registerWebFetch(pi);
+  // The notes live in Pi's home, which the driver always names; without it
+  // there is nowhere that is the machine's own to keep them.
+  const home = process.env.PI_CODING_AGENT_DIR;
+  if (home) registerMemory(pi, { home, env: process.env });
 }
