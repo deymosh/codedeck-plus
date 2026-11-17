@@ -913,7 +913,7 @@ cmd_e2e() {
     step "driver protocol" ${run[@]+"${run[@]}"} \
       cargo test --locked -p agent-protocol --test agent_host -- --ignored || true
     step "bridge end to end" ${run[@]+"${run[@]}"} \
-      cargo test --locked -p bridge-runtime --test e2e -- --ignored || true
+      cargo test --locked -p bridge-runtime --test e2e --test web_page -- --ignored || true
   fi
   check_summary
 }
