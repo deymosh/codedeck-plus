@@ -21,6 +21,20 @@ const toolTurn = (shell) => ({
   messages: [{ role: 'user', content: [{ type: 'text', text: '/tool' }] }],
 });
 
+describe('/write', () => {
+  it("writes the named file with Pi's write, a \\n in the content a line break", () => {
+    const reply = planReply(
+      {
+        stream: true,
+        tools: ['read', 'bash', 'edit', 'write'].map((name) => ({ name, input_schema: { type: 'object' } })),
+        messages: [{ role: 'user', content: [{ type: 'text', text: '/write src/a.ts const x = 1;\\nexport {};' }] }],
+      },
+      'anthropic',
+    );
+    expect(reply).toMatchObject({ kind: 'tool', name: 'write', args: { path: 'src/a.ts', content: 'const x = 1;\nexport {};' } });
+  });
+});
+
 describe('/tool', () => {
   for (const shell of ['bash', 'pwsh']) {
     it(`calls the Harness's ${shell} with the command and description it requires`, () => {
