@@ -17,6 +17,7 @@ import { installGate } from './gate';
 import { registerPlanMode } from './plan';
 import { registerProfile } from './provider';
 import { registerTodo } from './todo';
+import { registerWebFetch } from './webFetch';
 
 /** Every chat model of the running Pi's own catalog. A catalog that cannot
  *  be read describes nothing: profile models then run at the fallbacks. */
@@ -34,4 +35,5 @@ export default function codedeckPi(pi: ExtensionAPI): void {
   registerTodo(pi);
   registerAsk(pi);
   registerPlanMode(pi);
+  registerWebFetch(pi);
 }
