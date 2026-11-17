@@ -1,6 +1,6 @@
 [versions]
 # Latest stable of every toolchain piece as of the last bump.
-agp = "9.4.1"
+agp = "9.5.1"
 kotlin = "2.4.21"
 coreKtx = "1.19.1"
 lifecycle = "2.11.0"
@@ -10,12 +10,12 @@ coroutines = "1.11.0"
 # Decodes the JSON `crates/client-ffi`'s `views.rs` crosses for
 # the already-grouped transcript (`display_entries_json`) and the pending-
 # permission summary — see `ui/transcript/DisplayEntries.kt`.
-kotlinxSerialization = "1.12.0"
+kotlinxSerialization = "1.13.0"
 junit = "4.13.2"
 androidxTestExtJunit = "1.3.0"
 androidxTestRunner = "1.7.0"
 androidxTestCore = "1.7.0"
-robolectric = "4.17"
+robolectric = "4.18"
 # 1.3.5 was proven on an older Kotlin/AGP pair (2.0.21/8.7.3), but its
 # Gradle plugin calls AGP's
 # `BaseExtension`, removed in AGP 9 — a hard configuration-time failure, not
