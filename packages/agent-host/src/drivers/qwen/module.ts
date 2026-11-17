@@ -12,7 +12,8 @@ import { QwenDriver } from './driver';
 import { QWEN_PACKAGE, installQwenTree, installedQwenTree } from './install';
 import { QwenMcp } from './mcp';
 import { qwenCli, QwenPlugins } from './plugins';
-import { QwenConfigVersion, QwenRuntime, qwenHomeDir } from './runtime';
+import { ConfigVersion } from '../../acp/runtime';
+import { QwenRuntime, qwenHomeDir } from './runtime';
 import { QwenSettingsFile } from './settings';
 
 const explicitPath = (ctx: DriverEnv): string | undefined => ctx.env.CODEDECK_QWEN_PATH?.trim() || undefined;
@@ -26,7 +27,7 @@ export const qwenModule: DriverModule = {
     // The MCP servers (the settings file) and the extensions are read by a
     // Qwen Code process as it starts: the pool is told their shared version,
     // so a change after a process started is configuration it has not loaded.
-    const config = new QwenConfigVersion();
+    const config = new ConfigVersion();
     const settings = new QwenSettingsFile(home, ctx.log);
     const mcp = new QwenMcp(settings, config);
     const runtime = new QwenRuntime({

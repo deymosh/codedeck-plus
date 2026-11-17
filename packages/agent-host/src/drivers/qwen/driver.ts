@@ -42,7 +42,7 @@ import type {
 } from '../../sdk/types';
 import { selectChoices } from '../../acp/options';
 import { AcpSession, type AcpSessionDeps, type AcpSessionRegistry } from '../../acp/session';
-import type { AcpProcessEvents } from '../../acp/runtime';
+import { ConfigVersion, type AcpProcessEvents } from '../../acp/runtime';
 import type { ToolCallMemory } from '../../acp/adapter';
 import { MAX_DIFF_LINES, toDiffLines } from '../../sdk/transcript';
 import { qwenUpdateToEntries } from './adapter';
@@ -53,7 +53,7 @@ import { END_TURN_METHOD, QwenBackgroundTasks, START_TURN_METHOD, TURN_REFUSED }
 import { qwenTool } from './tools';
 import { QWEN_LABEL } from './install';
 import { qwenCli, QwenPlugins } from './plugins';
-import { QwenConfigVersion, QwenRuntime } from './runtime';
+import { QwenRuntime } from './runtime';
 import { QWEN_STYLE } from './style';
 
 export const QWEN_AGENT_ID = 'qwen-code';
@@ -587,7 +587,7 @@ export class QwenDriver implements Driver {
       new QwenPlugins(
         options.home,
         qwenCli(() => options.runtime.entryPoint(), options.home, options.baseEnv ?? process.env),
-        new QwenConfigVersion(),
+        new ConfigVersion(),
       );
     // The settings file has to exist before any process boots: Qwen Code
     // reads its provider list and its auth type as it starts. A failure is
