@@ -5,8 +5,10 @@ import android.content.ClipData
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -158,6 +160,12 @@ internal fun MachineWebPageGroup(machine: UniffiMachineSummary, onOpenWebSignIn:
  * Under that, the browsers signed in now ([browsers], null until the bridge
  * answers), each signed out with [onSignOut] after a confirmation;
  * [ownNpub] is this phone's identity, which a row does not repeat.
+ *
+ * [checking] is a code scanned or typed but not sent yet: the page asks the
+ * user to compare the certificate fingerprint the bridge pins
+ * ([fingerprint], lowercase hex) with the one the browser shows, since the
+ * browser's own warning is the only place a man in the middle shows up.
+ * [onConfirm] sends it, [onCancel] drops it.
  */
 @Composable
 fun WebSignInContent(
@@ -173,14 +181,22 @@ fun WebSignInContent(
     now: Long,
     onSignOut: (UniffiWebBrowser) -> Unit,
     onBack: () -> Unit,
+    checking: String?,
+    fingerprint: String?,
+    onConfirm: () -> Unit,
+    onCancel: () -> Unit,
 ) {
     var confirming by remember { mutableStateOf<UniffiWebBrowser?>(null) }
+    if (checking != null) {
+        CertificateCheck(checking, fingerprint, onConfirm, onCancel)
+        return
+    }
     Page(title = "Browsers", onBack = onBack) {
         if (signIn?.state == UniffiWebSignInState.SIGNED_IN) {
             EmptyState(
                 icon = Icons.Outlined.Check,
                 title = "Browser signed in",
-                body = "It opens the dashboard now, and stays signed in for 30 days or until it is signed out.",
+                body = "It opens the dashboard now. It stays signed in while it is used — 7 days without it, or 30 days in all, end it — or until it is signed out.",
                 action = "Done",
                 onAction = onBack,
                 modifier = Modifier.fillMaxWidth().padding(top = Tokens.Space7),
@@ -236,6 +252,48 @@ fun WebSignInContent(
     }
 }
 
+/**
+ * A certificate fingerprint as browsers' certificate viewers write it:
+ * uppercase hex pairs joined by colons, eight pairs to a line.
+ */
+internal fun fingerprintLines(hex: String): String =
+    hex.uppercase().chunked(2).chunked(8).joinToString("\n") { it.joinToString(":") }
+
+/**
+ * The step before a code is sent: the certificate the bridge pins, to compare
+ * with what the browser accepted for the page. A page whose certificate
+ * differs is served by something else, and signing it in would hand it this
+ * machine.
+ */
+@Composable
+private fun CertificateCheck(code: String, fingerprint: String?, onConfirm: () -> Unit, onCancel: () -> Unit) {
+    BackHandler(onBack = onCancel)
+    Page(title = "Check the page", onBack = onCancel) {
+        Group(
+            title = "Certificate SHA-256",
+            footer = "Your browser warned about this page because the bridge's certificate is its own. " +
+                "Open the warning's details, or the site information beside the address, and compare its SHA-256 " +
+                "fingerprint with this one. If they differ, something between you and the bridge serves the page: do not sign it in.",
+        ) {
+            GroupBody {
+                Text(
+                    fingerprint?.let(::fingerprintLines) ?: "The bridge advertised no certificate.",
+                    color = Tokens.Text,
+                    fontFamily = Tokens.FontMono,
+                    fontSize = Tokens.TextMd,
+                )
+            }
+        }
+        Group(title = "Code") {
+            ValueRow(code, mono = true) {}
+        }
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Tokens.Space1)) {
+            PrimaryButton("They match: sign in", onClick = onConfirm, modifier = Modifier.fillMaxWidth())
+            SecondaryButton("Cancel", onClick = onCancel, modifier = Modifier.fillMaxWidth())
+        }
+    }
+}
+
 /** "Firefox on Windows" from a User-Agent, as the web page names it, or the string itself. */
 internal fun browserName(agent: String): String {
     if (agent.isBlank()) return "A browser"
@@ -271,7 +329,7 @@ private fun ago(ms: Long, now: Long): String {
 /** The browsers signed in to the page now, each with where it is, when it was last seen, and Sign out. */
 @Composable
 private fun SignedInBrowsers(browsers: List<UniffiWebBrowser>?, ownNpub: String, now: Long, onSignOut: (UniffiWebBrowser) -> Unit) {
-    Group(title = "Signed in", footer = "A browser stays signed in for 30 days after its sign-in.") {
+    Group(title = "Signed in", footer = "A browser stays signed in while it is used: 7 days without it, or 30 days after its sign-in, end it.") {
         when {
             browsers == null -> ValueRow("Asking the bridge") { RowSpinner() }
             browsers.isEmpty() -> ValueRow("No browser is signed in") {}
@@ -311,6 +369,9 @@ fun WebSignInScreen(core: CoreHost, pubkey: String, onBack: () -> Unit) {
     var scanOpen by remember { mutableStateOf(false) }
     // Each send waits for its own answer, a resend of the same code too.
     var attempt by remember { mutableIntStateOf(0) }
+    // A code scanned or typed waits here until the user has compared the
+    // certificate the browser accepted with the one this machine pins.
+    var checking by rememberSaveable { mutableStateOf<String?>(null) }
 
     fun send(sent: String) {
         notice = null
@@ -344,7 +405,7 @@ fun WebSignInScreen(core: CoreHost, pubkey: String, onBack: () -> Unit) {
             notice = notice,
             code = code,
             onCodeChange = { code = it },
-            onSend = ::send,
+            onSend = { checking = it },
             onScan = {
                 if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
                     scanOpen = true
@@ -357,6 +418,13 @@ fun WebSignInScreen(core: CoreHost, pubkey: String, onBack: () -> Unit) {
             now = System.currentTimeMillis(),
             onSignOut = { b -> scope.launch { core.dispatch(UniffiIntent.SignOutWebBrowser(pubkey, b.id)) } },
             onBack = onBack,
+            checking = checking,
+            fingerprint = machine.directCertSha256,
+            onConfirm = {
+                checking?.let(::send)
+                checking = null
+            },
+            onCancel = { checking = null },
         )
         if (scanOpen) {
             PairingScanView(
@@ -366,7 +434,7 @@ fun WebSignInScreen(core: CoreHost, pubkey: String, onBack: () -> Unit) {
                     when (val scanned = readSignInQr(text, machine.npub)) {
                         is ScannedSignIn.Code -> {
                             code = scanned.code
-                            send(scanned.code)
+                            checking = scanned.code
                         }
                         ScannedSignIn.OtherMachine -> notice = "That QR is another machine's web page, not this one's."
                         ScannedSignIn.NotSignIn -> notice = "That is not a web page's sign-in QR."

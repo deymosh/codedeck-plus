@@ -6334,6 +6334,13 @@ data class UniffiMachineSummary (
     var `directPinned`: kotlin.Boolean
     , 
     /**
+     * The SHA-256 of the certificate the bridge's `wss://` listener serves
+     * (lowercase hex), as its signed heartbeat pins it: what a browser
+     * opening the web page must be shown, checked before a sign-in.
+     */
+    var `directCertSha256`: kotlin.String?
+    , 
+    /**
      * The direct endpoints the user added, tried after the advertised ones.
      */
     var `directEndpoints`: List<kotlin.String>
@@ -6414,6 +6421,7 @@ public object FfiConverterTypeUniffiMachineSummary: FfiConverterRustBuffer<Uniff
             FfiConverterSequenceTypeUniffiAgentAccounts.read(buf),
             FfiConverterSequenceString.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterOptionalString.read(buf),
             FfiConverterSequenceString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterString.read(buf),
@@ -6445,6 +6453,7 @@ public object FfiConverterTypeUniffiMachineSummary: FfiConverterRustBuffer<Uniff
             FfiConverterSequenceTypeUniffiAgentAccounts.allocationSize(value.`accounts`) +
             FfiConverterSequenceString.allocationSize(value.`directAdvertised`) +
             FfiConverterBoolean.allocationSize(value.`directPinned`) +
+            FfiConverterOptionalString.allocationSize(value.`directCertSha256`) +
             FfiConverterSequenceString.allocationSize(value.`directEndpoints`) +
             FfiConverterOptionalString.allocationSize(value.`directUp`) +
             FfiConverterString.allocationSize(value.`npub`) +
@@ -6475,6 +6484,7 @@ public object FfiConverterTypeUniffiMachineSummary: FfiConverterRustBuffer<Uniff
             FfiConverterSequenceTypeUniffiAgentAccounts.write(value.`accounts`, buf)
             FfiConverterSequenceString.write(value.`directAdvertised`, buf)
             FfiConverterBoolean.write(value.`directPinned`, buf)
+            FfiConverterOptionalString.write(value.`directCertSha256`, buf)
             FfiConverterSequenceString.write(value.`directEndpoints`, buf)
             FfiConverterOptionalString.write(value.`directUp`, buf)
             FfiConverterString.write(value.`npub`, buf)

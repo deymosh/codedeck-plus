@@ -640,6 +640,10 @@ pub struct UniffiMachineSummary {
     /// Whether the bridge advertised a certificate pin (without one no
     /// `wss://` endpoint is dialled).
     pub direct_pinned: bool,
+    /// The SHA-256 of the certificate the bridge's `wss://` listener serves
+    /// (lowercase hex), as its signed heartbeat pins it: what a browser
+    /// opening the web page must be shown, checked before a sign-in.
+    pub direct_cert_sha256: Option<String>,
     /// The direct endpoints the user added, tried after the advertised ones.
     pub direct_endpoints: Vec<String>,
     /// The endpoint the direct link is up on; `None` means the relays.
@@ -1164,6 +1168,7 @@ pub fn build_uniffi_machines_view(v: &MachinesView) -> UniffiMachinesView {
                 accounts: m.accounts.iter().map(|(agent, a)| to_uniffi_agent_accounts(agent, a)).collect(),
                 direct_advertised: m.direct.as_ref().map(|d| d.endpoints.clone()).unwrap_or_default(),
                 direct_pinned: m.direct.as_ref().is_some_and(|d| d.cert_sha256.is_some()),
+                direct_cert_sha256: m.direct.as_ref().and_then(|d| d.cert_sha256.clone()),
                 direct_endpoints: m.direct_endpoints.clone(),
                 direct_up: v.direct_up.get(&m.pubkey_hex).cloned(),
                 npub: protocol::crypto::npub_from_hex(&m.pubkey_hex).unwrap_or_else(|_| m.pubkey_hex.clone()),

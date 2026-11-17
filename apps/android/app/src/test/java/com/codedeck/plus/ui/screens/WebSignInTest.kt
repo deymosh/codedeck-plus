@@ -26,4 +26,13 @@ class WebSignInTest {
         assertEquals(ScannedSignIn.NotSignIn, readSignInQr("codedeck://pair?npub=$npub&token=x", npub))
         assertEquals(ScannedSignIn.NotSignIn, readSignInQr("codedeck://web-sign-in?machine=$npub&code=", npub))
     }
+
+    @Test
+    fun the_fingerprint_reads_as_a_browsers_certificate_viewer_writes_it() {
+        val pin = "3f9a1c0e7b2d4a58c6e1f0b9d8a7c6e5f4d3c2b1a09f8e7d6c5b4a3928170615"
+        assertEquals(
+            "3F:9A:1C:0E:7B:2D:4A:58\nC6:E1:F0:B9:D8:A7:C6:E5\nF4:D3:C2:B1:A0:9F:8E:7D\n6C:5B:4A:39:28:17:06:15",
+            fingerprintLines(pin),
+        )
+    }
 }

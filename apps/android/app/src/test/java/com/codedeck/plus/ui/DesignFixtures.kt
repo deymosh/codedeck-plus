@@ -384,6 +384,7 @@ internal object DesignFixtures {
         )),
         providerProfiles = providerProfiles, plugins = listOf(claudePlugins, opencodePlugins), mcp = listOf(claudeMcp), permissionRules = listOf(opencodeRules), accounts = listOf(opencodeAccounts),
         directAdvertised = listOf("wss://192.168.1.20:7447"), directPinned = true,
+        directCertSha256 = "3f9a1c0e7b2d4a58c6e1f0b9d8a7c6e5f4d3c2b1a09f8e7d6c5b4a3928170615",
         directEndpoints = listOf("wss://workstation.tail1234.ts.net:7447"), directUp = "wss://192.168.1.20:7447",
         npub = "npub1q8zy7gyw0l9fh2qkj6x4wlcw5h6xyq9d0k3e8w2yv3m5l6n7p8r9s0tuvw",
         relays = listOf("wss://relay.example.org", "wss://nostr.home.lan:4869"),

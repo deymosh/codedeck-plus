@@ -339,6 +339,7 @@ private val pages: Map<String, @Composable () -> Unit> = linkedMapOf(
     "web_sign_in_sending" to { WebSignIn(UniffiWebSignIn("K7QM-4XTR", UniffiWebSignInState.SENDING), code = "K7QM-4XTR") },
     "web_sign_in_not_matched" to { WebSignIn(UniffiWebSignIn("K7QM-4XTR", UniffiWebSignInState.NOT_MATCHED), code = "K7QM-4XTR") },
     "web_sign_in_signed_in" to { WebSignIn(UniffiWebSignIn("K7QM-4XTR", UniffiWebSignInState.SIGNED_IN), code = "K7QM-4XTR") },
+    "web_sign_in_check_certificate" to { WebSignIn(signIn = null, code = "K7QM-4XTR", checking = "K7QM-4XTR") },
     "settings_agent_opencode" to { AgentPage("opencode") },
     "settings_agent_claude" to { AgentPage("claude-code") },
     "settings_agent_not_installed" to { AgentPage("deepseek-harness") },
@@ -482,9 +483,10 @@ private fun AgentPage(agent: String) = AgentSettingsContent(
 
 /** Signing a browser in to the workstation's web page. */
 @Composable
-private fun WebSignIn(signIn: UniffiWebSignIn?, code: String, browsers: List<UniffiWebBrowser>? = signedInBrowsers) = WebSignInContent(
+private fun WebSignIn(signIn: UniffiWebSignIn?, code: String, browsers: List<UniffiWebBrowser>? = signedInBrowsers, checking: String? = null) = WebSignInContent(
     signIn = signIn, noAnswer = false, notice = null, code = code, onCodeChange = {}, onSend = {}, onScan = {},
     browsers = browsers, ownNpub = workstation.npub, now = NOW, onSignOut = {}, onBack = {},
+    checking = checking, fingerprint = workstation.directCertSha256, onConfirm = {}, onCancel = {},
 )
 
 /** Two browsers on the workstation's page: one this identity signed in, one another identity did. */
@@ -575,6 +577,7 @@ class DesignSnapshotTest {
     @Test fun web_sign_in_sending() = paparazzi.page("web_sign_in_sending")
     @Test fun web_sign_in_not_matched() = paparazzi.page("web_sign_in_not_matched")
     @Test fun web_sign_in_signed_in() = paparazzi.page("web_sign_in_signed_in")
+    @Test fun web_sign_in_check_certificate() = paparazzi.page("web_sign_in_check_certificate")
     @Test fun settings_agent_opencode() = paparazzi.page("settings_agent_opencode")
     @Test fun settings_agent_claude() = paparazzi.page("settings_agent_claude")
     @Test fun settings_agent_not_installed() = paparazzi.page("settings_agent_not_installed")
