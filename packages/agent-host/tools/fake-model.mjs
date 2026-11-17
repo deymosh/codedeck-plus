@@ -11,7 +11,8 @@
  * (src/drivers/fake/driver.ts), so one set of prompts covers both:
  *
  *   /tool [command]  call the shell tool the request itself offers (Claude
- *                    Code's `Bash`, OpenCode's `shell`, the Harness's `bash`)
+ *                    Code's `Bash`, OpenCode's `shell`, the Harness's `bash`,
+ *                    or `pwsh` on Windows)
  *                    — the same call a permission card is raised for, and on
  *                    OpenCode one is; the tool's own result then gets a plain
  *                    answer, which is what ends the turn
@@ -235,8 +236,11 @@ export function offeredTools(body, shape) {
 }
 
 /** Names that are a shell tool, in the order Claude Code, OpenCode, the
- *  DeepSeek Harness and Qwen Code name theirs. */
-const SHELL_TOOLS = ['Bash', 'bash', 'shell', 'execute', 'run_command', 'run_shell_command'];
+ *  DeepSeek Harness and Qwen Code name theirs. The Harness offers `pwsh`
+ *  instead of `bash` on Windows (same `command` + `description`); without
+ *  it, `/tool` there would fall back to the first tool offered, which is
+ *  its question tool. */
+const SHELL_TOOLS = ['Bash', 'bash', 'pwsh', 'shell', 'execute', 'run_command', 'run_shell_command'];
 /** Names that ask the user a question. */
 const QUESTION_TOOLS = ['AskUserQuestion', 'ask_user_question', 'question', 'ask_user'];
 /** Names that propose a plan for approval. */
