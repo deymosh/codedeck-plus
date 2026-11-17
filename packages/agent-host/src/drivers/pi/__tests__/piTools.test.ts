@@ -2,11 +2,33 @@
  * Pi's built-in tool table, and — against the package this build pins — the
  * names that package declares.
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { PI_READ_ONLY_TOOLS, PI_TOOLS, piTool } from '../tools';
+import { PI_READ_ONLY_TOOLS, PI_TOOLS, piExtraTools, piTool } from '../tools';
+
+describe('piExtraTools', () => {
+  const exe = (dir: string, name: string): void => {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, process.platform === 'win32' ? `${name}.exe` : name), '');
+  };
+
+  it('turns on ls always, and grep and find only where their binaries are', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'codedeck-pi-tools-'));
+    const home = path.join(root, 'home');
+    const onPath = path.join(root, 'path');
+    mkdirSync(onPath, { recursive: true });
+    const env = { PATH: onPath };
+    // Neither ripgrep nor fd: searching would only fail.
+    expect(piExtraTools(home, env)).toEqual(['ls']);
+    // ripgrep in Pi's own bin directory, Debian's `fdfind` on PATH.
+    exe(path.join(home, 'bin'), 'rg');
+    exe(onPath, 'fdfind');
+    expect(piExtraTools(home, env)).toEqual(['ls', 'grep', 'find']);
+  });
+});
 
 describe('piTool', () => {
   it('reads a shell call by its command', () => {

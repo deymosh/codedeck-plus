@@ -52,7 +52,7 @@ import { buildPiEnv } from './env';
 import { PI_PERMISSION_PREFIX, bundledPiExtension, installPiExtension } from './extension';
 import { PI_LABEL } from './install';
 import { PiRpc, type PiRecord, type PiRpcOptions } from './rpc';
-import { PI_EDIT_TOOLS, PI_READ_ONLY_TOOLS, piTool } from './tools';
+import { PI_EDIT_TOOLS, PI_READ_ONLY_TOOLS, piExtraTools, piTool } from './tools';
 import { PI_STYLE } from './style';
 import { PiRuntime, piCommand, type PiRuntimeOptions } from './runtime';
 
@@ -270,6 +270,8 @@ export class PiSession implements DriverSession {
 
   private arguments(extension: string): string[] {
     const args = ['--mode', 'rpc', '--offline', '-e', extension];
+    const tools = piExtraTools(this.deps.home, this.env);
+    if (tools.length > 0) args.push('--tools', tools.map((tool) => `+${tool}`).join(','));
     if (this.params.resume) args.push('--session', this.params.resume);
     const model = this.params.model?.trim();
     if (model) args.push('--model', this.modelArgument(model));

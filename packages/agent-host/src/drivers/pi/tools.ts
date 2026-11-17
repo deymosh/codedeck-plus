@@ -13,6 +13,8 @@
  * `file_path`), an edit carries `edits: [{oldText, newText}]`, and the
  * search tools match a glob `pattern`.
  */
+import * as path from 'node:path';
+import { findInDirs, findOnPath } from '../../sdk/executable';
 import { oneLine, readToolCall, str, ToolKind, type ToolCallRead, type ToolDialects } from '../../sdk/tools';
 
 type Input = Record<string, unknown>;
@@ -62,6 +64,21 @@ export const PI_READ_ONLY_TOOLS: ReadonlySet<string> = new Set(['read', 'grep', 
  * still asks, and so does every shell.
  */
 export const PI_EDIT_TOOLS: ReadonlySet<string> = new Set(['edit', 'write']);
+
+/**
+ * The built-in tools a session turns on beyond Pi's default four, as
+ * `--tools` `+name` entries (which keep whatever else the profile's
+ * `defaultTools` selects). `ls` is plain Node. `grep` and `find` run ripgrep
+ * and fd, which Pi takes from its own `bin` directory or `PATH` — and,
+ * running `--offline`, never downloads — so each is on only where its binary
+ * is: a tool that can only fail would cost the model a call every time it
+ * tried it.
+ */
+export function piExtraTools(home: string, env: NodeJS.ProcessEnv, platform: NodeJS.Platform = process.platform): string[] {
+  const has = (...names: string[]): boolean =>
+    names.some((name) => findInDirs([path.join(home, 'bin')], name, platform) !== null || findOnPath(name, env, platform) !== null);
+  return ['ls', ...(has('rg') ? ['grep'] : []), ...(has('fd', 'fdfind') ? ['find'] : [])];
+}
 
 /** Read one of this agent's tool calls. `report` is told a name this table
  *  does not list (`unknownToolReporter`). */

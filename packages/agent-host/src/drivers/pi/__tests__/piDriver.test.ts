@@ -117,6 +117,10 @@ describe('PiSession startup', () => {
     expect(spawn.args.slice(1, 4)).toEqual(['--mode', 'rpc', '--offline']);
     const extension = spawn.args[spawn.args.indexOf('-e') + 1]!;
     expect(extension.endsWith(path.join('codedeck', 'codedeck-pi.js'))).toBe(true);
+    // Added to Pi's defaults, never in place of them (`+name` entries).
+    const tools = spawn.args[spawn.args.indexOf('--tools') + 1]!;
+    expect(tools.split(',')).toContain('+ls');
+    expect(tools.split(',').every((entry) => entry.startsWith('+'))).toBe(true);
     expect(spawn.args).toContain('--model');
     expect(spawn.args[spawn.args.indexOf('--model') + 1]).toBe('claude-sonnet-5');
     expect(spawn.env.PI_CODING_AGENT_DIR).toBe(h.home);
