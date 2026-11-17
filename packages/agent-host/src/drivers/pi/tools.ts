@@ -147,6 +147,49 @@ export function isReadOnlyCommand(command: string): boolean {
 }
 
 /**
+ * PowerShell's reading commands, by name and alias (compared without case),
+ * for plan mode. Not `Where-Object`/`ForEach-Object` (their script blocks run
+ * anything), nor `Out-File`, `Set-Content`, `Tee-Object` or anything else
+ * that writes; `git` and `rg` keep the bash table's rules.
+ */
+const READ_ONLY_POWERSHELL = new Set([
+  'get-childitem', 'gci', 'ls', 'dir', 'get-content', 'gc', 'cat', 'type', 'select-string', 'sls', 'get-location',
+  'gl', 'pwd', 'test-path', 'get-item', 'gi', 'resolve-path', 'rvpa', 'split-path', 'join-path', 'measure-object',
+  'measure', 'sort-object', 'sort', 'select-object', 'select', 'get-command', 'gcm', 'format-list', 'fl',
+  'format-table', 'ft', 'out-string', 'get-filehash', 'findstr', 'git', 'rg',
+]);
+
+/**
+ * Whether a PowerShell command only reads, for plan mode — the same idea as
+ * isReadOnlyCommand for PowerShell's syntax: every part of a pipeline or a
+ * `;`/`&&`/`||` chain is a listed reading command, and nothing redirects,
+ * runs a script block (`{…}`), a subexpression (`$(…)`, `@(…)`) or the call
+ * operator (`&`), or escapes with a backtick. No variable (`$`) and no
+ * `env:` drive either: the environment holds secrets.
+ */
+export function isReadOnlyPowerShell(command: string): boolean {
+  if (command.trim() === '' || /[\n\r`<>{}$]|@\(|\benv:/i.test(command) || readsEnvironment(command)) return false;
+  return command.split(/\|\||&&|[|;]/).every((part) => {
+    if (part.includes('&')) return false;
+    const words = part.trim().split(/\s+/);
+    const name = (words[0] ?? '').toLowerCase();
+    if (!READ_ONLY_POWERSHELL.has(name)) return false;
+    const writes = READ_ONLY_COMMANDS.get(name);
+    if (writes && words.slice(1).some((word) => writes.test(word))) return false;
+    if (name === 'git') return READ_ONLY_GIT.has(words.find((word, i) => i > 0 && !word.startsWith('-')) ?? '');
+    return true;
+  });
+}
+
+/** Whether a call to one of Pi's shells only reads, by the shell's syntax. */
+export function isReadOnlyShellCall(toolName: string, input: Record<string, unknown>): boolean {
+  const command = typeof input.command === 'string' ? input.command : '';
+  if (toolName === 'bash') return isReadOnlyCommand(command);
+  if (toolName === 'powershell') return isReadOnlyPowerShell(command);
+  return false;
+}
+
+/**
  * The tools this driver's `ask` mode runs without a card: Pi's own read-only
  * set, the same four `--tools read,grep,find,ls` selects. A call to any other
  * tool — including one an operator's extension registered — asks.
@@ -173,7 +216,14 @@ export const PI_EDIT_TOOLS: ReadonlySet<string> = new Set(['edit', 'write']);
 export function piExtraTools(home: string, env: NodeJS.ProcessEnv, platform: NodeJS.Platform = process.platform): string[] {
   const has = (...names: string[]): boolean =>
     names.some((name) => findInDirs([path.join(home, 'bin')], name, platform) !== null || findOnPath(name, env, platform) !== null);
-  return ['ls', ...(has('rg') ? ['grep'] : []), ...(has('fd', 'fdfind') ? ['find'] : [])];
+  const entries = ['+ls', ...(has('rg') ? ['+grep'] : []), ...(has('fd', 'fdfind') ? ['+find'] : [])];
+  // Windows always has a PowerShell (Pi prefers PowerShell 7, else the
+  // Windows PowerShell every Windows ships), so its tool is on beside bash.
+  // Whether Pi finds a bash there (Git Bash, a bash on PATH, its own
+  // shellPath setting) only Pi can say; the extension asks it as the session
+  // starts and turns bash off where it would only fail (extension/shells.ts).
+  if (platform === 'win32') entries.push('+powershell');
+  return entries;
 }
 
 const PI_ALL_TOOLS: ToolDialects = { ...PI_TOOLS, ...CODEDECK_TOOLS };

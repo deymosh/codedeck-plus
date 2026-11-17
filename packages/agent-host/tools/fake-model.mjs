@@ -244,7 +244,7 @@ export function offeredTools(body, shape) {
  *  instead of `bash` on Windows (same `command` + `description`); without
  *  it, `/tool` there would fall back to the first tool offered, which is
  *  its question tool. */
-const SHELL_TOOLS = ['Bash', 'bash', 'pwsh', 'shell', 'execute', 'run_command', 'run_shell_command'];
+const SHELL_TOOLS = ['Bash', 'bash', 'pwsh', 'powershell', 'shell', 'execute', 'run_command', 'run_shell_command'];
 /** Names that ask the user a question (`ask` is the CodeDeck Pi
  *  extension's, which takes AskUserQuestion's shape). */
 const QUESTION_TOOLS = ['AskUserQuestion', 'ask_user_question', 'question', 'ask_user', 'ask'];

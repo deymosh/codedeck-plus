@@ -14,10 +14,17 @@
  * is Pi's own on disk: `get_state` reports its id and file, and a resume
  * opens it again with `--session`.
  *
- * Deliberate limits, all of them this driver's for now: no plugins or MCP
- * management (Pi reads its own configuration), no subscription usage (there
- * is none to ask), no background-task control. Provider profiles are session
- * bindings only; their models are not added to Pi's own catalog.
+ * The extension also adds what Pi does not ship and a phone-driven session
+ * needs — a checklist, questions, Plan mode, sub-agents, background shells,
+ * a web fetch and a project memory (extension/index.ts) — and this driver
+ * turns them into the phone's cards and entries: requests that wait for the
+ * phone through `codedeck-request:` dialogs, a sub-agent's progress through
+ * its `task` call's updates, a background task's start and end through
+ * `entry_appended` (extension/protocol.ts).
+ *
+ * Deliberate limits: no subscription usage (there is none to ask). Provider
+ * profiles are session bindings only; their models are not added to Pi's own
+ * catalog.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -72,7 +79,7 @@ import {
   CODEDECK_SAFE_TOOLS,
   PI_EDIT_TOOLS,
   PI_READ_ONLY_TOOLS,
-  isReadOnlyCommand,
+  isReadOnlyShellCall,
   piExtraTools,
   piTool,
 } from './tools';
@@ -320,7 +327,7 @@ export class PiSession implements DriverSession {
   private arguments(extension: string): string[] {
     const args = ['--mode', 'rpc', '--offline', '-e', extension];
     const tools = piExtraTools(this.deps.home, this.env);
-    if (tools.length > 0) args.push('--tools', tools.map((tool) => `+${tool}`).join(','));
+    if (tools.length > 0) args.push('--tools', tools.join(','));
     if (this.params.resume) args.push('--session', this.params.resume);
     const model = this.params.model?.trim();
     if (model) args.push('--model', this.modelArgument(model));
@@ -858,7 +865,7 @@ export class PiSession implements DriverSession {
     const reads = PI_READ_ONLY_TOOLS.has(toolName) || CODEDECK_SAFE_TOOLS.has(toolName);
     if (this.sessionMode === PLAN_MODE) {
       if (reads) return 'allow';
-      if (toolName === 'bash' && typeof input.command === 'string' && isReadOnlyCommand(input.command)) return 'allow';
+      if (isReadOnlyShellCall(toolName, input)) return 'allow';
       return toolName === PI_TOOL.webFetch ? 'ask' : 'plan';
     }
     if (

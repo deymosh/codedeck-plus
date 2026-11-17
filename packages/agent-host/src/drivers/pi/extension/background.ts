@@ -4,8 +4,10 @@
  * reads later and which it, or the user from the phone, can stop. Pi's
  * `bash` blocks the turn until the command ends, which a server never does.
  *
- * - `bash_background` starts one in the session's directory, in Pi's own
- *   shell (Git Bash on Windows, bash elsewhere). It asks like any command.
+ * - `bash_background` starts one in the session's directory, in the
+ *   session's own shell as Pi resolves it: bash (Git Bash on Windows), or
+ *   PowerShell where that is the session's shell — or whichever the model
+ *   names. It asks like any command.
  * - `task_output` reads what it printed (the newest part, at most 1 MB is
  *   kept), optionally waiting for it to end.
  * - `task_stop` stops it with everything it started.
@@ -87,8 +89,26 @@ export function killTree(pid: number): void {
   }
 }
 
+export const BACKGROUND_SHELLS = ['bash', 'powershell'] as const;
+export type BackgroundShell = (typeof BACKGROUND_SHELLS)[number];
+
+/**
+ * The shell a task runs in: the one asked for, else the session's own shell
+ * tool — bash when the session has it, PowerShell when that is its only
+ * shell (a Windows machine without Git Bash) — so the command is written in
+ * the syntax the model already uses.
+ */
+export function backgroundShell(asked: unknown, active: readonly string[]): BackgroundShell {
+  if (asked === 'bash' || asked === 'powershell') return asked;
+  return !active.includes('bash') && active.includes('powershell') ? 'powershell' : 'bash';
+}
+
 export interface BackgroundDeps {
-  shell(): ShellConfig;
+  /** How Pi runs each shell (its `getShellConfig`, `getPowerShellConfig`);
+   *  each throws where that shell is not on the machine. */
+  shells: Record<BackgroundShell, () => ShellConfig>;
+  /** The session's active tools, to pick its own shell. */
+  active(): string[];
   /** The out-of-turn event channel (`pi.appendEntry`). */
   report(event: TaskEvent): void;
   env?: NodeJS.ProcessEnv;
@@ -111,8 +131,16 @@ export function registerBackground(pi: Pick<ExtensionAPI, 'registerTool'>, deps:
     }
   });
 
-  const start = (command: string, title: string, cwd: string, callId: string): Task => {
-    const shell = deps.shell();
+  const start = (command: string, title: string, cwd: string, callId: string, which: BackgroundShell): Task => {
+    let shell: ShellConfig;
+    try {
+      shell = deps.shells[which]();
+    } catch (error) {
+      const other = which === 'bash' ? 'powershell' : 'bash';
+      throw new Error(
+        `${which} is not available here (${error instanceof Error ? error.message : String(error)}); try shell: "${other}"`,
+      );
+    }
     const viaStdin = shell.commandTransport === 'stdin';
     const child = spawn(shell.shell, viaStdin ? shell.args : [...shell.args, command], {
       cwd,
@@ -177,17 +205,22 @@ export function registerBackground(pi: Pick<ExtensionAPI, 'registerTool'>, deps:
     parameters: {
       type: 'object',
       properties: {
-        command: { type: 'string', description: 'The command, as for bash.' },
+        command: { type: 'string', description: 'The command, in the syntax of the shell it runs in.' },
         description: { type: 'string', description: 'What it is, in a few words ("Dev server").' },
+        shell: {
+          type: 'string',
+          enum: [...BACKGROUND_SHELLS],
+          description: "The shell: the session's own shell tool when omitted (bash, or PowerShell where that is the only one).",
+        },
       },
       required: ['command'],
     } as never,
     async execute(toolCallId, params, _signal, _onUpdate, ctx) {
-      const input = params as { command?: unknown; description?: unknown };
+      const input = params as { command?: unknown; description?: unknown; shell?: unknown };
       const command = str(input.command).trim();
       if (command === '') throw new Error(`${PI_TOOL.bashBackground} needs a command`);
       const title = str(input.description).trim() || command;
-      const task = start(command, title, ctx.cwd, toolCallId);
+      const task = start(command, title, ctx.cwd, toolCallId, backgroundShell(input.shell, deps.active()));
       return {
         content: [
           {

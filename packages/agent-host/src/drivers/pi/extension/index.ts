@@ -15,7 +15,7 @@
  * outlives it (background shells), or writes the project's notes.
  */
 import { getBuiltinModels, getBuiltinProviders } from '@earendil-works/pi-ai/providers/all';
-import { getShellConfig, type ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import { getPowerShellConfig, getShellConfig, type ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { registerAsk } from './ask';
 import { registerBackground } from './background';
 import type { CatalogModel } from './catalog';
@@ -24,6 +24,7 @@ import { registerMemory } from './memory';
 import { registerPlanMode } from './plan';
 import { PI_ENTRY_TYPE } from './protocol';
 import { registerProfile } from './provider';
+import { installShellCheck } from './shells';
 import { registerTask, SUBAGENT_ENV } from './task';
 import { registerTodo } from './todo';
 import { registerWebFetch } from './webFetch';
@@ -41,6 +42,14 @@ function builtinCatalog(): CatalogModel[] {
 export default function codedeckPi(pi: ExtensionAPI): void {
   registerProfile(pi, process.env, builtinCatalog);
   installGate(pi);
+  installShellCheck(pi, () => {
+    try {
+      getShellConfig();
+      return true;
+    } catch {
+      return false;
+    }
+  });
 
   const subagent = process.env[SUBAGENT_ENV];
   if (subagent) {
@@ -54,7 +63,8 @@ export default function codedeckPi(pi: ExtensionAPI): void {
   registerWebFetch(pi);
   registerTask(pi, process.env);
   registerBackground(pi, {
-    shell: () => getShellConfig(),
+    shells: { bash: () => getShellConfig(), powershell: () => getPowerShellConfig() },
+    active: () => pi.getActiveTools(),
     report: (event) => pi.appendEntry(PI_ENTRY_TYPE, event),
   });
   // The notes live in Pi's home, which the driver always names; without it

@@ -12,6 +12,7 @@ import { bundledPiExtension, installPiExtension, PI_PERMISSION_PREFIX, piExtensi
 import type { CatalogModel } from '../extension/catalog';
 import { installGate } from '../extension/gate';
 import { registerProfile } from '../extension/provider';
+import { installShellCheck } from '../extension/shells';
 import { subagentTools, taskResult } from '../extension/task';
 
 const read = (file: string): string => readFileSync(file, 'utf8');
@@ -151,6 +152,36 @@ describe('a task’s result', () => {
     expect(() => taskResult({ text: 'Looking at src…', error: 'The sub-agent was stopped.' })).toThrow(
       /was stopped[\s\S]*Its last reply before that:\nLooking at src/,
     );
+  });
+});
+
+describe('the shell check', () => {
+  function started(active: string[], bash: boolean): string[] {
+    let tools = [...active];
+    let onStart: (() => Promise<void>) | undefined;
+    installShellCheck(
+      {
+        on: ((_event: string, handler: () => Promise<void>) => {
+          onStart = handler;
+        }) as never,
+        getActiveTools: () => tools,
+        setActiveTools: (next: string[]) => {
+          tools = next;
+        },
+      },
+      () => bash,
+    );
+    void onStart!();
+    return tools;
+  }
+
+  it('switches bash off where Pi finds none and PowerShell can stand in', () => {
+    expect(started(['read', 'bash', 'powershell'], false)).toEqual(['read', 'powershell']);
+  });
+
+  it('leaves the tools alone where bash exists, or where it is the only shell', () => {
+    expect(started(['read', 'bash', 'powershell'], true)).toEqual(['read', 'bash', 'powershell']);
+    expect(started(['read', 'bash'], false)).toEqual(['read', 'bash']);
   });
 });
 

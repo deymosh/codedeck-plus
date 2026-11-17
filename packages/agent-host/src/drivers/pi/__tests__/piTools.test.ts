@@ -7,26 +7,82 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { PI_READ_ONLY_TOOLS, PI_TOOLS, isReadOnlyCommand, piExtraTools, piTool } from '../tools';
+import { PI_READ_ONLY_TOOLS, PI_TOOLS, isReadOnlyCommand, isReadOnlyPowerShell, piExtraTools, piTool } from '../tools';
 
 describe('piExtraTools', () => {
-  const exe = (dir: string, name: string): void => {
+  const exe = (dir: string, name: string, platform: NodeJS.Platform): void => {
     mkdirSync(dir, { recursive: true });
-    writeFileSync(path.join(dir, process.platform === 'win32' ? `${name}.exe` : name), '');
+    writeFileSync(path.join(dir, platform === 'win32' ? `${name}.exe` : name), '');
+  };
+  const scratch = (): { home: string; onPath: string; root: string } => {
+    const root = mkdtempSync(path.join(tmpdir(), 'codedeck-pi-tools-'));
+    const onPath = path.join(root, 'path');
+    mkdirSync(onPath, { recursive: true });
+    return { root, home: path.join(root, 'home'), onPath };
   };
 
   it('turns on ls always, and grep and find only where their binaries are', () => {
-    const root = mkdtempSync(path.join(tmpdir(), 'codedeck-pi-tools-'));
-    const home = path.join(root, 'home');
-    const onPath = path.join(root, 'path');
-    mkdirSync(onPath, { recursive: true });
+    // The host's own platform: PATH is split by its rules, which a Windows
+    // path (`D:\…`) read with another platform's would not survive.
+    const platform = process.platform;
+    const { home, onPath } = scratch();
     const env = { PATH: onPath };
+    // PowerShell is Windows' own business (the next test).
+    const tools = (): string[] => piExtraTools(home, env, platform).filter((entry) => entry !== '+powershell');
     // Neither ripgrep nor fd: searching would only fail.
-    expect(piExtraTools(home, env)).toEqual(['ls']);
+    expect(tools()).toEqual(['+ls']);
     // ripgrep in Pi's own bin directory, Debian's `fdfind` on PATH.
-    exe(path.join(home, 'bin'), 'rg');
-    exe(onPath, 'fdfind');
-    expect(piExtraTools(home, env)).toEqual(['ls', 'grep', 'find']);
+    exe(path.join(home, 'bin'), 'rg', platform);
+    exe(onPath, 'fdfind', platform);
+    expect(tools()).toEqual(['+ls', '+grep', '+find']);
+  });
+
+  it('on Windows turns on PowerShell beside bash', () => {
+    const { home, onPath } = scratch();
+    expect(piExtraTools(home, { Path: onPath }, 'win32')).toEqual(['+ls', '+powershell']);
+  });
+});
+
+describe('isReadOnlyPowerShell (plan mode)', () => {
+  it('lets PowerShell commands that only read through', () => {
+    for (const command of [
+      'Get-ChildItem -Recurse src',
+      'Get-Content package.json | Select-Object -First 20',
+      'gci; pwd',
+      'Select-String -Path README.md -Pattern TODO | Measure-Object',
+      'git status',
+      'git diff HEAD~1 -- src',
+    ]) {
+      expect(isReadOnlyPowerShell(command), command).toBe(true);
+    }
+  });
+
+  it('refuses writes, script blocks, subexpressions and anything unknown', () => {
+    for (const command of [
+      'Set-Content a.txt x',
+      'Get-Content a.txt > b.txt',
+      'Get-ChildItem | Where-Object { Remove-Item $_ }',
+      'Get-ChildItem | ForEach-Object Delete',
+      'Remove-Item -Recurse build',
+      'Get-Content $(Invoke-WebRequest x)',
+      'Get-Content @(1)',
+      '& ./run.ps1',
+      'Get-Content a`; rm b',
+      'Get-ChildItem | Out-File list.txt',
+      'Get-ChildItem | Tee-Object list.txt',
+      'git commit -m x',
+      // These read, but what they read is the environment: secrets.
+      'Get-ChildItem env:',
+      'Get-Content Env:GITHUB_TOKEN',
+      'Write-Output $env:GITHUB_TOKEN',
+      'Get-Content $HOME/.ssh/id_ed25519',
+      'Get-Content /proc/self/environ',
+      'Get-Content /proc/self/env*',
+      'git grep -Osh TODO',
+      '',
+    ]) {
+      expect(isReadOnlyPowerShell(command), command).toBe(false);
+    }
   });
 });
 
