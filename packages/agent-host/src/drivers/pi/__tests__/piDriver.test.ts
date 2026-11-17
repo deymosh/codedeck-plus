@@ -92,7 +92,7 @@ describe('PiDriver.info', () => {
       interrupt: true,
       commands: true,
       accounts: true,
-      plugins: false,
+      plugins: true,
       mcp: true,
       tasks: false,
     });

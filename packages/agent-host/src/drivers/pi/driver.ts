@@ -47,6 +47,7 @@ import type {
 } from '../../sdk/types';
 import { PiAccounts } from './accounts';
 import { PiMcp } from './mcp';
+import { PiPlugins, piCliRunner, type PiCliRunner } from './plugins';
 import { buildPiEnv } from './env';
 import { PI_PERMISSION_PREFIX, installPiExtension } from './extension';
 import { PI_LABEL } from './install';
@@ -819,6 +820,10 @@ export interface PiDriverOptions {
   spawnFn?: PiRpcOptions['spawnFn'];
   /** Spawn seam for the account helper, in tests. */
   accountsSpawnFn?: PiRpcOptions['spawnFn'];
+  /** Runs Pi's package commands; tests pass their own. */
+  pluginRunner?: PiCliRunner;
+  /** `CODEDECK_NPM_REGISTRY`, when the operator set one. */
+  npmRegistry?: string;
   log: (message: string) => void;
 }
 
@@ -830,6 +835,8 @@ export class PiDriver implements Driver {
   readonly accounts: PiAccounts;
   /** Pi's MCP servers, in `mcp.json` in its home. */
   readonly mcp: PiMcp;
+  /** Pi's packages, through its own package commands. */
+  readonly plugins: PiPlugins;
 
   constructor(private readonly options: PiDriverOptions) {
     // Pi's state root must exist before the first process starts in it
@@ -844,6 +851,20 @@ export class PiDriver implements Driver {
     // finds it ready instead of waiting on a download.
     void options.runtime.prepare();
     this.mcp = new PiMcp(options.home, options.log);
+    this.plugins = new PiPlugins(
+      options.home,
+      options.pluginRunner ??
+        piCliRunner({
+          entryPoint: () => options.runtime.entryPoint(),
+          home: options.home,
+          // The bridge's registry mirror reaches the npm Pi runs, so a
+          // machine without the public registry installs from it too.
+          env: () => ({
+            ...buildPiEnv({}, options.home, options.baseEnv ?? process.env),
+            ...(options.npmRegistry ? { npm_config_registry: options.npmRegistry } : {}),
+          }),
+        }),
+    );
     this.accounts = new PiAccounts({
       home: options.home,
       entryPoint: () => options.runtime.entryPoint(),
@@ -884,7 +905,7 @@ export class PiDriver implements Driver {
         interrupt: true,
         commands: true,
         accounts: true,
-        plugins: false,
+        plugins: true,
         mcp: true,
         tasks: false,
       },

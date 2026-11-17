@@ -34,6 +34,7 @@ export const piModule: DriverModule = {
       home,
       baseEnv: ctx.ownEnv,
       providerHttp,
+      ...(ctx.env.CODEDECK_NPM_REGISTRY?.trim() ? { npmRegistry: ctx.env.CODEDECK_NPM_REGISTRY.trim() } : {}),
       log: ctx.log,
     });
     if (piPath && !isFile(piPath)) {
