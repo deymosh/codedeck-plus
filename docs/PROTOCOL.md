@@ -806,12 +806,14 @@ the page's own `GET /api/browsers` and `POST /api/browsers/sign-out` do:
   never on a timer: the list changes only when a browser signs in or out, so
   nothing else would make it stale.
 - `web-browsers {browsers}` to the asking client. Each entry is `{id, by,
-  sinceMs, lastSeenMs, expiresMs, peer, agent}`: `id` is the page's short
-  public id — the first 16 hex characters of the stored key's SHA-256, never
-  the key and never the session token — `by` is the npub that signed it in,
-  the three times are ms since the Unix epoch, `peer` the address it came
-  from and `agent` its `User-Agent` (cleaned and bounded). Oldest signed in
-  first; empty when the bridge runs no web page.
+  sinceMs, lastSeenMs, expiresMs, peer, agent}`: `id` is the browser's short
+  public id — the first 16 hex characters of the SHA-256 of its signing key,
+  never the session token — `by` is the npub that signed it in, the three
+  times are ms since the Unix epoch (`expiresMs` the moment it lapses: the
+  sooner of 30 days after its sign-in and 7 days after it last signed
+  anything), `peer` the address it came from and `agent` its `User-Agent`
+  (cleaned and bounded). Oldest signed in first; empty when the bridge runs
+  no web page.
 - `web-browser-sign-out {id}` (phone → bridge). Ends the browser whose page
   id is `id`; any paired client may end any of the owner's browsers. Answered
   with `web-browsers`, the fresh list — a sign-out is confirmed by the list it
@@ -821,6 +823,23 @@ the page's own `GET /api/browsers` and `POST /api/browsers/sign-out` do:
 Cost: two small command-class events per sign-in, one request and one response
 per screen opening, and the same again per sign-out; nothing while the screen
 is closed.
+
+### The browser's stream
+
+A signed-in browser drives sessions over a wire of its own, not Nostr: the
+page is reached only over TLS on the direct listener, so the browser sends
+the same `PhoneToBridge` messages as JSON and gets the same `BridgeToPhone`
+ones, unencrypted, on one WebSocket (`/api/stream`). Each frame it sends is
+signed by a WebCrypto P-256 key the browser made at sign-in, whose public
+half `POST /api/sign-in` bound to the code before the phone approved it.
+`crates/protocol/src/web.rs` is the spec (frames, the signed input, the key
+and signature checks), its frames are in the corpus (`webFrames`), and
+[`WEB-CLIENT.md`](WEB-CLIENT.md) is the design: the threat model, what a
+browser may send (`bridge_core::browser_may_send`), the lifetimes.
+
+Cost: none on the relays and none for a phone. A browser's copies are neither
+encrypted nor signed, live text goes only to the session on its screen, and a
+browser that stops reading is closed, never waited on.
 
 ### Version and capabilities
 

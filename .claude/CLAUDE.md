@@ -45,7 +45,10 @@ the upstream did not design for:
   bridge output coalescing, GSD. OpenCode is the default agent.
 - **Every phone event is signed by the identity key** (commands, grants,
   NIP-42 AUTH, Blossom auth). Session keys only key NIP-44 payloads; they
-  never sign.
+  never sign. The one other signer is a browser on the web page: its
+  commands are signed by a key of its own, which an identity-signed
+  `web-sign-in` let in, and it may send only what
+  `bridge_core::browser_may_send` names (`docs/WEB-CLIENT.md`).
 - **No migrations.** A breaking change to persisted or wire data is reshaped
   directly, old data skipped tolerantly on load, and the PR says so.
 
@@ -111,7 +114,8 @@ crates kept apart).
 ./codedeck typecheck     # typecheck / clippy only
 ./codedeck test          # tests only
 ./codedeck e2e           # the ignored tests that drive a built agent host
-                         # from Rust: driver protocol, bridge end to end
+                         # from Rust: driver protocol, bridge end to end,
+                         # a browser on the web page
 ./codedeck ci [PR]       # the pull request's checks, and the end of the log
                          # of each failed one (--watch waits for them)
 
@@ -150,8 +154,8 @@ Narrower loops run in the dev container, which keeps its node_modules and the
 caches between commands: `./codedeck dev cargo test -p <crate>`,
 `./codedeck dev vitest run <file>` (the agent host's own tests). Tests marked
 `#[ignore]` need Node and a built agent host; `./codedeck e2e` builds the
-bundle and runs the two CI runs (the driver-protocol spawn test and the
-bridge end-to-end test). Before a release, the acceptance test runs the real
+bundle and runs the two CI runs (the driver-protocol spawn test, and the
+bridge end-to-end tests: a phone, and a browser on the web page). Before a release, the acceptance test runs the real
 phone core against a throwaway bridge with the real OpenCode (MCP changes
 across restarts, a free model's session resumed across a restart):
 `./codedeck dev sh -c 'CODEDECK_AGENT_CACHE=/agents cargo test -p bridge-runtime --test acceptance -- --ignored --test-threads 1'`.

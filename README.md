@@ -54,8 +54,9 @@ Pairing is a one-time QR scan; it survives restarts on both ends.
 - NIP-42 `AUTH` relays, and Tor on both ends (see below)
 - A direct link on your LAN or VPN: the phone talks to the bridge over its
   own WebSocket, with the relays as the fallback
-- A web page on the same port: the bridge's dashboard in a browser, signed in
-  from a paired phone instead of a password
+- A web page on the same port: drive the sessions from a browser, signed in
+  from a paired phone instead of a password, every command signed by a key
+  the browser cannot hand out
   ([`docs/BRIDGE.md`](docs/BRIDGE.md#web-page))
 
 ## About this fork
@@ -249,6 +250,7 @@ the full runbook.
 - [`docs/DEEPSEEK.md`](docs/DEEPSEEK.md) — the DeepSeek Harness: API key, models and reasoning, gateways, MCP servers and plugins
 - [`docs/QWEN.md`](docs/QWEN.md) — Qwen Code: install, OpenAI-compatible providers, its home, modes, MCP servers and extensions
 - [`docs/PI.md`](docs/PI.md) — Pi: install, accounts and providers, its home, the permission gate and its tiers, MCP servers and packages
+- [`docs/WEB-CLIENT.md`](docs/WEB-CLIENT.md) — the bridge's web page as a client: the browser's signing key, its stream, what it may send, the threat model
 - [`docs/AGENT-CANDIDATES.md`](docs/AGENT-CANDIDATES.md) — which agents to add next and how
 - [`.claude/skills/cut-release/SKILL.md`](.claude/skills/cut-release/SKILL.md) — the release runbook
 

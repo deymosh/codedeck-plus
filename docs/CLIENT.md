@@ -433,6 +433,13 @@ the UI view's `webBrowsers` (by machine). Ending one dispatches
 `SignOutWebBrowser`, which drops the row at once and lets the bridge's fresh
 list — the same message a request is answered with — confirm it.
 
+A scanned or typed code is not sent at once: "Check the page" shows the
+certificate fingerprint the machine's heartbeat pins (the summary's
+`directCertSha256`, written as browsers' certificate viewers write it) beside
+the code, and only "They match: sign in" sends it. The browser's warning is
+the one place a page served by someone else shows itself
+([`WEB-CLIENT.md`](WEB-CLIENT.md#sign-in)).
+
 ## Conventions
 
 - A UniFFI error variant must not have a field named `message` (it collides
