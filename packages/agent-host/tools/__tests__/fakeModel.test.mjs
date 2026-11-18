@@ -7,7 +7,7 @@
  * required `questions` the call does not carry.
  */
 import { describe, expect, it } from 'vitest';
-import { planReply } from '../fake-model.mjs';
+import { planReply, startFakeModel } from '../fake-model.mjs';
 
 const HARNESS_TOOLS = (shell) =>
   ['ask_user_question', 'create_goal', 'edit', 'glob', 'grep', shell, 'read', 'write'].map((name) => ({
@@ -32,6 +32,28 @@ describe('/write', () => {
       'anthropic',
     );
     expect(reply).toMatchObject({ kind: 'tool', name: 'write', args: { path: 'src/a.ts', content: 'const x = 1;\nexport {};' } });
+  });
+});
+
+describe('a required key', () => {
+  it('answers a model request only when it carries the key, as a bearer or an x-api-key', async () => {
+    const model = await startFakeModel({ key: 'sk-required' });
+    try {
+      const ask = (headers) =>
+        fetch(`${model.url}/v1/chat/completions`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', ...headers },
+          body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }),
+        });
+      const missing = await ask({});
+      expect(missing.status).toBe(401);
+      expect(await missing.text()).not.toContain('sk-');
+      expect((await ask({ authorization: 'Bearer sk-other' })).status).toBe(401);
+      expect((await ask({ authorization: 'Bearer sk-required' })).status).toBe(200);
+      expect((await ask({ 'x-api-key': 'sk-required' })).status).toBe(200);
+    } finally {
+      await model.close();
+    }
   });
 });
 
