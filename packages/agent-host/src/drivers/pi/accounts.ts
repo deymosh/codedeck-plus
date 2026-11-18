@@ -14,8 +14,16 @@
  * open (`auth_url`) or a code to enter on any device (`device_code`) — and,
  * for a page, asks for the address the browser lands on (`manual_code`),
  * since the provider sends it back to a listener on this machine a phone
- * cannot reach. A login that asks anything else is refused with Pi's own
- * question: only Pi's interactive `/login` can hold that conversation.
+ * cannot reach.
+ *
+ * Pi asks a login's other questions as it goes (Cloudflare's account ID, how
+ * to sign in to Anthropic, a GitHub Enterprise domain), while a phone needs
+ * them on the form before it starts. So the listing finds them by running
+ * each login cut off from the network (authHelper's askedBy), offers them as
+ * the method's fields keyed by Pi's own question, and a login answers Pi's
+ * prompts from the phone's answers (questionsOf, answersFor). A question the
+ * listing did not find is refused with Pi's own words: only Pi's
+ * interactive `/login` can hold that conversation.
  */
 import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -23,7 +31,7 @@ import { pathToFileURL } from 'node:url';
 import * as path from 'node:path';
 import type { AccountChangeResult, AccountManager, SignInState } from '../../sdk/driver';
 import { redactSecrets } from '../../sdk/redact';
-import type { AccountChange, AccountConnection, AccountMethod, AgentAccount } from '../../sdk/types';
+import type { AccountChange, AccountConnection, AccountField, AccountMethod, AgentAccount } from '../../sdk/types';
 import { installPiAuthHelper } from './authHelper';
 import { PiLineDecoder, type PiRecord, type PiSpawn } from './rpc';
 
@@ -46,6 +54,25 @@ interface HelperProvider {
   /** The sign-in's name ("Anthropic (Claude Pro/Max)"), when there is one. */
   signIn?: string;
   status?: { configured?: boolean; source?: string; label?: string };
+  /** What the key login asks, when the listing looked (authHelper's askedBy). */
+  keyPaths?: LoginPath[];
+  /** What the sign-in asks, likewise. */
+  signInPaths?: LoginPath[];
+}
+
+/** One way through a login: the questions met, and how it ended. */
+interface LoginPath {
+  prompts: Array<{ type: string; message: string; placeholder?: string; options?: Array<{ id: string; label: string }>; choice?: string }>;
+  /** `done`, `user` (handed to the user), `offline` (would go online), `failed`. */
+  end: string;
+}
+
+/** What a login asks the phone, and the choices it makes itself. */
+export interface LoginQuestions {
+  /** Keyed by Pi's own question, which is what its prompt says. */
+  fields: AccountField[];
+  /** A choice with one way that works from a phone: answered without asking. */
+  auto: Record<string, string>;
 }
 
 /** One helper process: an operation sent, its records read back. */
@@ -136,10 +163,8 @@ export class PiAccounts implements AccountManager {
   }
 
   async list(all: boolean): Promise<AgentAccount[]> {
-    let listed: PiRecord | undefined;
-    await this.once({ op: 'list' }, (record) => {
-      if (record.type === 'list') listed = record;
-    });
+    // Every provider is for connecting one, so it comes with its questions.
+    const listed = await this.listing(all ? { questions: true } : {});
     const providers = Array.isArray(listed?.providers) ? (listed.providers as HelperProvider[]) : [];
     const stored = new Map<string, string>();
     for (const raw of Array.isArray(listed?.credentials) ? listed.credentials : []) {
@@ -158,7 +183,7 @@ export class PiAccounts implements AccountManager {
     try {
       switch (change.kind) {
         case 'key':
-          await this.storeKey(account, change.key);
+          await this.storeKey(account, change.key, await this.answers(account, 'key', change.answers));
           this.options.changed();
           return { accounts: await this.list(false) };
         case 'remove':
@@ -172,7 +197,7 @@ export class PiAccounts implements AccountManager {
           // Pi keeps one stored access per provider: it is the active one.
           return { accounts: await this.list(false) };
         case 'sign-in':
-          return { signIn: await this.signIn(account, ended) };
+          return { signIn: await this.signIn(account, await this.answers(account, 'sign-in', change.answers), ended) };
         case 'finish':
           return { signIn: this.finish(account, change.attempt, change.callbackUrl) };
         case 'cancel':
@@ -195,15 +220,50 @@ export class PiAccounts implements AccountManager {
     this.attempts.clear();
   }
 
-  private async storeKey(account: string, key: string): Promise<void> {
+  /** Pi's listing, read from one helper run. */
+  private async listing(request: { provider?: string; questions?: boolean }): Promise<PiRecord | undefined> {
+    let listed: PiRecord | undefined;
+    await this.once({ op: 'list', ...request }, (record) => {
+      if (record.type === 'list') listed = record;
+    });
+    return listed;
+  }
+
+  /**
+   * What to tell Pi when its login for `account` asks: the questions it asks
+   * that way, read again from the installed Pi, answered from the phone's
+   * answers (or their defaults) and Pi's one workable choice.
+   */
+  private async answers(account: string, kind: 'key' | 'sign-in', given: Record<string, string> | undefined): Promise<Map<string, string>> {
+    const listed = await this.listing({ provider: account, questions: true });
+    const provider = (Array.isArray(listed?.providers) ? (listed.providers as HelperProvider[]) : []).find((p) => p.id === account);
+    if (!provider) throw new Error(`Pi has no provider "${account}".`);
+    const questions = questionsOf(kind, kind === 'key' ? provider.keyPaths : provider.signInPaths);
+    if (!questions) {
+      throw new Error(
+        kind === 'key'
+          ? `Pi's key login for ${provider.name} needs more than a phone can give; run Pi's own /login on the machine.`
+          : `Pi's sign-in for ${provider.name} cannot be finished from a phone; run Pi's own /login on the machine.`,
+      );
+    }
+    return answersFor(questions, given ?? {});
+  }
+
+  private async storeKey(account: string, key: string, answers: Map<string, string>): Promise<void> {
     let refused: string | undefined;
     let answered = false;
+    const given = new Set<string>();
     const run = await this.start({ op: 'login', provider: account, method: 'api_key' }, (record) => {
       if (record.type !== 'prompt') return;
       const prompt = record.prompt as { type?: string; message?: string } | undefined;
       if (prompt?.type === 'secret' && !answered) {
         answered = true;
         run.send({ op: 'answer', id: record.id, value: key });
+        return;
+      }
+      const answer = answerOnce(answers, given, prompt);
+      if (answer !== undefined) {
+        run.send({ op: 'answer', id: record.id, value: answer });
         return;
       }
       refused = prompt?.message ?? 'a question';
@@ -216,9 +276,10 @@ export class PiAccounts implements AccountManager {
     if (failure !== undefined) throw new Error(failure);
   }
 
-  private async signIn(account: string, ended: (end: SignInState) => void): Promise<SignInState> {
+  private async signIn(account: string, answers: Map<string, string>, ended: (end: SignInState) => void): Promise<SignInState> {
     const attemptId = randomUUID();
     let begun = false;
+    const given = new Set<string>();
     let settle!: { resolve(state: SignInState): void; reject(error: Error): void };
     const first = new Promise<SignInState>((resolve, reject) => {
       settle = { resolve, reject };
@@ -245,6 +306,11 @@ export class PiAccounts implements AccountManager {
         } else {
           attempt.pastePrompt = id;
         }
+        return;
+      }
+      const answer = answerOnce(answers, given, prompt);
+      if (answer !== undefined) {
+        run.send({ op: 'answer', id, value: answer });
         return;
       }
       // A choice or a field this flow cannot put to the phone.
@@ -358,8 +424,14 @@ export class PiAccounts implements AccountManager {
  *  access comes from now — never the secret itself. */
 export function toAccount(provider: HelperProvider, storedType: string | undefined): AgentAccount {
   const methods: AccountMethod[] = [];
-  if (provider.key) methods.push({ id: PI_KEY_METHOD, kind: 'key', label: provider.key });
-  if (provider.signIn) methods.push({ id: PI_SIGN_IN_METHOD, kind: 'sign-in', label: provider.signIn });
+  const method = (id: string, kind: 'key' | 'sign-in', label: string, paths: LoginPath[] | undefined): void => {
+    // A way Pi offers that cannot work from a phone is not offered there.
+    const questions = questionsOf(kind, paths);
+    if (!questions) return;
+    methods.push({ id, kind, label, ...(questions.fields.length > 0 ? { fields: questions.fields } : {}) });
+  };
+  if (provider.key) method(PI_KEY_METHOD, 'key', provider.key, provider.keyPaths);
+  if (provider.signIn) method(PI_SIGN_IN_METHOD, 'sign-in', provider.signIn, provider.signInPaths);
   const connections: AccountConnection[] = [];
   const status = provider.status;
   if (status?.configured) {
@@ -384,6 +456,121 @@ export function toAccount(provider: HelperProvider, storedType: string | undefin
     ...(methods.length > 0 ? { methods } : {}),
     ...(connections.length > 0 ? { connections } : {}),
   };
+}
+
+/**
+ * The questions a login asks, from the ways through it the listing found;
+ * null when no way works from a phone. A key login works when it asks for
+ * exactly one secret — the key the phone sends — and finishes without
+ * sending the user anywhere; a sign-in works when it asks no secret and
+ * ends by sending the user to a page or a code (or going online to get
+ * one). A choice is asked only among the options that lead somewhere that
+ * works, and not at all when only one does; a question that follows a
+ * choice is asked only when that choice is made. Unknown paths (the listing
+ * did not look) ask nothing.
+ */
+export function questionsOf(kind: 'key' | 'sign-in', paths: LoginPath[] | undefined): LoginQuestions | null {
+  if (paths === undefined) return { fields: [], auto: {} };
+  const works = (path: LoginPath): boolean => {
+    const secrets = path.prompts.filter((p) => p.type === 'secret').length;
+    if (path.prompts.some((p) => p.type !== 'secret' && p.type !== 'text' && p.type !== 'select')) return false;
+    return kind === 'key'
+      ? secrets === 1 && (path.end === 'done' || path.end === 'offline')
+      : secrets === 0 && (path.end === 'user' || path.end === 'offline');
+  };
+  const kept = paths.filter(works);
+  if (kept.length === 0) return null;
+
+  // Each choice's options that lead to a working path.
+  const options = new Map<string, Set<string>>();
+  for (const path of kept) {
+    for (const p of path.prompts) {
+      if (p.type === 'select' && p.choice !== undefined) {
+        options.set(p.message, (options.get(p.message) ?? new Set()).add(p.choice));
+      }
+    }
+  }
+  const auto: Record<string, string> = {};
+  for (const [message, ids] of options) if (ids.size === 1) auto[message] = [...ids][0]!;
+
+  // The choices a path made that the phone is asked for, up to a point.
+  const choicesBefore = (path: LoginPath, index: number): Array<{ key: string; value: string }> =>
+    path.prompts
+      .slice(0, index)
+      .filter((p) => p.type === 'select' && p.choice !== undefined && auto[p.message] === undefined)
+      .map((p) => ({ key: p.message, value: p.choice! }));
+  const holds = (path: LoginPath, when: Array<{ key: string; value: string }>): boolean =>
+    when.every((c) => path.prompts.some((p) => p.type === 'select' && p.message === c.key && p.choice === c.value));
+
+  const fields: AccountField[] = [];
+  const seen = new Set<string>();
+  for (const path of kept) {
+    for (const p of path.prompts) {
+      if (p.type === 'secret' || auto[p.message] !== undefined || seen.has(p.message)) continue;
+      seen.add(p.message);
+      const asking = kept.filter((k) => k.prompts.some((q) => q.message === p.message));
+      // What every path that asks it chose first: the condition to ask it on.
+      let when = choicesBefore(asking[0]!, asking[0]!.prompts.findIndex((q) => q.message === p.message));
+      for (const other of asking.slice(1)) {
+        const before = choicesBefore(other, other.prompts.findIndex((q) => q.message === p.message));
+        when = when.filter((c) => before.some((b) => b.key === c.key && b.value === c.value));
+      }
+      // The phone shows a question when all its conditions hold; a question
+      // asked on some other mix of choices cannot be put that way.
+      if (kept.some((k) => holds(k, when) !== asking.includes(k))) return null;
+      const field: AccountField = { key: p.message, title: titleOf(p.message) };
+      if (p.type === 'select') {
+        const ids = options.get(p.message)!;
+        field.options = (p.options ?? []).filter((o) => ids.has(o.id)).map((o) => ({ id: o.id, label: o.label }));
+        field.required = true;
+        field.default = field.options[0]?.id ?? null;
+      } else {
+        // Pi stores a key login's answers as they are, and checks a
+        // sign-in's with the provider, which says what a blank one means
+        // (GitHub's: github.com).
+        if (kind === 'key') field.required = true;
+        if (p.placeholder) field.placeholder = p.placeholder;
+      }
+      if (when.length > 0) field.when = when;
+      fields.push(field);
+    }
+  }
+  return { fields, auto };
+}
+
+/** Pi's answers for a login: its own choices, and the phone's answers to the
+ *  questions asked on them. Throws on a missing or impossible answer. */
+export function answersFor(questions: LoginQuestions, given: Record<string, string>): Map<string, string> {
+  const answers = new Map(Object.entries(questions.auto));
+  const effective = (field: AccountField): string => (given[field.key] ?? field.default ?? '').trim();
+  const values = new Map(questions.fields.map((f) => [f.key, effective(f)]));
+  for (const field of questions.fields) {
+    const asked = (field.when ?? []).every((c) => ((values.get(c.key) ?? '') === c.value) !== (c.not ?? false));
+    if (!asked) continue;
+    const value = values.get(field.key) ?? '';
+    if (field.options && field.options.length > 0 && !field.options.some((o) => o.id === value)) {
+      throw new Error(`Choose one of the ${field.title} options.`);
+    }
+    if (field.required && value === '') throw new Error(`${field.title} is needed.`);
+    answers.set(field.key, value);
+  }
+  return answers;
+}
+
+/** The answer to a prompt Pi asks, once: a login that asks the same question
+ *  again did not take the answer, and gets no second one. */
+function answerOnce(answers: Map<string, string>, given: Set<string>, prompt: { type?: string; message?: string } | undefined): string | undefined {
+  const message = prompt?.message;
+  if (message === undefined || prompt?.type === 'secret' || given.has(message)) return undefined;
+  const answer = answers.get(message);
+  if (answer !== undefined) given.add(message);
+  return answer;
+}
+
+/** A question as a field's title: "Enter Cloudflare account ID" → "Cloudflare account ID". */
+function titleOf(message: string): string {
+  const bare = message.replace(/^(enter|select)\s+/i, '').replace(/:\s*$/, '').trim();
+  return bare.charAt(0).toUpperCase() + bare.slice(1);
 }
 
 function describeSource(source: string | undefined): string {
