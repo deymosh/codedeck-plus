@@ -69,8 +69,10 @@ export class PiLineDecoder {
       let value: unknown;
       try {
         value = JSON.parse(line);
-      } catch (error) {
-        this.onBadLine(line, error instanceof Error ? error.message : String(error));
+      } catch {
+        // Not the parser's message: it quotes the line's start, cut where a
+        // secret in it could no longer be recognised. The line goes whole.
+        this.onBadLine(line, 'not JSON');
         continue;
       }
       if (typeof value !== 'object' || value === null || Array.isArray(value)) {

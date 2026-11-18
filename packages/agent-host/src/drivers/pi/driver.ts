@@ -32,6 +32,7 @@ import type { Driver, DriverSession, SessionContext, SessionMcpState } from '../
 import type { ProviderHttp } from '../../sdk/net';
 import { OPENAI_API, checkToken, listModels } from '../../sdk/providerApi';
 import type { EndpointModel } from '../../sdk/providerModels';
+import { redactSecrets } from '../../sdk/redact';
 import { now, PERMISSION_ALLOW, PERMISSION_DENY, toolLocations, unknownToolReporter } from '../../sdk/tools';
 import { truncateToolResult } from '../../sdk/transcript';
 import { PartialCoalescer } from '../../sdk/partial';
@@ -244,6 +245,11 @@ export class PiSession implements DriverSession {
   private readonly env: Record<string, string>;
   /** The bound profile's token, for Pi's token pipe; never in `env`. */
   private readonly token: string | undefined;
+  /** Every credential value this session was handed. What Pi says when
+   *  something fails — its stderr, a provider's error reply — can quote
+   *  them (an endpoint echoing the header it refused), and it travels to
+   *  the log and the phone, so each such text goes through `safe` first. */
+  private readonly secrets: string[];
   /** The running process once it accepts commands; rejected if the session
    *  ends first. An option changed while Pi starts waits on it, rather than
    *  being dropped as if it applied. */
@@ -263,6 +269,7 @@ export class PiSession implements DriverSession {
     this.started.catch(() => {});
     this.env = buildPiEnv(params, deps.home, deps.baseEnv);
     this.token = piProviderToken(params);
+    this.secrets = [...Object.values(params.credentials ?? {}), ...Object.values(params.env ?? {}), ...(this.token !== undefined ? [this.token] : [])];
     this.reportUnknownTool = unknownToolReporter((message) => ctx.log(message));
     this.coalescer = new PartialCoalescer((update) => {
       if (!this.ended) this.ctx.emit({ type: 'partial', ...update });
@@ -297,13 +304,14 @@ export class PiSession implements DriverSession {
       onEvent: (record) => this.event(record),
       onUiRequest: (record) => this.uiRequest(record),
       onExit: (code, signal) => this.exited(code, signal),
-      onStderr: (line) => {
+      onStderr: (raw) => {
+        const line = this.safe(raw);
         this.lastStderr = line;
         if (PI_SESSION_MISSING.test(line)) this.sessionMissing = true;
         this.deps.log(`[pi] ${line}`);
       },
       onBadLine: (line, reason) => {
-        this.deps.log(`[pi] dropped a line from Pi (${reason})${line ? `: ${line.slice(0, 200)}` : ''}`);
+        this.deps.log(`[pi] dropped a line from Pi (${this.safe(reason)})${line ? `: ${this.safe(line).slice(0, 200)}` : ''}`);
       },
       ...(this.deps.spawnFn !== undefined ? { spawnFn: this.deps.spawnFn } : {}),
     });
@@ -430,11 +438,11 @@ export class PiSession implements DriverSession {
         if (record.success === false) {
           // Pi gave up: its final error is the turn's, said once.
           this.heldError = undefined;
-          this.emit([{ entryType: 'error', text: str(record.finalError) ?? 'Pi gave up after retrying', timestamp: now() }]);
+          this.emit([{ entryType: 'error', text: this.safe(str(record.finalError) ?? 'Pi gave up after retrying'), timestamp: now() }]);
         }
         return;
       case 'extension_error':
-        this.deps.log(`[pi] an extension failed: ${String(record.error ?? record.event ?? 'unknown')}`);
+        this.deps.log(`[pi] an extension failed: ${this.safe(String(record.error ?? record.event ?? 'unknown'))}`);
         return;
       default:
         return;
@@ -480,7 +488,7 @@ export class PiSession implements DriverSession {
       // shown: Pi may retry the request (`auto_retry_start` follows), and a
       // failed attempt that a later one recovers from is not the turn's error.
       for (const index of assistant?.parts.keys() ?? []) this.coalescer.complete(`${assistant!.key}:${index}`);
-      this.heldError = errorMessage ?? 'Pi reported an error';
+      this.heldError = this.safe(errorMessage ?? 'Pi reported an error');
       return;
     }
     // An aborted response is the user's own interrupting: its partial content
@@ -679,14 +687,21 @@ export class PiSession implements DriverSession {
 
   /** Pi will try the failed request again: one status line says so, in
    *  place of the attempt's error. */
+  /** `text` without any credential this session was handed. */
+  private safe(text: string): string {
+    return redactSecrets(text, this.secrets);
+  }
+
   private retrying(record: PiRecord): void {
     this.heldError = undefined;
     const attempt = num(record.attempt);
     const of = num(record.maxAttempts);
     const delay = num(record.delayMs);
     // The first line, briefly: a provider's error can be a page of JSON, and
-    // the full text is the error entry's if Pi gives up.
-    const firstLine = str(record.errorMessage)?.split('\n')[0];
+    // the full text is the error entry's if Pi gives up. Redacted before it
+    // is cut: a cut secret would no longer be found.
+    const message = str(record.errorMessage);
+    const firstLine = message === undefined ? undefined : this.safe(message).split('\n')[0];
     const why = firstLine !== undefined && firstLine.length > 120 ? `${firstLine.slice(0, 119)}…` : firstLine;
     const when = delay !== undefined ? ` in ${Math.max(1, Math.round(delay / 1000))}s` : '';
     const count = attempt !== undefined && of !== undefined ? ` (${attempt} of ${of})` : '';
@@ -752,7 +767,7 @@ export class PiSession implements DriverSession {
     this.openUi.add(id);
     void this.answerUi(id, method, record)
       .catch((error: unknown) => {
-        this.deps.log(`[pi] could not answer a dialog: ${error instanceof Error ? error.message : String(error)}`);
+        this.deps.log(`[pi] could not answer a dialog: ${this.safe(error instanceof Error ? error.message : String(error))}`);
         this.respond({ type: 'extension_ui_response', id, cancelled: true });
       })
       .finally(() => this.openUi.delete(id));
