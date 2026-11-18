@@ -59,10 +59,18 @@ pointed there (`PI_CODING_AGENT_DIR=<that directory>`): accounts, MCP
 servers and packages added either way are there for both. Conversations are files under its `sessions/`, which is what a session
 resumes from after a restart and what deleting a conversation removes.
 
-A profile's token never touches a file: the driver hands the session's
-process the profile in one environment variable and the token in another,
-which the registration names (`$CODEDECK_PI_PROVIDER_TOKEN`), so Pi reads
-the token from its own environment.
+A profile's token never touches a file, nor Pi's environment: the profile
+travels in an environment variable, the token on a pipe of its own (file
+descriptor 3), which the CodeDeck extension reads once as Pi starts and
+registers as the profile's key. Everything Pi starts — the model's shells,
+background shells, sub-agents, MCP and language servers — inherits Pi's
+environment, and on Linux any process of the same user can read a process's
+starting environment back from `/proc`, so a token there would be the
+model's to print. A sub-agent's Pi gets the token on its own pipe the same
+way. An operator's own Pi executable that wraps Pi must hand file
+descriptor 3 on to it; one that does not leaves the profile's requests
+without a key (Pi's error says so, and the bridge log has the extension's
+line naming the missing token).
 
 Pi runs with `--offline`, version checks and telemetry off: it makes no
 network request of its own beyond the model's. Its model catalog is therefore
