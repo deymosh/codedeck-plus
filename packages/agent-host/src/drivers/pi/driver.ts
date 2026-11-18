@@ -55,7 +55,7 @@ import type {
 import { PiAccounts } from './accounts';
 import { PiMcp } from './mcp';
 import { PiPlugins, piCliRunner, type PiCliRunner } from './plugins';
-import { buildPiEnv } from './env';
+import { buildPiEnv, piProviderToken } from './env';
 import { PI_PERMISSION_PREFIX, bundledPiExtension, installPiExtension } from './extension';
 import { GATE } from './extension/gate';
 import {
@@ -242,6 +242,8 @@ export class PiSession implements DriverSession {
   /** The child's environment. Built synchronously, so a provider profile that
    *  cannot be used refuses the session before it starts. */
   private readonly env: Record<string, string>;
+  /** The bound profile's token, for Pi's token pipe; never in `env`. */
+  private readonly token: string | undefined;
   /** The running process once it accepts commands; rejected if the session
    *  ends first. An option changed while Pi starts waits on it, rather than
    *  being dropped as if it applied. */
@@ -260,6 +262,7 @@ export class PiSession implements DriverSession {
     // Nobody may be waiting when the session ends early.
     this.started.catch(() => {});
     this.env = buildPiEnv(params, deps.home, deps.baseEnv);
+    this.token = piProviderToken(params);
     this.reportUnknownTool = unknownToolReporter((message) => ctx.log(message));
     this.coalescer = new PartialCoalescer((update) => {
       if (!this.ended) this.ctx.emit({ type: 'partial', ...update });
@@ -290,6 +293,7 @@ export class PiSession implements DriverSession {
       args: command.args,
       cwd: this.params.cwd,
       env: this.env,
+      ...(this.token !== undefined ? { token: this.token } : {}),
       onEvent: (record) => this.event(record),
       onUiRequest: (record) => this.uiRequest(record),
       onExit: (code, signal) => this.exited(code, signal),

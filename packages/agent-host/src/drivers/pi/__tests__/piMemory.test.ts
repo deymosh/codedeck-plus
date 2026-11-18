@@ -40,7 +40,7 @@ function tempDir(prefix = 'codedeck-pi-memory-'): string {
   return dir;
 }
 
-function harness(env: Record<string, string | undefined> = {}): {
+function harness(env: Record<string, string | undefined> = {}, secrets?: string[]): {
   home: string;
   run: (cwd: string, params: Record<string, unknown>) => Promise<ToolResult>;
   section: (cwd: string) => string | undefined;
@@ -57,7 +57,7 @@ function harness(env: Record<string, string | undefined> = {}): {
         if (event === 'before_agent_start') hook = handler;
       }) as never,
     },
-    { home, env },
+    { home, env, ...(secrets ? { secrets } : {}) },
   );
   return {
     home,
@@ -262,6 +262,21 @@ describe('the memory tool', () => {
       content: 'The short value is short.',
     });
     expect(saved.content[0]!.text).toContain("Saved memory 'ordinary'");
+  });
+
+  it("refuses the provider profile's token, which is in no variable", async () => {
+    const token = 'sk-profile-token-value';
+    const memory = harness({}, [token]);
+    const message = await refusal(memory.run, tempDir(), {
+      action: 'save',
+      name: 'leak',
+      description: 'A note about the endpoint.',
+      content: `Use ${token} for the gateway.`,
+    });
+    expect(message).toBe(
+      "memory refused: the note looks like it contains a secret (the provider profile's token). Save where the secret lives, never the secret itself.",
+    );
+    expect(message).not.toContain(token);
   });
 
   it('keeps two working directories apart, even with the same basename', async () => {

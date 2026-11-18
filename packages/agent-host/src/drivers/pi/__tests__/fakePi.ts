@@ -34,13 +34,15 @@ import { EventEmitter } from 'node:events';
 interface FakeStdin extends EventEmitter {
   destroyed: boolean;
   write(chunk: string): boolean;
-  end(): void;
+  end(chunk?: string): void;
 }
 
 export interface FakeChild extends EventEmitter {
   stdout: EventEmitter;
   stderr: EventEmitter;
   stdin: FakeStdin;
+  /** stdin, stdout, stderr and the provider token's pipe (fd 3). */
+  stdio: [FakeStdin, EventEmitter, EventEmitter, FakeStdin];
   pid: number;
   kill(signal?: string): boolean;
 }
@@ -78,6 +80,10 @@ export class FakePi {
   readonly uiResponses: Array<Record<string, unknown>> = [];
   /** Dialogs answered by allow/deny, by their call id. */
   readonly answers = new Map<string, string>();
+  /** What the driver wrote on the token pipe (fd 3), and whether it closed
+   *  it — as the extension reads it, to the end. */
+  token = '';
+  tokenClosed = false;
   private readonly options: FakePiOptions;
   private nextCall = 0;
   private pendingDialog: { uiId: string; call: ScriptedCall } | undefined;
@@ -106,6 +112,18 @@ export class FakePi {
       },
     }) as FakeStdin;
     child.stdin = stdin;
+    const tokenPipe = Object.assign(new EventEmitter(), {
+      destroyed: false,
+      write: (chunk: string): boolean => {
+        this.token += chunk;
+        return true;
+      },
+      end: (chunk?: string): void => {
+        if (chunk !== undefined) this.token += chunk;
+        this.tokenClosed = true;
+      },
+    }) as FakeStdin;
+    child.stdio = [stdin, child.stdout, child.stderr, tokenPipe];
     child.pid = 4242;
     child.kill = (): boolean => {
       if (!ended) {

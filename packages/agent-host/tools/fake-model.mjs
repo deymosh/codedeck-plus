@@ -62,7 +62,11 @@
  *
  * Run standalone for poking at it by hand:
  *
- *   node tools/fake-model.mjs [--port N] [--host IP] [--log PATH] [--dump DIR]
+ *   node tools/fake-model.mjs [--port N] [--host IP] [--log PATH] [--dump DIR] [--key KEY]
+ *
+ * With a key, a model request that does not carry it (`Authorization: Bearer`
+ * or `x-api-key`) is answered 401 — for a test that must prove an agent sent
+ * the key it was given, not just some key. Without one, any key is taken.
  *
  * or in-process, which is what `./codedeck live <agent> --fake-model` does
  * (live-probe.mjs starts it, binds the session to it and closes it again):
@@ -705,6 +709,7 @@ export function estimateTokens(body) {
 export function startFakeModel(options = {}) {
   const log = options.log ?? (() => {});
   const dump = options.dump ?? null;
+  const key = options.key ?? null;
   if (dump) mkdirSync(dump, { recursive: true });
   let requests = 0;
 
@@ -758,6 +763,13 @@ export function startFakeModel(options = {}) {
       if (shape === null || req.method !== 'POST') {
         res.writeHead(404, { 'content-type': 'application/json' });
         res.end(JSON.stringify(errorBody('anthropic', `the fake model serves /v1/messages and /v1/chat/completions, not ${req.method} ${route}`)));
+        return;
+      }
+      if (key !== null && req.headers.authorization !== `Bearer ${key}` && req.headers['x-api-key'] !== key) {
+        // Never echoes what was sent: it may be a real key sent by mistake.
+        res.writeHead(401, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(errorBody(shape, 'the fake model was not sent the key it requires')));
+        log('-> 401 wrong or missing key');
         return;
       }
 
@@ -846,6 +858,7 @@ function main() {
     port: Number(value('port', 0)),
     host: value('host', '127.0.0.1'),
     dump: value('dump', null),
+    key: value('key', null),
     log,
   }).then((model) => {
     log('Ctrl-C to stop');

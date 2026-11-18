@@ -197,10 +197,11 @@ function regenerateIndex(dir: string): void {
 }
 
 /** The first credential shape in `text`, named without its value. */
-function findSecret(text: string, env: Record<string, string | undefined>): string | undefined {
+function findSecret(text: string, env: Record<string, string | undefined>, secrets: readonly string[]): string | undefined {
   for (const { kind, pattern } of SECRET_PATTERNS) {
     if (pattern.test(text)) return kind;
   }
+  if (secrets.some((secret) => secret !== '' && text.includes(secret))) return "the provider profile's token";
   for (const [name, value] of Object.entries(env)) {
     if (!SECRET_ENV_NAME.test(name)) continue;
     if (typeof value !== 'string' || value.length < MIN_SECRET_ENV_VALUE) continue;
@@ -261,9 +262,16 @@ function requireSaveText(params: MemoryParams): { description: string; content: 
  */
 export function registerMemory(
   pi: Pick<ExtensionAPI, 'registerTool' | 'on'>,
-  opts: { home: string; env: Record<string, string | undefined> },
+  opts: {
+    home: string;
+    env: Record<string, string | undefined>;
+    /** Secrets held outside the environment (the provider profile's token),
+     *  refused like a secret variable's value. */
+    secrets?: readonly string[];
+  },
 ): void {
   const { home, env } = opts;
+  const secrets = opts.secrets ?? [];
 
   const tool = {
     name: PI_TOOL.memory,
@@ -299,7 +307,7 @@ export function registerMemory(
 
       if (action === 'save') {
         const { description, content } = requireSaveText(params);
-        const secret = findSecret([name, description, content].join('\n'), env);
+        const secret = findSecret([name, description, content].join('\n'), env, secrets);
         if (secret !== undefined) {
           throw new Error(
             `memory refused: the note looks like it contains a secret (${secret}). Save where the secret lives, never the secret itself.`,

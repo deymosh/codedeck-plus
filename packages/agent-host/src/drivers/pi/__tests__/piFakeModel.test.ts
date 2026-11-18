@@ -43,8 +43,16 @@ interface FakeModelServer {
   stop(): Promise<void>;
 }
 
+/**
+ * The provider profile's token. The model server refuses any other, so a
+ * turn that runs proves Pi sent this one. It holds what Pi's configuration
+ * syntax would read as a command (a leading `!`) and as a variable (`$`), so
+ * it arrives intact only if the extension's escaping matches Pi's resolver.
+ */
+const PROFILE_TOKEN = '!codedeck$fake-token';
+
 function startFakeModel(timeoutMs = 15_000): Promise<FakeModelServer> {
-  const child = spawn(process.execPath, [MODEL_SERVER, '--port', '0'], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [MODEL_SERVER, '--port', '0', '--key', PROFILE_TOKEN], { stdio: ['ignore', 'pipe', 'pipe'] });
   return new Promise((resolve, reject) => {
     let output = '';
     const timer = setTimeout(() => {
@@ -137,7 +145,7 @@ live('Pi against the fake model', () => {
           id: 'codedeck-fake',
           label: 'Fake model',
           baseUrl: modelUrl,
-          authToken: 'codedeck-fake-model',
+          authToken: PROFILE_TOKEN,
           models: [{ id: FAKE_MODEL_ID, label: 'Fake model' }],
           defaultModel: FAKE_MODEL_ID,
         },
@@ -353,6 +361,61 @@ live('Pi against the fake model', () => {
     TURN_MS,
   );
 
+  /**
+   * A shell command that writes its own environment to `env-<name>.txt` and,
+   * where there is a /proc, the initial environment of the Pi that started it
+   * to `pi-environ-<name>.txt` — readable by any process of the same user,
+   * and unchanged by a variable Pi deletes later. Shell builtins only: the
+   * session's environment has no PATH (`baseEnv: {}`).
+   */
+  const dumpEnvironment = (name: string): string =>
+    `export -p > env-${name}.txt; ` +
+    `if [ -r /proc/$PPID/environ ]; then while IFS= read -r -d '' v; do echo "$v"; done < /proc/$PPID/environ > pi-environ-${name}.txt; fi; true`;
+
+  /** What a dump holds; the token must be nowhere in it. */
+  function readDump(file: string): string {
+    const text = readFileSync(path.join(cwd, file), 'utf8');
+    // The dump is the real thing: Pi's own environment, not an empty file.
+    expect(text, file).toContain('PI_CODING_AGENT_DIR');
+    return text;
+  }
+
+  it(
+    "keeps the profile's token out of every process the model starts: its shell, a background shell, and Pi's own environment",
+    async () => {
+      const ctx = start({ permission: () => ({ outcome: 'selected', optionId: 'allow' }) });
+      await turn(ctx, `/tool ${dumpEnvironment('shell')}`);
+      await turn(ctx, `/background ${dumpEnvironment('background')}`);
+      await ctx.waitFor(
+        (event) => event.type === 'entries' && event.entries.some((entry) => entry.entryType === 'background_task' && entry.status === 'completed'),
+        TURN_MS,
+      );
+
+      for (const name of ['shell', 'background']) {
+        expect(readDump(`env-${name}.txt`)).not.toContain(PROFILE_TOKEN);
+        if (process.platform === 'linux') expect(readDump(`pi-environ-${name}.txt`)).not.toContain(PROFILE_TOKEN);
+      }
+      // No output shown on the phone carries it either.
+      expect(JSON.stringify(ctx.events)).not.toContain(PROFILE_TOKEN);
+    },
+    TURN_MS,
+  );
+
+  it(
+    "gives a sub-agent's Pi the token on its pipe, and keeps it out of the sub-agent's shell",
+    async () => {
+      const ctx = start({ permission: () => ({ outcome: 'selected', optionId: 'allow' }) });
+      await turn(ctx, `/task /tool ${dumpEnvironment('subagent')}`);
+
+      // The sub-agent's own requests carried the token: the model server
+      // refuses any other, and its command ran.
+      expect(readDump('env-subagent.txt')).not.toContain(PROFILE_TOKEN);
+      if (process.platform === 'linux') expect(readDump('pi-environ-subagent.txt')).not.toContain(PROFILE_TOKEN);
+      expect(JSON.stringify(ctx.events)).not.toContain(PROFILE_TOKEN);
+    },
+    TURN_MS,
+  );
+
   it(
     "sizes a gateway's model from Pi's own catalog, which the extension reads inside Pi",
     async () => {
@@ -368,7 +431,7 @@ live('Pi against the fake model', () => {
             id: 'codedeck-fake',
             label: 'Fake gateway',
             baseUrl: modelUrl,
-            authToken: 'codedeck-fake-model',
+            authToken: PROFILE_TOKEN,
             models: [{ id: routed }],
             defaultModel: routed,
           },
