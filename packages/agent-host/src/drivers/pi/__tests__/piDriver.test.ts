@@ -212,6 +212,57 @@ describe('PiSession startup', () => {
     expect(h.fake.token).toBe('');
   });
 
+  describe('a profile token quoted back by a failure', () => {
+    const TOKEN = 'sk-codedeck-profile-secret-0123456789';
+    // Any piece of it long enough to be worth anything.
+    const PIECE = TOKEN.slice(0, 16);
+    const provider = {
+      id: 'codedeck-fake',
+      label: 'Fake',
+      baseUrl: 'https://api.example.com',
+      authToken: TOKEN,
+      models: [{ id: 'fake-model-1', label: 'Fake model' }],
+    };
+
+    it('is not in the errors and retries the phone is shown', async () => {
+      const h = withDriver();
+      const ctx = await ready(h, { model: 'fake-model-1', provider });
+      // An endpoint that echoes the header it refused, the token straddling
+      // the point where a retry line is cut short (it starts at column 100).
+      await turn(h.session!, ctx, `/give-up 401 Unauthorized: ${'x'.repeat(59)} Authorization: Bearer ${TOKEN}`);
+      await turn(h.session!, ctx, `/bad-request invalid api key ${TOKEN}`);
+      const shown = JSON.stringify(entries(ctx));
+      expect(shown).toContain('401 Unauthorized');
+      expect(shown).toContain('invalid api key');
+      expect(shown).not.toContain(PIECE);
+    });
+
+    it('is not in what Pi printed, in the log or in the reason the session ended', async () => {
+      const h = withDriver({ fake: { exitOnStart: { code: 1, stderr: `Error: the endpoint refused ${TOKEN}` } } });
+      const ctx = start(h, { model: 'fake-model-1', provider });
+      const ended = await ctx.ended();
+      expect(ended).toMatchObject({ error: expect.stringContaining('the endpoint refused') });
+      expect(JSON.stringify(ended)).not.toContain(PIECE);
+      expect(h.logs.join('\n')).toContain('the endpoint refused');
+      expect(h.logs.join('\n')).not.toContain(PIECE);
+    });
+
+    it('is not in the log when an extension fails or Pi prints a line that is not a record', async () => {
+      const h = withDriver();
+      await ready(h, { model: 'fake-model-1', provider });
+      h.fake.emit({ type: 'extension_error', error: `registerProvider refused apiKey ${TOKEN}` });
+      // A line that starts with it: a parse error quotes the line's start,
+      // cut where the redaction could no longer find it.
+      h.fake.print(`${TOKEN} was not accepted`);
+      h.fake.emit({ type: 'response', success: false, error: `bad command near ${TOKEN}` });
+      const logged = h.logs.join('\n');
+      expect(logged).toContain('an extension failed');
+      expect(logged).toContain('dropped a line');
+      expect(logged).not.toContain(PIECE);
+      expect(logged).not.toContain(TOKEN.slice(0, 8));
+    });
+  });
+
   it('refuses a provider profile with an insecure endpoint before it starts', () => {
     const h = withDriver();
     expect(() =>

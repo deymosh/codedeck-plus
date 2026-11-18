@@ -146,6 +146,11 @@ export class FakePi {
     this.child.stdout.emit('data', Buffer.from(`${JSON.stringify(record)}\n`));
   }
 
+  /** Write one raw line on stdout, as a Pi that printed something else would. */
+  print(line: string): void {
+    this.child.stdout.emit('data', Buffer.from(`${line}\n`));
+  }
+
   private respond(id: unknown, command: string, data?: unknown): void {
     this.emit({ ...(typeof id === 'string' ? { id } : {}), type: 'response', command, success: true, ...(data !== undefined ? { data } : {}) });
   }
@@ -254,14 +259,16 @@ export class FakePi {
       this.say('recovered', { retried: 2 });
       return;
     }
-    if (text === '/give-up') {
-      this.failedAttempt(1);
-      this.failedAttempt(2);
-      this.failedAttempt(3);
-      this.attemptError();
+    if (text === '/give-up' || text.startsWith('/give-up ')) {
+      // `/give-up <error>`: every attempt fails with that provider error.
+      const error = text.slice('/give-up'.length).trim() || RATE_LIMITED;
+      this.failedAttempt(1, error);
+      this.failedAttempt(2, error);
+      this.failedAttempt(3, error);
+      this.attemptError(error);
       this.emit({ type: 'turn_end', message: {}, toolResults: [] });
       this.emit({ type: 'agent_end', messages: [] });
-      this.emit({ type: 'auto_retry_end', success: false, attempt: 3, finalError: RATE_LIMITED });
+      this.emit({ type: 'auto_retry_end', success: false, attempt: 3, finalError: error });
       this.emit({ type: 'agent_settled', aborted: false });
       return;
     }
@@ -270,10 +277,11 @@ export class FakePi {
       this.failedAttempt(1);
       return;
     }
-    if (text === '/bad-request') {
-      // An error Pi does not retry: settled at once.
+    if (text === '/bad-request' || text.startsWith('/bad-request ')) {
+      // An error Pi does not retry: settled at once. `/bad-request <error>`
+      // names the provider's error.
       this.emit({ type: 'agent_start' });
-      this.attemptError('400: invalid request');
+      this.attemptError(text.slice('/bad-request'.length).trim() || '400: invalid request');
       this.settle(false);
       return;
     }
@@ -281,13 +289,13 @@ export class FakePi {
   }
 
   /** One failed request that Pi then retries. */
-  private failedAttempt(attempt: number): void {
+  private failedAttempt(attempt: number, error = RATE_LIMITED): void {
     if (attempt === 1) this.emit({ type: 'agent_start' });
-    this.attemptError();
+    this.attemptError(error);
     this.emit({ type: 'turn_end', message: {}, toolResults: [] });
     this.emit({ type: 'agent_end', messages: [] });
     // Pi retries up to three times, each retry announced before it starts.
-    this.emit({ type: 'auto_retry_start', attempt, maxAttempts: 3, delayMs: 2000 * attempt, errorMessage: RATE_LIMITED });
+    this.emit({ type: 'auto_retry_start', attempt, maxAttempts: 3, delayMs: 2000 * attempt, errorMessage: error });
     this.emit({ type: 'agent_start' });
   }
 
