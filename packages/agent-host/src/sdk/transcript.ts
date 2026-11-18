@@ -65,3 +65,39 @@ export function toDiffLines(text: string, type: DiffLine['type']): DiffLine[] {
     text: line.length > MAX_DIFF_LINE_CHARS ? line.slice(0, MAX_DIFF_LINE_CHARS) + '…' : line,
   }));
 }
+
+/** Lines of a unified diff. File headers (`diff`, `index`, `---`, `+++`) are
+ *  only skipped before the first hunk: inside a hunk, `---x` is the deletion
+ *  of the line `--x`, not a header. Hunk headers and "\ No newline" markers
+ *  carry no line content. */
+export function patchLines(patch: string): DiffLine[] {
+  const out: DiffLine[] = [];
+  let inHunk = false;
+  for (const line of patch.split('\n')) {
+    if (line.startsWith('@@')) {
+      inHunk = true;
+      continue;
+    }
+    if (!inHunk || line.startsWith('\\')) continue;
+    if (line.startsWith('+')) out.push({ type: 'add', text: truncateDiffLine(line.slice(1)) });
+    else if (line.startsWith('-')) out.push({ type: 'del', text: truncateDiffLine(line.slice(1)) });
+    else if (line.startsWith(' ')) out.push({ type: 'context', text: truncateDiffLine(line.slice(1)) });
+  }
+  return out;
+}
+
+function truncateDiffLine(line: string): string {
+  return line.length > MAX_DIFF_LINE_CHARS ? line.slice(0, MAX_DIFF_LINE_CHARS) + '…' : line;
+}
+
+/** A diff payload inside the shared wire caps; `null` when there are no
+ *  lines to show. */
+export function boundedDiff(path: string, lines: DiffLine[]): DiffPayload | null {
+  if (lines.length === 0) return null;
+  const truncated = lines.length > MAX_DIFF_LINES;
+  return {
+    path,
+    lines: truncated ? lines.slice(0, MAX_DIFF_LINES) : lines,
+    ...(truncated ? { truncated: true } : {}),
+  };
+}

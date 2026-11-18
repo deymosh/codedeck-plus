@@ -10,14 +10,16 @@
  * Nothing of the host exists there.
  *
  * A sub-agent's Pi (task.ts) loads it too, in a smaller form: the gate and
- * the provider profile, and `web_fetch` for a general sub-agent — nothing
+ * the provider profile, and `web_fetch` and the diagnostics of its file
+ * changes for a general sub-agent — nothing
  * that talks to the user (questions, plans, the checklist), starts work that
  * outlives it (background shells), or writes the project's notes.
  */
 import { getBuiltinModels, getBuiltinProviders } from '@earendil-works/pi-ai/providers/all';
 import { getPowerShellConfig, getShellConfig, type ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { registerAsk } from './ask';
-import { registerBackground } from './background';
+import { killTree, registerBackground } from './background';
+import { registerDiagnostics } from './lsp/diagnostics';
 import type { CatalogModel } from './catalog';
 import { installGate } from './gate';
 import { registerMemory } from './memory';
@@ -53,10 +55,14 @@ export default function codedeckPi(pi: ExtensionAPI): void {
 
   const subagent = process.env[SUBAGENT_ENV];
   if (subagent) {
-    if (subagent === 'general') registerWebFetch(pi);
+    if (subagent === 'general') {
+      registerWebFetch(pi);
+      registerDiagnostics(pi, { kill: killTree });
+    }
     return;
   }
 
+  registerDiagnostics(pi, { kill: killTree });
   registerTodo(pi);
   registerAsk(pi);
   registerPlanMode(pi);

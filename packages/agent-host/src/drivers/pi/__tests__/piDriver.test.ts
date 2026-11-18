@@ -517,6 +517,71 @@ describe('PiSession background tasks', () => {
   });
 });
 
+describe('PiSession file changes', () => {
+  const end = (toolCallId: string, toolName: string, details: unknown, isError = false) => ({
+    type: 'tool_execution_end',
+    toolCallId,
+    toolName,
+    result: { content: [{ type: 'text', text: isError ? 'Could not find the text' : 'Done' }], details },
+    isError,
+  });
+  const diffs = (ctx: Parameters<typeof entries>[0]) => entries(ctx).filter((entry) => entry.entryType === 'diff');
+
+  it('shows an edit as the diff of the patch Pi applied, context lines included', async () => {
+    const h = withDriver();
+    const ctx = await ready(h);
+    h.fake.emit({ type: 'tool_execution_start', toolCallId: 'call_e', toolName: 'edit', args: { path: 'src/a.ts', edits: [{ oldText: 'b', newText: 'c' }] } });
+    // The shape Pi's edit-diff.js formats: file headers, then one hunk.
+    const patch = '--- src/a.ts\n+++ src/a.ts\n@@ -1,3 +1,3 @@\n a\n-b\n+c\n d\n';
+    h.fake.emit(end('call_e', 'edit', { diff: '…', patch, firstChangedLine: 2 }));
+    await ctx.waitFor((event) => event.type === 'entries' && event.entries.some((entry) => entry.entryType === 'diff'));
+    expect(diffs(ctx)).toEqual([
+      expect.objectContaining({
+        path: 'src/a.ts',
+        callId: 'call_e',
+        lines: [
+          { type: 'context', text: 'a' },
+          { type: 'del', text: 'b' },
+          { type: 'add', text: 'c' },
+          { type: 'context', text: 'd' },
+        ],
+      }),
+    ]);
+  });
+
+  it('shows a write as its content added, and no card for a change that failed', async () => {
+    const h = withDriver();
+    const ctx = await ready(h);
+    h.fake.emit({ type: 'tool_execution_start', toolCallId: 'call_w', toolName: 'write', args: { path: 'b.py', content: 'x = 1\ny = 2' } });
+    h.fake.emit(end('call_w', 'write', undefined));
+    h.fake.emit({ type: 'tool_execution_start', toolCallId: 'call_f', toolName: 'edit', args: { path: 'c.rs', edits: [] } });
+    h.fake.emit(end('call_f', 'edit', undefined, true));
+    await ctx.waitFor((event) => event.type === 'entries' && event.entries.some((entry) => entry.entryType === 'tool_result' && entry.callId === 'call_f'));
+    expect(diffs(ctx)).toEqual([
+      expect.objectContaining({ path: 'b.py', callId: 'call_w', lines: [{ type: 'add', text: 'x = 1' }, { type: 'add', text: 'y = 2' }] }),
+    ]);
+  });
+
+  it("shows a sub-agent's edit under its parent's call", async () => {
+    const h = withDriver();
+    const ctx = await ready(h);
+    const subagent = { label: 'general', parentCallId: 'call_task' };
+    const update = (seq: number, event: Record<string, unknown>) => ({
+      type: 'tool_execution_update',
+      toolCallId: 'call_task',
+      toolName: 'task',
+      partialResult: { content: [], details: { subagent, seq, event } },
+    });
+    h.fake.emit({ type: 'tool_execution_start', toolCallId: 'call_task', toolName: 'task', args: { description: 'x', prompt: 'y', agent: 'general' } });
+    h.fake.emit(update(1, { kind: 'tool_call', callId: 'c1', toolName: 'edit', args: { path: 'a.ts', edits: [] } }));
+    h.fake.emit(update(2, { kind: 'tool_result', callId: 'c1', text: 'Done', isError: false, patch: '--- a.ts\n+++ a.ts\n@@ -1 +1 @@\n-x\n+y\n' }));
+    await ctx.waitFor((event) => event.type === 'entries' && event.entries.some((entry) => entry.entryType === 'diff'));
+    expect(diffs(ctx)).toEqual([
+      expect.objectContaining({ path: 'a.ts', callId: 'call_task/c1', subagent, lines: [{ type: 'del', text: 'x' }, { type: 'add', text: 'y' }] }),
+    ]);
+  });
+});
+
 describe('PiSession checklist', () => {
   it('shows a todo call as the checklist, not as a tool row', async () => {
     const h = withDriver();

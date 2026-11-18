@@ -17,8 +17,8 @@ import type { FileDiffInfo } from '@opencode/client';
 import { todosOf, toolLocations } from '../../sdk/tools';
 import { opencodeTool } from './tools';
 import {
-  MAX_DIFF_LINE_CHARS,
-  MAX_DIFF_LINES,
+  boundedDiff,
+  patchLines,
   toDiffLines,
   truncateToolResult,
   type DiffPayload,
@@ -265,42 +265,6 @@ function toolResultEntries(event: Extract<OpenCodeEvent, { type: 'tool-result' }
 }
 
 // --- diffs ---
-
-/** Lines of a unified diff. File headers (`diff`, `index`, `---`, `+++`) are
- *  only skipped before the first hunk: inside a hunk, `---x` is the deletion
- *  of the line `--x`, not a header. Hunk headers and "\ No newline" markers
- *  carry no line content. */
-function patchLines(patch: string): DiffLine[] {
-  const out: DiffLine[] = [];
-  let inHunk = false;
-  for (const line of patch.split('\n')) {
-    if (line.startsWith('@@')) {
-      inHunk = true;
-      continue;
-    }
-    if (!inHunk || line.startsWith('\\')) continue;
-    if (line.startsWith('+')) out.push({ type: 'add', text: truncateDiffLine(line.slice(1)) });
-    else if (line.startsWith('-')) out.push({ type: 'del', text: truncateDiffLine(line.slice(1)) });
-    else if (line.startsWith(' ')) out.push({ type: 'context', text: truncateDiffLine(line.slice(1)) });
-  }
-  return out;
-}
-
-function truncateDiffLine(line: string): string {
-  return line.length > MAX_DIFF_LINE_CHARS ? line.slice(0, MAX_DIFF_LINE_CHARS) + '…' : line;
-}
-
-/** A diff payload inside the shared wire caps; `null` when there are no
- *  lines to show. */
-function boundedDiff(path: string, lines: DiffLine[]): DiffPayload | null {
-  if (lines.length === 0) return null;
-  const truncated = lines.length > MAX_DIFF_LINES;
-  return {
-    path,
-    lines: truncated ? lines.slice(0, MAX_DIFF_LINES) : lines,
-    ...(truncated ? { truncated: true } : {}),
-  };
-}
 
 /** One file OpenCode reports as changed, as a card: its unified patch turned
  *  into lines. `null` when the patch carries no line content at all (only

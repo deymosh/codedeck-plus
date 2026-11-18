@@ -27,6 +27,11 @@
  *                    hands back
  *   /plan-approval   propose a plan for the agent's own plan tool, for the
  *                    card the approval travels through
+ *   /write <path> <content>
+ *                    write a file with the request's own file-writing tool
+ *                    (Pi's `write`, which takes `{path, content}`); `\n` in
+ *                    the content is a line break — for what an agent does
+ *                    after a file change (Pi's diff card, its diagnostics)
  *   /task [brief]    start a sub-agent with the agent's own sub-agent tool
  *                    (the CodeDeck Pi extension's `task`); the brief is the
  *                    sub-agent's prompt, so `/task /tool` makes the
@@ -89,7 +94,7 @@ export const LONG_TEXT = Array.from(
 ).join('\n');
 
 /** The scenario commands, in the order the vocabulary lists them. */
-export const SCENARIOS = ['tool', 'background', 'question', 'plan-approval', 'task', 'error', 'long'];
+export const SCENARIOS = ['tool', 'background', 'question', 'plan-approval', 'task', 'write', 'error', 'long'];
 
 /**
  * How long a streamed reply is held between pieces, and the longest a text can
@@ -253,12 +258,17 @@ const QUESTION_TOOLS = ['AskUserQuestion', 'ask_user_question', 'question', 'ask
 const PLAN_TOOLS = ['ExitPlanMode', 'exit_plan_mode', 'exit_plan'];
 /** Names that start a sub-agent. */
 const TASK_TOOLS = ['task'];
+/** Names that write a whole file. The arguments are Pi's (`{path,
+ *  content}`), the only writer this scenario was run against; another
+ *  agent's tool of the same name may want others and refuse the call. */
+const WRITE_TOOLS = ['write'];
 /** What each scenario's call prefers to be named — the agent's own tool for
  *  it, when the request offers one. */
 const SCENARIO_TOOLS = {
   question: QUESTION_TOOLS,
   'plan-approval': PLAN_TOOLS,
   task: TASK_TOOLS,
+  write: WRITE_TOOLS,
   tool: SHELL_TOOLS,
   // The CodeDeck Pi extension's background shell first, when offered: its
   // plain `bash` would run the command in the foreground.
@@ -322,6 +332,10 @@ function questionArguments(name, question) {
  *  `/tool <command>` names the command to run instead of the default. */
 export function toolArguments(name, scenario, argument = '') {
   if (scenario === 'plan-approval') return { plan: argument || PLAN_TEXT };
+  if (scenario === 'write') {
+    const [, file = 'codedeck-fake-model.txt', content = ''] = /^(\S+)\s*([\s\S]*)$/.exec(argument) ?? [];
+    return { path: file, content: content.replace(/\\n/g, '\n') };
+  }
   if (scenario === 'task') return { description: 'Fake sub-agent', prompt: argument || '/tool', agent: 'general' };
   if (scenario === 'question') return questionArguments(name, argument || 'Which color?');
   if (scenario === 'background') return { command: argument || BACKGROUND_COMMAND, description: `A background ${name} call from the fake model`, ...BACKGROUND_FLAG[name] };

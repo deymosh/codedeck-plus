@@ -18,7 +18,7 @@
  * on purpose — a slow runner must not read as a failure.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
@@ -35,6 +35,8 @@ import type { StartSession } from '../../../sdk/types';
  *  this file may not import from outside its folder). */
 const MODEL_SERVER = fileURLToPath(new URL('../../../../tools/fake-model.mjs', import.meta.url));
 const FAKE_MODEL_ID = 'fake-model-1';
+/** The agent host's node_modules: TypeScript 5 and typescript-language-server. */
+const HOST_NODE_MODULES = fileURLToPath(new URL('../../../../node_modules', import.meta.url));
 
 interface FakeModelServer {
   url: string;
@@ -107,8 +109,10 @@ live('Pi against the fake model', () => {
     session = undefined;
     await model?.stop();
     model = undefined;
-    await rm(home, { recursive: true, force: true });
-    await rm(cwd, { recursive: true, force: true });
+    // A language server Pi started is stopped as Pi exits, a moment after
+    // the session ends; until then Windows keeps its directory locked.
+    await rm(home, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+    await rm(cwd, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
   });
 
   /** A session bound to the local server the way the bridge binds one to a
@@ -306,6 +310,45 @@ live('Pi against the fake model', () => {
         TURN_MS,
       );
       await expect(session!.stopTask!(taskId)).rejects.toThrow(/no running task/);
+    },
+    TURN_MS,
+  );
+
+  it(
+    "hands the project's TypeScript errors back with a write, and shows the write as a diff",
+    async () => {
+      // A TypeScript project as one is checked out: its node_modules holds
+      // TypeScript and typescript-language-server — here the agent host's
+      // own (devDependencies), linked in. Nothing comes from PATH.
+      writeFileSync(path.join(cwd, 'tsconfig.json'), '{"compilerOptions":{"strict":true,"noEmit":true}}');
+      symlinkSync(HOST_NODE_MODULES, path.join(cwd, 'node_modules'), 'junction');
+      const ctx = start({ permission: () => ({ outcome: 'selected', optionId: 'allow' }) });
+      await turn(ctx, '/write src/a.ts const x: number = "s";\\nexport { x };');
+
+      expect(readFileSync(path.join(cwd, 'src', 'a.ts'), 'utf8')).toBe('const x: number = "s";\nexport { x };');
+      const call = ctx.entries().find((entry) => entry.entryType === 'tool_call' && entry.toolName === 'write');
+      const callId = call?.entryType === 'tool_call' ? call.callId : undefined;
+      expect(callId).toBeDefined();
+      expect(ctx.entries()).toContainEqual(
+        expect.objectContaining({
+          entryType: 'tool_result',
+          callId,
+          text: expect.stringContaining(
+            "typescript-language-server reports 1 error in src/a.ts:\nsrc/a.ts:1:7 error 2322: Type 'string' is not assignable to type 'number'.",
+          ),
+        }),
+      );
+      expect(ctx.entries()).toContainEqual(
+        expect.objectContaining({
+          entryType: 'diff',
+          callId,
+          path: 'src/a.ts',
+          lines: [
+            { type: 'add', text: 'const x: number = "s";' },
+            { type: 'add', text: 'export { x };' },
+          ],
+        }),
+      );
     },
     TURN_MS,
   );

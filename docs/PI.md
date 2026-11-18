@@ -130,6 +130,43 @@ phone needs, shown with the same cards as the other agents:
 The checklist, questions, sub-agents and background shells need no card of
 their own beyond what they start.
 
+A file Pi changes with `edit` or `write` shows as a diff under its call:
+an edit's lines are the patch Pi applied, with the lines around it; a write
+shows the content it wrote.
+
+## Diagnostics
+
+After an `edit` or `write` succeeds, the project's language server checks
+the file, and its errors and warnings are added to the tool's result — the
+model reads a type error it just made before its next step, and the phone
+shows it in the result like the rest. Only servers already on the machine
+are used; nothing is installed:
+
+| Files | Server | Found in |
+|---|---|---|
+| TypeScript, JavaScript | `typescript-language-server` for a TypeScript up to 6.x; TypeScript 7's own `tsc --lsp` | the project's `node_modules`; `typescript-language-server` also on `PATH` |
+| Python | `basedpyright-langserver`, else `pyright-langserver` | the project's `.venv`/`venv`, its `node_modules`, then `PATH` |
+| Rust | `rust-analyzer` (its own check, then `cargo check`'s) | `PATH` |
+
+The project is the nearest directory above the file with a `tsconfig.json`,
+`jsconfig.json` or `package.json`; a `Cargo.toml`; or a `pyproject.toml`,
+`setup.py`, `setup.cfg`, `pyrightconfig.json` or `requirements.txt`. A
+server starts with the first change in its project and stays for the
+session (stopped after ten idle minutes, and with Pi). The first check
+waits for it to load the project — about a second for TypeScript and
+Python, ten or more for rust-analyzer, at most 30 s — and later ones take
+under a second; a check never waits more than 10 s, and a list that came
+in late is marked unfinished. A server that is missing or fails to start
+is skipped for that project until the session ends: rustup's
+`rust-analyzer` without the component installed
+(`rustup component add rust-analyzer`) is one.
+
+Reported: the changed file only, errors and warnings (not hints), at most
+20. A server runs the project's own build tooling (`cargo check` runs
+build scripts) with the bridge's environment, without a provider profile's
+token. Set `CODEDECK_PI_LSP=off` in the bridge's environment to turn the
+checks off.
+
 ## Reasoning and messages
 
 Reasoning is Pi's thinking level: Off, Minimal, Low, Medium (Pi's default),
@@ -165,8 +202,7 @@ and macOS.
 The Plugins screen manages Pi's packages, through Pi's own `pi install`,
 `pi update` and `pi remove`. A package bundles extensions, skills, prompt
 templates and themes from npm (`npm:<package>`), git (`git:github.com/…` or
-a URL) or a path, and is how Pi gains tools neither it nor CodeDeck ships,
-such as LSP diagnostics.
+a URL) or a path, and is how Pi gains tools neither it nor CodeDeck ships.
 A package runs code with the bridge's permissions: install only ones you
 trust. An npm package needs `npm` on the machine (the container image has
 it, a release archive does not); `CODEDECK_NPM_REGISTRY` is passed on to it.
@@ -177,7 +213,8 @@ change load it.
 
 - **No subscription usage** to ask for (the context meter still works) and
   no saved permission rules.
-- **No LSP diagnostics** of CodeDeck's own: a Pi package can add them.
+- **Diagnostics for three languages**: TypeScript/JavaScript, Python and
+  Rust (above). Another language's checks can come from a Pi package.
 - **Accounts need Pi's package**: with `CODEDECK_PI_PATH` naming an
   executable rather than a `cli.js`, they cannot be listed or changed.
 
