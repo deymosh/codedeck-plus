@@ -1,7 +1,7 @@
 /**
  * The CodeDeck Pi extension: the module the driver writes into Pi's home. It
  * must gate every tool call and register a bound provider profile with the
- * token read from the environment; and the text the host carries must import
+ * token read from its pipe; and the text the host carries must import
  * nothing Pi does not provide.
  */
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { bundledPiExtension, installPiExtension, PI_PERMISSION_PREFIX, piExtensionPath } from '../extension';
 import type { CatalogModel } from '../extension/catalog';
 import { installGate } from '../extension/gate';
-import { registerProfile } from '../extension/provider';
+import { configLiteral, readProviderToken, registerProfile } from '../extension/provider';
 import { installShellCheck } from '../extension/shells';
 import { subagentTools, taskResult } from '../extension/task';
 
@@ -55,6 +55,9 @@ describe('the provider profile', () => {
   function registered(
     env: Record<string, string | undefined>,
     catalog: () => CatalogModel[] = () => [],
+    /** `null`: no token arrived. */
+    token: string | null = 'sk-value',
+    warnings: string[] = [],
   ): { id: string; config: Record<string, unknown> } | undefined {
     let provider: { id: string; config: Record<string, unknown> } | undefined;
     registerProfile(
@@ -64,31 +67,62 @@ describe('the provider profile', () => {
         }) as never,
       },
       env,
+      token ?? undefined,
       catalog,
+      (line) => warnings.push(line),
     );
     return provider;
   }
 
-  it('registers a bound profile at the endpoint the driver resolved, with the token reference', () => {
-    const provider = registered({
-      CODEDECK_PI_PROVIDER: JSON.stringify({
-        id: 'codedeck-fake',
-        label: 'Fake',
-        baseUrl: 'https://api.example.com/v1',
-        models: [{ id: 'fake-model-1', label: 'Fake model', contextWindow: 64_000 }],
-      }),
-      CODEDECK_PI_PROVIDER_TOKEN: 'sk-value',
-    });
+  const FAKE_PROFILE = JSON.stringify({
+    id: 'codedeck-fake',
+    label: 'Fake',
+    baseUrl: 'https://api.example.com/v1',
+    models: [{ id: 'fake-model-1', label: 'Fake model', contextWindow: 64_000 }],
+  });
+
+  it('registers a bound profile at the endpoint the driver resolved, with the token as its key', () => {
+    const provider = registered({ CODEDECK_PI_PROVIDER: FAKE_PROFILE });
     expect(provider?.id).toBe('codedeck-fake');
     expect(provider?.config).toMatchObject({
       name: 'Fake',
       baseUrl: 'https://api.example.com/v1',
       api: 'openai-completions',
-      apiKey: '$CODEDECK_PI_PROVIDER_TOKEN',
+      apiKey: 'sk-value',
       models: [expect.objectContaining({ id: 'fake-model-1', name: 'Fake model', contextWindow: 64_000 })],
     });
-    // The secret itself never reaches the registration.
-    expect(JSON.stringify(provider)).not.toContain('sk-value');
+  });
+
+  it("escapes a token Pi would read as a variable or a command (a real Pi resolves it: piFakeModel)", () => {
+    expect(configLiteral('sk-plain')).toBe('sk-plain');
+    expect(configLiteral('sk$HOME')).toBe('sk$$HOME');
+    expect(configLiteral('$$')).toBe('$$$$');
+    expect(configLiteral('!cat x')).toBe('$!cat x');
+    expect(configLiteral('!a$b')).toBe('$!a$$b');
+  });
+
+  it('registers a profile whose token did not arrive keyless, and says so', () => {
+    const warnings: string[] = [];
+    const provider = registered({ CODEDECK_PI_PROVIDER: FAKE_PROFILE }, () => [], null, warnings);
+    expect(provider?.config).not.toHaveProperty('apiKey');
+    expect(warnings).toEqual([expect.stringContaining("no token arrived for the provider profile 'codedeck-fake'")]);
+  });
+
+  it("reads the token from its pipe only for a Pi started with a profile, and a pipe that is not there gives none", () => {
+    const fds: number[] = [];
+    const read = (fd: number): string => {
+      fds.push(fd);
+      return 'sk-piped';
+    };
+    expect(readProviderToken({}, read)).toBeUndefined();
+    expect(fds).toEqual([]);
+    expect(readProviderToken({ CODEDECK_PI_PROVIDER: FAKE_PROFILE }, read)).toBe('sk-piped');
+    expect(fds).toEqual([3]);
+    const missing = (): string => {
+      throw Object.assign(new Error('bad file descriptor'), { code: 'EBADF' });
+    };
+    expect(readProviderToken({ CODEDECK_PI_PROVIDER: FAKE_PROFILE }, missing)).toBeUndefined();
+    expect(readProviderToken({ CODEDECK_PI_PROVIDER: FAKE_PROFILE }, () => '')).toBeUndefined();
   });
 
   it('takes what Pi knows of a model, through a gateway route or a vendor prefix', () => {

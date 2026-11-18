@@ -23,8 +23,10 @@
  * built-in tools.
  */
 import { spawn } from 'node:child_process';
+import type { Writable } from 'node:stream';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { request, type RequestUi } from './channel';
+import { PROVIDER_TOKEN_FD } from './provider';
 import {
   PI_PERMISSION_PREFIX,
   PI_TOOL,
@@ -91,6 +93,9 @@ export interface ChildOptions {
   thinking?: string;
   cwd: string;
   env: Record<string, string | undefined>;
+  /** The provider profile's token, handed to the child on its own pipe
+   *  (provider.ts), never in its environment. */
+  token?: string;
   prompt: string;
   subagent: PiSubagent;
   ui: RequestUi;
@@ -118,8 +123,14 @@ export function runSubagent(options: ChildOptions): Promise<{ text: string; erro
   const child = (options.spawnFn ?? spawn)(options.command, args, {
     cwd: options.cwd,
     env: { ...options.env, [SUBAGENT_ENV]: options.kind },
-    stdio: ['pipe', 'pipe', 'pipe'],
+    stdio: options.token !== undefined ? ['pipe', 'pipe', 'pipe', 'pipe'] : ['pipe', 'pipe', 'pipe'],
   });
+  if (options.token !== undefined) {
+    const pipe = child.stdio[PROVIDER_TOKEN_FD] as Writable | null | undefined;
+    // A child that died before reading it closes the pipe; its exit says why.
+    pipe?.on('error', () => {});
+    pipe?.end(options.token);
+  }
 
   return new Promise((resolve) => {
     const facts = new Map<string, { toolName: string; args: Record<string, unknown> }>();
@@ -297,7 +308,11 @@ export function subagentTools(kind: SubagentKind, active: readonly string[]): st
   return active.includes(PI_TOOL.webFetch) ? [...builtins, PI_TOOL.webFetch] : builtins;
 }
 
-export function registerTask(pi: Pick<ExtensionAPI, 'registerTool' | 'getActiveTools'>, env: Record<string, string | undefined>): void {
+export function registerTask(
+  pi: Pick<ExtensionAPI, 'registerTool' | 'getActiveTools'>,
+  env: Record<string, string | undefined>,
+  token?: string,
+): void {
   pi.registerTool({
     name: PI_TOOL.task,
     label: 'Sub-agent',
@@ -337,6 +352,7 @@ export function registerTask(pi: Pick<ExtensionAPI, 'registerTool' | 'getActiveT
         ...(ctx.thinkingLevel ? { thinking: String(ctx.thinkingLevel) } : {}),
         cwd: ctx.cwd,
         env,
+        ...(token !== undefined ? { token } : {}),
         prompt,
         subagent,
         ui: ctx.ui,

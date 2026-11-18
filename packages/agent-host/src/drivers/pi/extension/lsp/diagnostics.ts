@@ -17,7 +17,7 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
-import { PROVIDER_ENV, PROVIDER_TOKEN_ENV } from '../provider';
+import { PROVIDER_ENV } from '../provider';
 import { LspClient, spawnServer, type DiagnosticsResult, type SpawnServer } from './client';
 import { machine, serverFor, type Machine, type ServerChoice } from './servers';
 
@@ -119,10 +119,11 @@ export class ProjectServers {
 
   constructor(deps: DiagnosticsDeps = {}) {
     // A server runs the project's build (`cargo check` runs build scripts):
-    // it gets Pi's environment without the provider profile's token.
+    // it gets Pi's environment without the provider profile, which is the
+    // extension's alone. The profile's token is never in that environment
+    // (provider.ts).
     const env = { ...(deps.env ?? process.env) };
     delete env[PROVIDER_ENV];
-    delete env[PROVIDER_TOKEN_ENV];
     this.env = env;
     this.machine = deps.machine ?? machine(env);
     this.spawn = deps.spawn ?? spawnServer;

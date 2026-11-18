@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest';
 import { mergeDiagnostics, type DiagnosticsResult, type SpawnServer } from '../extension/lsp/client';
 import { changedFile, formatDiagnostics, LSP_ENV, MAX_REPORTED, ProjectServers, registerDiagnostics } from '../extension/lsp/diagnostics';
 import { serverFor, type Machine } from '../extension/lsp/servers';
-import { PROVIDER_TOKEN_ENV } from '../extension/provider';
+import { PROVIDER_ENV } from '../extension/provider';
 
 const FAKE_SERVER = fileURLToPath(new URL('./fakeLanguageServer.mjs', import.meta.url));
 
@@ -295,13 +295,13 @@ describe('diagnostics after a change, per kind of server', () => {
     expect(killed).toHaveLength(1);
   });
 
-  it("starts the server without the provider profile's token", async () => {
-    const p = project('pull', { env: { [PROVIDER_TOKEN_ENV]: 'sk-secret', HOME_MARK: 'kept' } });
+  it('starts the server without the provider profile', async () => {
+    const p = project('pull', { env: { [PROVIDER_ENV]: '{"id":"p"}', HOME_MARK: 'kept' } });
     try {
-      expect(await p.change(`ENV ${PROVIDER_TOKEN_ENV}\nENV HOME_MARK\n`)).toBe(
-        `rust-analyzer reports 2 errors in main.rs:\nmain.rs:1:1 error E1: ${PROVIDER_TOKEN_ENV} is unset\nmain.rs:2:1 error E1: HOME_MARK is set`,
+      expect(await p.change(`ENV ${PROVIDER_ENV}\nENV HOME_MARK\n`)).toBe(
+        `rust-analyzer reports 2 errors in main.rs:\nmain.rs:1:1 error E1: ${PROVIDER_ENV} is unset\nmain.rs:2:1 error E1: HOME_MARK is set`,
       );
-      expect(p.env()?.[PROVIDER_TOKEN_ENV]).toBeUndefined();
+      expect(p.env()?.[PROVIDER_ENV]).toBeUndefined();
     } finally {
       p.servers.stopAll();
     }

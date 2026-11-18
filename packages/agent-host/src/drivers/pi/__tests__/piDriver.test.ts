@@ -19,7 +19,7 @@ interface Harness {
   driver: PiDriver;
   fake: FakePi;
   home: string;
-  spawns: Array<{ command: string; args: string[]; env: Record<string, string>; cwd: string }>;
+  spawns: Array<{ command: string; args: string[]; env: Record<string, string>; cwd: string; stdio: string[] }>;
   logs: string[];
   session?: DriverSession;
 }
@@ -42,8 +42,8 @@ function withDriver(options: { fake?: FakePiOptions; killTree?: (pid: number) =>
     runtime,
     home,
     baseEnv: {},
-    spawnFn: ((command: string, args: string[], opts: { env: Record<string, string>; cwd: string }) => {
-      spawns.push({ command, args, env: opts.env, cwd: opts.cwd });
+    spawnFn: ((command: string, args: string[], opts: { env: Record<string, string>; cwd: string; stdio: string[] }) => {
+      spawns.push({ command, args, env: opts.env, cwd: opts.cwd, stdio: opts.stdio });
       return fake.child;
     }) as never,
     ...(options.killTree ? { killTree: options.killTree } : {}),
@@ -181,7 +181,7 @@ describe('PiSession startup', () => {
     expect(ended).not.toHaveProperty('resumeLost');
   });
 
-  it('binds a provider profile through the environment, token kept out of the profile JSON', async () => {
+  it("binds a provider profile through the environment, and hands its token over on Pi's token pipe only", async () => {
     const h = withDriver();
     await ready(h, {
       model: 'fake-model-1',
@@ -197,8 +197,19 @@ describe('PiSession startup', () => {
     expect(spawn.args[spawn.args.indexOf('--model') + 1]).toBe('codedeck-fake/fake-model-1');
     const profile = JSON.parse(spawn.env.CODEDECK_PI_PROVIDER!) as Record<string, unknown>;
     expect(profile).toMatchObject({ id: 'codedeck-fake', label: 'Fake', baseUrl: 'https://api.example.com/v1' });
-    expect(JSON.stringify(profile)).not.toContain('sk-secret');
-    expect(spawn.env.CODEDECK_PI_PROVIDER_TOKEN).toBe('sk-secret');
+    // Nowhere in the environment, under any name: everything Pi starts
+    // inherits it.
+    expect(JSON.stringify(spawn.env)).not.toContain('sk-secret');
+    expect(spawn.stdio).toHaveLength(4);
+    expect(h.fake.token).toBe('sk-secret');
+    expect(h.fake.tokenClosed).toBe(true);
+  });
+
+  it('opens no token pipe for a session without a profile', async () => {
+    const h = withDriver();
+    await ready(h);
+    expect(h.spawns[0]!.stdio).toHaveLength(3);
+    expect(h.fake.token).toBe('');
   });
 
   it('refuses a provider profile with an insecure endpoint before it starts', () => {

@@ -25,7 +25,7 @@ import { installGate } from './gate';
 import { registerMemory } from './memory';
 import { registerPlanMode } from './plan';
 import { PI_ENTRY_TYPE } from './protocol';
-import { registerProfile } from './provider';
+import { readProviderToken, registerProfile } from './provider';
 import { installShellCheck } from './shells';
 import { registerTask, SUBAGENT_ENV } from './task';
 import { registerTodo } from './todo';
@@ -42,7 +42,10 @@ function builtinCatalog(): CatalogModel[] {
 }
 
 export default function codedeckPi(pi: ExtensionAPI): void {
-  registerProfile(pi, process.env, builtinCatalog);
+  // First, before anything can start a process: the token's pipe is read and
+  // closed here, and the token is passed on only to what needs it.
+  const token = readProviderToken(process.env);
+  registerProfile(pi, process.env, token, builtinCatalog);
   installGate(pi);
   installShellCheck(pi, () => {
     try {
@@ -67,7 +70,7 @@ export default function codedeckPi(pi: ExtensionAPI): void {
   registerAsk(pi);
   registerPlanMode(pi);
   registerWebFetch(pi);
-  registerTask(pi, process.env);
+  registerTask(pi, process.env, token);
   registerBackground(pi, {
     shells: { bash: () => getShellConfig(), powershell: () => getPowerShellConfig() },
     active: () => pi.getActiveTools(),
@@ -76,5 +79,5 @@ export default function codedeckPi(pi: ExtensionAPI): void {
   // The notes live in Pi's home, which the driver always names; without it
   // there is nowhere that is the machine's own to keep them.
   const home = process.env.PI_CODING_AGENT_DIR;
-  if (home) registerMemory(pi, { home, env: process.env });
+  if (home) registerMemory(pi, { home, env: process.env, ...(token !== undefined ? { secrets: [token] } : {}) });
 }

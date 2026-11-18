@@ -19,7 +19,9 @@
  * buffer in the child.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
+import type { Writable } from 'node:stream';
 import { StringDecoder } from 'node:string_decoder';
+import { PROVIDER_TOKEN_FD } from './extension/provider';
 
 /** One decoded RPC record. Only the envelope matters here; the driver reads
  *  the rest. */
@@ -28,11 +30,12 @@ export interface PiRecord {
   [key: string]: unknown;
 }
 
-/** How a child is spawned. Tests inject their own; production uses Node's. */
+/** How a child is spawned. Tests inject their own; production uses Node's.
+ *  A fourth pipe is the provider token's (extension/provider.ts). */
 export type PiSpawn = (
   command: string,
   args: string[],
-  options: { cwd: string; env: Record<string, string>; stdio: ['pipe', 'pipe', 'pipe'] },
+  options: { cwd: string; env: Record<string, string>; stdio: ['pipe', 'pipe', 'pipe'] | ['pipe', 'pipe', 'pipe', 'pipe'] },
 ) => ChildProcess;
 
 /** How long a command may go unanswered before its promise rejects. A local
@@ -111,6 +114,10 @@ export interface PiRpcOptions {
   args: string[];
   cwd: string;
   env: Record<string, string>;
+  /** The provider profile's token, written once to the child's token pipe
+   *  (file descriptor 3) and closed — never in `env`, which every process
+   *  Pi starts inherits. A secret: never logged. */
+  token?: string;
   /** A session event (everything that is neither a command response nor an
    *  extension UI request). */
   onEvent(record: PiRecord): void;
@@ -141,8 +148,14 @@ export class PiRpc {
     this.child = spawnFn(options.command, options.args, {
       cwd: options.cwd,
       env: options.env,
-      stdio: ['pipe', 'pipe', 'pipe'],
+      stdio: options.token !== undefined ? ['pipe', 'pipe', 'pipe', 'pipe'] : ['pipe', 'pipe', 'pipe'],
     });
+    if (options.token !== undefined) {
+      const pipe = this.child.stdio[PROVIDER_TOKEN_FD] as Writable | null | undefined;
+      // A child that died before reading it closes the pipe; its exit says why.
+      pipe?.on('error', () => {});
+      pipe?.end(options.token);
+    }
 
     const stdout = new PiLineDecoder((record) => this.route(record), options.onBadLine);
     this.child.stdout?.on('data', (chunk: Buffer) => stdout.push(chunk));

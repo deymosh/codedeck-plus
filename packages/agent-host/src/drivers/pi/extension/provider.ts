@@ -3,19 +3,65 @@
  * its own providers.
  *
  * The driver passes the profile (no secret) as JSON in `CODEDECK_PI_PROVIDER`
- * and the token in `CODEDECK_PI_PROVIDER_TOKEN` (env.ts). The registration
- * names the token variable, `$CODEDECK_PI_PROVIDER_TOKEN`, and Pi reads it
- * from the environment when it calls the endpoint, so the secret never
- * reaches the extension file or Pi's configuration. The profile's models
- * become selectable as `<provider>/<model>`.
+ * (env.ts), and the token on a pipe of its own: file descriptor 3, which it
+ * writes once and closes as Pi starts. The token is never in Pi's
+ * environment, because everything Pi starts inherits that environment — the
+ * model's shells, background shells, MCP servers — and on Linux any process
+ * of the same user can read Pi's initial environment back from
+ * `/proc/<pid>/environ`, even after Pi deleted the variable. A pipe is
+ * inherited by nothing: Node passes a child only the stdio it is given.
+ *
+ * The extension reads the pipe once, as Pi loads it, and registers the token
+ * as the provider's key, so it lives in Pi's memory only. The profile's
+ * models become selectable as `<provider>/<model>`.
  */
+import { closeSync, readFileSync } from 'node:fs';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { describeModel, type CatalogModel } from './catalog';
 
 /** The variable the profile travels in (env.ts sets it). */
 export const PROVIDER_ENV = 'CODEDECK_PI_PROVIDER';
-/** The variable the profile's token travels in, named in the registration. */
-export const PROVIDER_TOKEN_ENV = 'CODEDECK_PI_PROVIDER_TOKEN';
+/** The file descriptor the profile's token arrives on, for a Pi started with
+ *  a profile: the driver's spawn (rpc.ts) and a sub-agent's (task.ts) put a
+ *  pipe there. */
+export const PROVIDER_TOKEN_FD = 3;
+
+/**
+ * The profile's token, read from its pipe to the end. Only a Pi started with
+ * a profile has the pipe, so nothing is read without one. A pipe that is not
+ * there or cannot be read gives no token: the session then fails on its
+ * first request, saying it has no key, rather than at load.
+ */
+export function readProviderToken(
+  env: Record<string, string | undefined>,
+  read: (fd: number) => string = (fd) => {
+    try {
+      return readFileSync(fd, 'utf8');
+    } finally {
+      closeSync(fd);
+    }
+  },
+): string | undefined {
+  if (!env[PROVIDER_ENV]) return undefined;
+  try {
+    const token = read(PROVIDER_TOKEN_FD);
+    return token === '' ? undefined : token;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A value Pi takes literally where it reads a configuration value. Pi
+ * resolves an API key as a template: `$NAME` is an environment variable and a
+ * leading `!` a shell command (its resolve-config-value), so a token holding
+ * either would be read as one. `$$` is Pi's literal `$` and `$!` its literal
+ * `!`.
+ */
+export function configLiteral(value: string): string {
+  const escaped = value.replace(/\$/g, '$$$$');
+  return escaped.startsWith('!') ? `$${escaped}` : escaped;
+}
 
 /** Context and output sizes for a model nothing describes. */
 export const FALLBACK_CONTEXT_WINDOW = 128_000;
@@ -95,24 +141,31 @@ export function profileModel(model: ProfileModel, catalog: readonly CatalogModel
 }
 
 /**
- * Register the bound profile, when there is one. A malformed profile is not
- * a reason to keep Pi from starting: the session then runs Pi's own models
- * and reports what it cannot do. `catalog` is read only when there is a
- * profile to describe.
+ * Register the bound profile, when there is one, with `token` as its key. A
+ * malformed profile is not a reason to keep Pi from starting: the session
+ * then runs Pi's own models and reports what it cannot do. Without a token
+ * the profile is registered keyless, said once on stderr (the driver logs
+ * it), and Pi refuses its requests for want of a key. `catalog` is read only
+ * when there is a profile to describe.
  */
 export function registerProfile(
   pi: Pick<ExtensionAPI, 'registerProvider'>,
   env: Record<string, string | undefined>,
+  token: string | undefined,
   catalog: () => readonly CatalogModel[] = () => [],
+  warn: (line: string) => void = (line) => process.stderr.write(`${line}\n`),
 ): void {
   const profile = readProfile(env);
   if (!profile) return;
+  if (token === undefined) {
+    warn(`codedeck: no token arrived for the provider profile '${profile.id}' (file descriptor ${PROVIDER_TOKEN_FD})`);
+  }
   const known = catalog();
   pi.registerProvider(profile.id, {
     name: profile.label,
     baseUrl: profile.baseUrl,
     api: PROFILE_API,
-    apiKey: '$' + PROVIDER_TOKEN_ENV,
+    ...(token !== undefined ? { apiKey: configLiteral(token) } : {}),
     models: profile.models.map((model) => profileModel(model, known)) as never,
   });
 }

@@ -7,9 +7,9 @@
  * Pi reads its endpoint and key from its own `models.json` or `auth.json`
  * under `$PI_CODING_AGENT_DIR`, or from an extension registration. A profile
  * is the second kind: its endpoint, label and models travel as JSON in
- * `CODEDECK_PI_PROVIDER`, while the token travels in its own variable
- * (`CODEDECK_PI_PROVIDER_TOKEN`) and is referenced from the extension by name,
- * so the secret never reaches the file written to disk.
+ * `CODEDECK_PI_PROVIDER`. Its token is not in this environment at all: the
+ * driver hands it to the extension on a pipe of its own (rpc.ts), since
+ * every process Pi starts inherits this environment (extension/provider.ts).
  *
  * The profile's `baseUrl` is the endpoint as the user saved it; Pi's
  * OpenAI-compatible provider needs its versioned API root, so `/v1` is
@@ -19,14 +19,12 @@
 import { isValidProviderBaseUrl, PROVIDER_BASE_URL_ERROR } from '../../sdk/provider';
 import { providerApiRoot } from '../../sdk/providerModels';
 import type { ProviderBinding, StartSession } from '../../sdk/types';
-import { PROVIDER_ENV, PROVIDER_TOKEN_ENV } from './extension/provider';
+import { PROVIDER_ENV } from './extension/provider';
 import { PI_AGENT_DIR_ENV } from './runtime';
 
 /** The profile (no secret) the extension registers, when a session is bound
  *  to one. */
 export const PI_PROVIDER_ENV = PROVIDER_ENV;
-/** The profile's auth token, read by the extension through `$`-interpolation. */
-export const PI_PROVIDER_TOKEN_ENV = PROVIDER_TOKEN_ENV;
 
 /** The provider registration as the extension's JSON variable carries it. */
 export interface PiProviderProfile {
@@ -51,12 +49,32 @@ export function toPiProviderProfile(provider: ProviderBinding): PiProviderProfil
 }
 
 /**
+ * The token a session's Pi gets on its token pipe: the bound profile's, or
+ * nothing without a profile. Throws for an insecure base URL (checked first:
+ * it decides whether the token may travel on that connection at all; the URL
+ * is not a secret) or a profile with no token.
+ */
+export function piProviderToken(params: Pick<StartSession, 'provider'>): string | undefined {
+  const provider = params.provider ?? undefined;
+  if (!provider) return undefined;
+  if (!isValidProviderBaseUrl(provider.baseUrl)) {
+    throw new Error(
+      `provider profile '${provider.id}' has an insecure base URL (${provider.baseUrl}) — ` +
+        `${PROVIDER_BASE_URL_ERROR}. Its API token would travel in cleartext, so the session is refused.`,
+    );
+  }
+  if (!provider.authToken) throw new Error(`provider profile '${provider.id}' has no stored auth token`);
+  return provider.authToken;
+}
+
+/**
  * The environment for one spawn. Without a provider: everything inherited,
  * with the stored or inherited Pi credentials untouched (Pi's own provider
  * setup in its home applies) and the bridge-level `env` on top (e.g.
  * `GITHUB_TOKEN`, stored wins). With a provider: the profile's own endpoint
- * and token replace any such variable a session might otherwise inherit, so
- * the session cannot quietly reach another account.
+ * replaces any such variable a session might otherwise inherit, so the
+ * session cannot quietly reach another account; its token goes on the pipe
+ * (`piProviderToken`).
  *
  * `PI_CODING_AGENT_DIR` is always this driver's, set last: a session that
  * moved it would lose the conversation it is resuming. Throws for an
@@ -73,21 +91,11 @@ export function buildPiEnv(
     if (value !== undefined) env[key] = value;
   }
   delete env[PI_PROVIDER_ENV];
-  delete env[PI_PROVIDER_TOKEN_ENV];
 
   const provider = params.provider ?? undefined;
   if (provider) {
-    // Checked before the token: this decides whether the token may travel on
-    // this connection at all. The base URL is not a secret.
-    if (!isValidProviderBaseUrl(provider.baseUrl)) {
-      throw new Error(
-        `provider profile '${provider.id}' has an insecure base URL (${provider.baseUrl}) — ` +
-          `${PROVIDER_BASE_URL_ERROR}. Its API token would travel in cleartext, so the session is refused.`,
-      );
-    }
-    if (!provider.authToken) throw new Error(`provider profile '${provider.id}' has no stored auth token`);
+    piProviderToken(params);
     env[PI_PROVIDER_ENV] = JSON.stringify(toPiProviderProfile(provider));
-    env[PI_PROVIDER_TOKEN_ENV] = provider.authToken;
   }
 
   Object.assign(env, params.env ?? {});
