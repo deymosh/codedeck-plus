@@ -15,10 +15,10 @@ an executable).
 
 A session needs a model Pi can reach, any of:
 
-- **An account** connected on the phone (the agent's page → Accounts): an
-  API key for any of Pi's providers, or a sign-in to a subscription where
-  Pi has one (Claude Pro/Max, ChatGPT Plus/Pro, GitHub Copilot, xAI and
-  others). Pi's own code stores it, in its home (below), exactly where its
+- **An account** connected on the phone (the agent's page → AI providers →
+  Connect a provider): an API key for any of Pi's providers, or a sign-in to
+  a subscription where Pi has one (Claude Pro/Max, ChatGPT Plus/Pro through
+  OpenAI Codex, GitHub Copilot, xAI and others). Pi's own code stores it, in its home (below), exactly where its
   `/login` would. The model picker then lists that provider's models.
 - **A provider profile** added on the phone (the agent's page → AI
   providers): any OpenAI-compatible endpoint — a provider's own API or a
@@ -33,7 +33,7 @@ A session needs a model Pi can reach, any of:
   levels and the longest answer. A size the endpoint states wins; a model Pi
   does not know runs at 128k context without reasoning.
 - **The bridge's environment**: the keys Pi reads itself, such as
-  `ANTHROPIC_API_KEY` or `OPENROUTER_API_KEY`. Accounts shows them as the
+  `ANTHROPIC_API_KEY` or `OPENROUTER_API_KEY`. The phone shows them as the
   machine's, which only the machine can change.
 
 ## Accounts
@@ -45,10 +45,20 @@ by Pi only when a session uses it.
 A sign-in gives a page to open on any device. Some providers then show a
 code to enter there and finish on their own; the others send the browser
 back to an address on the bridge's machine, which a phone cannot open: paste
-the address it fails to load, and Pi finishes the sign-in with it. A
-provider whose login asks something more than a key or a sign-in (a
-resource name, a region) is refused with Pi's question — run Pi's own
-`/login` on the machine for it.
+the address it fails to load, and Pi finishes the sign-in with it.
+
+What else a login asks is on the form, in Pi's own words: Cloudflare's
+account and gateway IDs beside the key, how to sign in to Anthropic or
+OpenAI Codex (a page, or a code for another device), a GitHub Enterprise
+domain (blank for github.com). Pi asks these as its login goes, so the
+bridge finds them when the phone lists the providers, by running each
+login with every way off the machine blocked (the network, listening,
+other programs) and its placeholder answers kept in a scratch file deleted
+afterwards. Where a login offers several ways and only one works without
+the machine's own setup (Amazon Bedrock's bearer token, Google Vertex's API
+key, rather than an AWS profile or a credentials file), the phone offers
+that one. A way that needs the machine itself is not offered — run Pi's
+own `/login` there for it.
 
 ## Its own home
 
