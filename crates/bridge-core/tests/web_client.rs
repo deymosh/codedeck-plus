@@ -106,6 +106,9 @@ fn a_command_a_browser_may_not_send_does_nothing() {
         json!({"type":"set-credentials","agent":"alpha","values":{"anthropic_api_key":"sk-ant-x"}}),
         json!({"type":"mcp-action","agent":"alpha","action":"remove","names":["github"]}),
         json!({"type":"terminal-open","openId":"o1","cols":80,"rows":24}),
+        // A file from a URL: the bridge would download whatever a page names.
+        json!({"type":"upload-file","sessionId":"s1","hash":"00","url":"https://blossom.example/00","key":"k","iv":"i",
+               "filename":"a.png","mimeType":"image/png","text":"","sizeBytes":1}),
     ] {
         let Ok(parsed) = serde_json::from_value::<PhoneToBridge>({
             let mut m = msg.clone();
@@ -118,6 +121,21 @@ fn a_command_a_browser_may_not_send_does_nothing() {
         let effects = from_browser(&mut rig, BROWSER, msg.clone());
         assert!(effects.is_empty(), "{msg} did something: {effects:#?}");
     }
+}
+
+#[test]
+fn a_browser_attaches_a_file_in_chunks() {
+    let mut rig = Rig::new();
+    rig.host_up();
+    let session = rig.ready_session("alpha");
+    online(&mut rig, BROWSER);
+    let chunk = json!({"type":"upload-file","sessionId":session,"uploadId":"u1","filename":"notes.md","mimeType":"text/markdown",
+                       "base64Data":"aGk=","text":"read this","chunkIndex":0,"totalChunks":1});
+    let effects = from_browser(&mut rig, BROWSER, chunk);
+    assert!(
+        effects.iter().any(|e| matches!(e, Effect::HandleFileUpload(protocol::commands::UploadFileMsg::Chunk(c)) if c.upload_id == "u1")),
+        "the chunk went to the runtime: {effects:#?}"
+    );
 }
 
 #[test]
