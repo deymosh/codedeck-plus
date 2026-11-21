@@ -270,7 +270,8 @@ With the direct link listening on `wss://`, the same port serves a web page
 for a browser: open `https://<address>:7447/` (the bridge logs it at start,
 `[Web] The bridge's web page: …`). From it a browser drives the bridge's
 sessions as the phone does — the list, a transcript with live text, input,
-permission, question and plan cards, Stop, the mode, a new session — and
+a file attached to a message, permission, question and plan cards, Stop,
+the mode, a new session — and
 sees the bridge, its agents, usage, the signed-in browsers, the paired phones
 and the settings. The browser gets the same self-signed certificate as the
 phone, so it shows a certificate warning: the phone shows the fingerprint to
