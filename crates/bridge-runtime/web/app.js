@@ -349,6 +349,7 @@ function onMessage(msg) {
       render();
       return;
     case "output": {
+      if (expected.size) fileDelivered(msg.sessionId, msg.entries);
       if (!transcripts.has(msg.sessionId)) return;
       const t = transcript(msg.sessionId);
       msg.entries.forEach((entry, i) => t.entries.set(msg.seq + i, entry));
@@ -529,6 +530,11 @@ function render() {
   const watching = tab === "sessions" ? id : null;
   if (watching !== selected) {
     selected = watching;
+    // A file chosen for one session is never sent to the next one opened.
+    if (!sending && attached) {
+      attached = null;
+      drawAttachment();
+    }
     if (link.ready) sendPresence();
     if (selected) {
       transcript(selected);
@@ -627,8 +633,10 @@ $("close-session").addEventListener("click", async () => {
 
 $("composer").addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (sending || !selected) return;
   const text = $("input").value;
-  if (!text.trim() || !selected) return;
+  if (attached) return sendFile(selected, attached, text);
+  if (!text.trim()) return;
   const inputId = crypto.randomUUID();
   $("input").value = "";
   const answer = await link.command({ type: "input", sessionId: selected, text, inputId });
@@ -636,6 +644,181 @@ $("composer").addEventListener("submit", async (event) => {
     $("input").value = text;
     notify(answer.message || "It did not reach the bridge.");
   }
+});
+
+// --- a file for the agent ---------------------------------------------------
+//
+// A file goes up in chunks on the signed stream, each one its own signed
+// command, the next sent only once the bridge took the last — so a large file
+// never queues ahead of the page's other frames for long. The bridge saves it
+// in the workspace and tells the agent where; the words typed with it go along
+// as the message. Its caps are the bridge's: 25 MB, and a partial upload idle
+// for a minute is dropped.
+
+const MAX_FILE_BYTES = 25 * 1024 * 1024;
+// Base64 per chunk: with the command around it and its signature, a frame
+// stays well inside the 256 KiB the stream accepts.
+const FILE_CHUNK_CHARS = 180000;
+let attached = null;
+let sending = false;
+
+function attach(file) {
+  if (!file) return;
+  if (sending) return notify("A file is still being sent.");
+  if (file.size > MAX_FILE_BYTES) return notify(`${file.name} is over the 25 MB a file may be.`);
+  attached = file;
+  drawAttachment();
+}
+
+function drawAttachment(progress) {
+  $("attachment").hidden = !attached;
+  $("attach").disabled = sending;
+  $("send").disabled = sending;
+  $("attachment-remove").hidden = sending;
+  if (!attached) return;
+  $("attachment-name").textContent = attached.name || "file";
+  $("attachment-state").textContent = progress != null ? `sending ${progress}%` : size(attached.size);
+}
+
+function size(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** The file's bytes as base64, without the `data:` prefix. */
+function base64Of(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).replace(/^data:[^,]*,/, ""));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+async function sendFile(sessionId, file, text) {
+  const session = (heartbeat?.sessions || []).find((s) => s.id === sessionId);
+  if (session?.state === "offline") return notify("The session is not running.");
+  sending = true;
+  drawAttachment(0);
+  try {
+    let data;
+    try {
+      data = await base64Of(file);
+    } catch {
+      return notify(`${file.name} could not be read.`);
+    }
+    // The words ride in the first chunk, so it carries that much less of the
+    // file: the frame cap is in bytes, after the body is escaped once more as
+    // a string in the frame.
+    const textBytes = new TextEncoder().encode(JSON.stringify(JSON.stringify(text))).length;
+    if (textBytes > FILE_CHUNK_CHARS / 2) return notify("The message is too long to go with a file; send it on its own.");
+    const ends = [];
+    for (let end = FILE_CHUNK_CHARS - textBytes; ; end += FILE_CHUNK_CHARS) {
+      ends.push(Math.min(end, data.length));
+      if (end >= data.length) break;
+    }
+    const total = ends.length;
+    const uploadId = crypto.randomUUID();
+    for (let i = 0; i < total; i++) {
+      const answer = await link.command({
+        type: "upload-file",
+        sessionId,
+        uploadId,
+        filename: file.name || "file",
+        mimeType: file.type || "application/octet-stream",
+        base64Data: data.slice(i === 0 ? 0 : ends[i - 1], ends[i]),
+        text: i === 0 ? text : "",
+        chunkIndex: i,
+        totalChunks: total,
+      });
+      if (!answer.accepted) return notify(`${file.name} was not sent: ${answer.message || "the bridge did not take it"}.`);
+      drawAttachment(Math.round(((i + 1) / total) * 100));
+    }
+    attached = null;
+    if ($("input").value === text) $("input").value = "";
+    expectDelivery(sessionId, file.name || "file");
+  } finally {
+    sending = false;
+    // A send that failed after another session was opened leaves nothing
+    // attached there: the file was chosen for the session it was sent to.
+    if (attached === file && selected !== sessionId) attached = null;
+    drawAttachment();
+  }
+}
+
+// The bridge answers each chunk once it has it queued, not once the file is
+// saved and handed to the agent, and the wire has no answer for that: a
+// session that stopped meanwhile, or a file the bridge could not write, drops
+// it without a word. The message the agent gets names the file, so the page
+// waits for it to show up in the transcript and says so when it does not.
+const DELIVERY_MS = 60000;
+const expected = new Map();
+
+/** The file's name as the bridge saves it (`uploads.rs`). */
+function savedName(name) {
+  const safe = name.replace(/[^A-Za-z0-9._-]/g, "_");
+  return safe.replace(/^[._]+|[._]+$/g, "") ? safe : "file";
+}
+
+function expectDelivery(sessionId, name) {
+  const key = `${sessionId}\n${savedName(name)}`;
+  clearTimeout(expected.get(key));
+  expected.set(key, setTimeout(() => {
+    expected.delete(key);
+    notify(`No sign that ${name} reached the session. If it does not show up, the session may have stopped: attach it again.`);
+  }, DELIVERY_MS));
+}
+
+function fileDelivered(sessionId, entries) {
+  for (const [key, timer] of expected) {
+    const [session, name] = key.split("\n");
+    if (session !== sessionId) continue;
+    if (entries.some((e) => e.entryType === "text" && e.role === "user" && String(e.text).includes(name))) {
+      clearTimeout(timer);
+      expected.delete(key);
+    }
+  }
+}
+
+$("attach").addEventListener("click", () => $("file").click());
+$("file").addEventListener("change", () => {
+  attach($("file").files[0]);
+  $("file").value = "";
+});
+$("attachment-remove").addEventListener("click", () => {
+  attached = null;
+  drawAttachment();
+});
+$("input").addEventListener("paste", (event) => {
+  const file = [...(event.clipboardData?.files || [])][0];
+  if (!file) return;
+  event.preventDefault();
+  attach(file);
+});
+for (const name of ["dragenter", "dragover"]) {
+  $("session-view").addEventListener(name, (event) => {
+    if (!event.dataTransfer?.types?.includes("Files")) return;
+    event.preventDefault();
+    $("session-view").classList.add("dropping");
+  });
+}
+$("session-view").addEventListener("dragleave", (event) => {
+  if (!$("session-view").contains(event.relatedTarget)) $("session-view").classList.remove("dropping");
+});
+// A file dropped anywhere else would make the browser open it in place of the
+// page.
+for (const name of ["dragover", "drop"]) {
+  document.addEventListener(name, (event) => {
+    if (event.dataTransfer?.types?.includes("Files")) event.preventDefault();
+  });
+}
+$("session-view").addEventListener("drop", (event) => {
+  $("session-view").classList.remove("dropping");
+  const file = [...(event.dataTransfer?.files || [])][0];
+  if (!file) return;
+  event.preventDefault();
+  attach(file);
 });
 $("input").addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
