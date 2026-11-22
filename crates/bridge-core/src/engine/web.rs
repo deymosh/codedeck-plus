@@ -9,21 +9,28 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use protocol::commands::PhoneToBridge;
+use protocol::commands::{PhoneToBridge, UploadFileMsg};
 use protocol::common::TerminalVia;
 use protocol::events::{BridgeToPhone, WebSignInResultMsg};
 
 use super::Engine;
 use crate::io::{Addressee, Effect, WatchState};
 
-/// Whether a browser may send `msg`. A browser drives sessions and reads;
-/// what belongs to an identity (its keys, letting in another browser,
-/// pairing), what moves a secret or a sign-in, the terminal (whose allowlist
-/// names devices, and a browser is none), uploads and the agents'
+/// Whether a browser may send `msg`. A browser drives sessions, reads, and
+/// attaches files; what belongs to an identity (its keys, letting in another
+/// browser, pairing), what moves a secret or a sign-in, the terminal (whose
+/// allowlist names devices, and a browser is none) and the agents'
 /// configuration stay with the phone. Every command is named, so a new one
 /// is decided here rather than let through by default.
+///
+/// A file comes only in chunks, on the signed stream itself. The Blossom
+/// form names a URL for the bridge to download, through the Tor proxy when
+/// one is set; a browser has no Blossom server of its own, and taking one
+/// would let a page make the bridge fetch whatever URL it names.
 pub fn browser_may_send(msg: &PhoneToBridge) -> bool {
     match msg {
+        PhoneToBridge::UploadFile(UploadFileMsg::Chunk(_)) => true,
+        PhoneToBridge::UploadFile(UploadFileMsg::Blossom(_)) => false,
         PhoneToBridge::Input(_)
         | PhoneToBridge::PermissionResponse(_)
         | PhoneToBridge::QuestionResponse(_)
@@ -63,7 +70,6 @@ pub fn browser_may_send(msg: &PhoneToBridge) -> bool {
         | PhoneToBridge::TerminalReplay(_)
         | PhoneToBridge::TerminalTakeover(_)
         | PhoneToBridge::TerminalClose(_)
-        | PhoneToBridge::UploadFile(_)
         | PhoneToBridge::PluginAction(_)
         | PhoneToBridge::McpAction(_)
         | PhoneToBridge::AgentAction(_)

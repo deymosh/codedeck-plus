@@ -280,8 +280,33 @@ async fn a_browser_signed_in_by_the_phone_drives_a_session_over_its_signed_strea
                 }
             }
 
-            // The phone sees the session the browser made: one engine, two clients.
+            // A file attached in two chunks lands in the workspace, and the
+            // agent is told where.
             let session = session.unwrap();
+            for (i, part) in ["bm90ZXMg", "ZnJvbSBhIGJyb3dzZXI="].into_iter().enumerate() {
+                let chunk = json!({"v":12,"type":"upload-file","sessionId":session,"uploadId":"w-up","filename":"notes.md",
+                                   "mimeType":"text/markdown","base64Data":part,"text":"read this","chunkIndex":i,"totalChunks":2});
+                command(&mut ws, chunk).await;
+            }
+            let attached = loop {
+                assert!(tokio::time::Instant::now() < deadline + TIMEOUT, "the file's echo, in time");
+                match next(&mut ws).await {
+                    WebFrame::Ok { accepted, message, .. } => assert!(accepted, "{message}"),
+                    WebFrame::Msg(text) => {
+                        let msg: Value = serde_json::from_str(&text).unwrap();
+                        let text = msg["entries"].as_array().into_iter().flatten().filter_map(|e| e["text"].as_str()).collect::<String>();
+                        if msg["type"] == "output" && text.contains("echo: read this") {
+                            break text;
+                        }
+                    }
+                    other => panic!("unexpected {other:?}"),
+                }
+            };
+            let path = attached.split("[Attached file: ").nth(1).and_then(|rest| rest.split(']').next()).expect("the file's path");
+            assert!(Path::new(path).parent().is_some_and(|dir| dir.ends_with(Path::new(".codedeck").join("uploads"))), "{path}");
+            assert_eq!(std::fs::read_to_string(path).unwrap(), "notes from a browser");
+
+            // The phone sees the session the browser made: one engine, two clients.
             until("the phone to list the browser's session", || async {
                 core.machines_view().await.machines.get(&machine)?.sessions.contains_key(&session).then_some(())
             })

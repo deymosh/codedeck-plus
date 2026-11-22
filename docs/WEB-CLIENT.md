@@ -154,19 +154,42 @@ three card responses, `set-option`, `sync-request`/`sync-ack`,
 `create-session`, `refresh-sessions`, `close-session`, `interrupt`,
 `stop-task`, `create-folder`, `presence`, the read-only requests (usage,
 models, agent style, commands, personas, plugins, MCP, session MCP,
-permission rules, accounts, provider profiles), `web-browsers-request` and
-`web-browser-sign-out`. Refused, with `OK false`:
+permission rules, accounts, provider profiles), `web-browsers-request`,
+`web-browser-sign-out`, and `upload-file` in its chunked form. Refused, with
+`OK false`:
 
 - `session-key`, `pair-request` and `web-sign-in` belong to an identity: a
   browser never lets in another browser.
 - `set-credentials`, `set-provider-profile` and `account-action` move
   secrets and sign-ins.
 - `terminal-*`: the terminal allowlist names devices, and a browser is none.
-- `upload-file`, and the agent-configuration writes: `plugin-action`,
-  `mcp-action`, `agent-action`, `session-mcp-toggle`,
-  `permission-rules-remove`.
+- `upload-file` in its Blossom form: it names a URL for the bridge to
+  download (through the Tor proxy when one is set). A browser has no Blossom
+  server of its own, and taking the form would let a page make the bridge
+  fetch any URL it names.
+- The agent-configuration writes: `plugin-action`, `mcp-action`,
+  `agent-action`, `session-mcp-toggle`, `permission-rules-remove`.
 
 These can be opened one at a time later, each with its own reasoning.
+
+**Files.** A file attached on the page (the composer's Attach, a paste or a
+drop) goes up as the phone's chunked upload does, on the stream itself: each
+chunk is a signed `CMD` of about 180,000 base64 characters, which keeps the
+frame inside the stream's 256 KiB, and the next is sent only once the last
+one's `OK` came back. The bridge's caps apply: 25 MB, and 16 uploads in
+progress at once; a partial upload idle for a minute is dropped when the
+next chunk of any upload arrives. The words typed with it go in the first
+chunk, which carries that much less of the file (so words longer than about
+90 KB go on their own, not with a file), and become the message; the bridge
+saves the file in the workspace's `.codedeck/uploads` and tells the agent
+where. A file chosen for one session is dropped when another is opened, so
+it never reaches the wrong one.
+
+An `OK` says the bridge has the chunk, not that the file reached the agent:
+a session that stopped meanwhile, or a file the bridge could not write,
+drops it with no answer on the wire. The message the agent gets names the
+file, so the page waits a minute for it in the transcript and says so when
+it does not show up.
 
 ## Lifetimes
 

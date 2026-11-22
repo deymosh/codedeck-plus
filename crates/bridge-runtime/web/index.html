@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>CodeDeck+ bridge</title>
+<link rel="icon" href="/favicon.png" type="image/png">
 <link rel="stylesheet" href="/app.css">
 <script src="/app.js" defer></script>
 </head>
@@ -84,8 +85,17 @@
           <div id="live"></div>
         </div>
         <form class="composer" id="composer" autocomplete="off">
-          <textarea id="input" rows="2" placeholder="Message the agent (Enter sends, Shift+Enter for a new line)"></textarea>
-          <button class="primary" type="submit">Send</button>
+          <div class="attachment" id="attachment" hidden>
+            <span class="attachment-name" id="attachment-name"></span>
+            <span class="dim small" id="attachment-state"></span>
+            <button class="quiet" type="button" id="attachment-remove" aria-label="Remove the file">Remove</button>
+          </div>
+          <div class="composer-row">
+            <input type="file" id="file" hidden>
+            <button class="quiet" type="button" id="attach" title="Attach a file (or paste or drop one here)">Attach</button>
+            <textarea id="input" rows="2" placeholder="Message the agent (Enter sends, Shift+Enter for a new line)"></textarea>
+            <button class="primary" type="submit" id="send">Send</button>
+          </div>
         </form>
       </div>
     </section>

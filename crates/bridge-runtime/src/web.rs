@@ -101,6 +101,7 @@ const AGENT_MAX_CHARS: usize = 120;
 const INDEX_HTML: &str = include_str!("../web/index.html");
 const APP_JS: &str = include_str!("../web/app.js");
 const APP_CSS: &str = include_str!("../web/app.css");
+const FAVICON_PNG: &[u8] = include_bytes!("../web/favicon.png");
 
 fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
@@ -1219,6 +1220,7 @@ fn route(request: &Request, peer: IpAddr, web: &Web) -> Response {
         ("GET", "/") => Response::new(200, "text/html; charset=utf-8", INDEX_HTML),
         ("GET", "/app.js") => Response::new(200, "text/javascript; charset=utf-8", APP_JS),
         ("GET", "/app.css") => Response::new(200, "text/css; charset=utf-8", APP_CSS),
+        ("GET", "/favicon.png") => Response::new(200, "image/png", FAVICON_PNG),
         ("GET", "/api/me") => Response::json(200, me_json(browser.as_ref().map(|(_, b)| b), &web.machine_npub, now)),
         ("POST", "/api/sign-in") => {
             let Some(key) = sign_in_key(&request.body) else { return Response::error(400) };
@@ -1250,7 +1252,7 @@ fn route(request: &Request, peer: IpAddr, web: &Web) -> Response {
             response.set_cookie = Some(session_cookie("", 0));
             response
         }
-        (_, "/" | "/app.js" | "/app.css" | "/api/me" | "/api/sign-in" | "/api/sign-in/qr.svg" | "/api/sign-out") => Response::error(405),
+        (_, "/" | "/app.js" | "/app.css" | "/favicon.png" | "/api/me" | "/api/sign-in" | "/api/sign-in/qr.svg" | "/api/sign-out") => Response::error(405),
         _ => Response::error(404),
     }
 }
@@ -1429,6 +1431,19 @@ pub(crate) mod tests {
         assert_eq!(started.status, 200);
         let cookie = started.set_cookie.unwrap();
         assert!(cookie.contains("Secure") && cookie.contains("HttpOnly") && cookie.contains("SameSite=Strict"));
+    }
+
+    #[test]
+    fn every_file_the_page_links_is_served_before_sign_in() {
+        let (web, _, _dir) = web();
+        let linked: Vec<&str> = INDEX_HTML.split(['"', '\'']).filter(|s| s.starts_with('/') && s.contains('.')).collect();
+        assert!(linked.contains(&"/favicon.png"), "{linked:?}");
+        for path in linked {
+            let served = route(&request("GET", path, HOST), PEER, &web);
+            assert_eq!(served.status, 200, "{path}");
+        }
+        let icon = route(&request("GET", "/favicon.png", HOST), PEER, &web);
+        assert_eq!(icon.content_type, "image/png");
     }
 
     #[test]
