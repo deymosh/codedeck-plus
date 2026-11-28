@@ -48,6 +48,12 @@ describe('deepseekTool', () => {
     expect(deepseekTool('subagent_fork', { description: 'find things', prompt: 'look' }).kind).toBe('agent');
   });
 
+  it('names the child a message goes to', () => {
+    // The harness addresses a child by its name, in `agent` (0.2.2-rc.5's
+    // `send_message` schema).
+    expect(deepseekTool('send_message', { agent: 'reviewer', message: 'done?' }).title).toBe('reviewer');
+  });
+
   it('reads the working-directory tool as the cd or pwd it is', () => {
     expect(deepseekTool('working_directory', { cd: 'src' })).toEqual({ kind: 'execute', title: 'cd src' });
     expect(deepseekTool('working_directory', {})).toEqual({ kind: 'execute', title: 'pwd' });
@@ -78,7 +84,7 @@ const MOUNTED = [
   'job_output', 'job_list', 'job_kill',
   'web_search', 'web_fetch',
   'skill', 'todo_write',
-  'list_subagent_models', 'send_message', 'interrupt_agent', 'list_agents',
+  'list_subagent_models', 'send_message', 'wait_agent', 'list_agents',
   'get_goal', 'create_goal', 'update_goal',
   'cordis_inspect_list', 'cordis_inspect_query', 'load_workspace_dependencies',
   'working_directory',
@@ -100,13 +106,17 @@ const CONFIGURED_NAMES = ['subagent', 'subagent_fork', 'workflow'];
  * the phone shows), `ralph` (its row in the bundle is disabled),
  * `apply_patch` (`dsh-base` sets the `tool-fs` row's `applyPatch: false` and
  * the `acp` profile leaves it), the worktree experiment and scheduled-task
- * tools (the `acp` profile inserts neither plugin), and the persistent-terminal and session-search tools (only
+ * tools (the `acp` profile inserts neither plugin), the persistent-terminal and session-search tools (only
  * the opt-in `dsh-experimental-terminal-bundle` and
- * `dsh-experimental-session-search` overlays insert them).
+ * `dsh-experimental-session-search` overlays insert them), `interrupt_agent`
+ * (`dsh-base` configures `tool-subagent-control` with `interrupt: false`),
+ * and the office tools (only the harness's SDK and web app bundles insert
+ * `dsh-tool-office`).
  */
 const NOT_MOUNTED = [
-  'present', 'ralph', 'apply_patch',
-  'spawn_teammate', 'wait_agent', 'team_task_create', 'team_task_get', 'team_task_list', 'team_task_update',
+  'present', 'ralph', 'apply_patch', 'interrupt_agent',
+  'office_render', 'office_convert', 'office_recalculate',
+  'spawn_teammate', 'team_task_create', 'team_task_get', 'team_task_list', 'team_task_update',
   'create_worktree',
   'schedule_create', 'schedule_list', 'schedule_delete', 'schedule_update', 'schedule_view', 'schedule_edit',
   'terminal_open', 'terminal_send', 'terminal_read', 'terminal_signal', 'terminal_close', 'terminal_list',
