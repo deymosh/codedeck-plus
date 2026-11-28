@@ -17,7 +17,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use bridge_core::ports::{Ports, System};
 use bridge_core::{
-    Addressee, Config as EngineConfig, Effect, Engine, Input, NotifyLevel, PairingCloseReason, PairingWindowInfo, TerminalConfig,
+    Addressee, Config as EngineConfig, Effect, Engine, FileOutcome, Input, NotifyLevel, PairingCloseReason, PairingWindowInfo, TerminalConfig,
     TimerId,
 };
 use protocol::commands::UploadFileMsg;
@@ -489,39 +489,32 @@ impl Runtime {
                 // Blossom upload uses.
                 let (inputs, uploads) = (self.inputs.clone(), Arc::clone(&self.uploads));
                 tokio::task::spawn_blocking(move || {
-                    let delivery = uploads.lock().unwrap_or_else(|p| p.into_inner()).chunk(chunk);
-                    if let Some((session_id, text)) = delivery {
-                        let _ = inputs.send(Input::FileReady { session_id, text });
+                    let settled = uploads.lock().unwrap_or_else(|p| p.into_inner()).chunk(chunk);
+                    for s in settled {
+                        let _ = inputs.send(s.into_input());
                     }
                 });
             }
             Effect::HandleFileUpload(UploadFileMsg::Blossom(msg)) => {
                 let (inputs, uploads, http) = (self.inputs.clone(), Arc::clone(&self.uploads), self.nostr_http.clone());
                 tokio::task::spawn_local(async move {
-                    match uploads::fetch_blossom(&http, &msg).await {
+                    let settled = match uploads::fetch_blossom(&http, &msg).await {
+                        // The download and decryption are done; saving the
+                        // file is disk work and goes to the blocking pool
+                        // like a chunked upload's.
                         Ok(data) => {
-                            // The download and decryption are done; saving the
-                            // file is disk work and goes to the blocking pool
-                            // like a chunked upload's.
-                            let delivery = tokio::task::spawn_blocking(move || {
-                                uploads.lock().unwrap_or_else(|p| p.into_inner()).finish(
-                                    &msg.session_id,
-                                    &msg.filename,
-                                    &msg.mime_type,
-                                    &msg.text,
-                                    &data,
-                                    &msg.hash,
-                                )
-                            })
-                            .await
-                            .ok()
-                            .flatten();
-                            if let Some((session_id, text)) = delivery {
-                                let _ = inputs.send(Input::FileReady { session_id, text });
-                            }
+                            let (session_id, input_id) = (msg.session_id.clone(), msg.input_id.clone());
+                            tokio::task::spawn_blocking(move || uploads.lock().unwrap_or_else(|p| p.into_inner()).blossom(&msg, &data))
+                                .await
+                                .unwrap_or_else(|_| uploads::Settled {
+                                    session_id,
+                                    input_id,
+                                    outcome: FileOutcome::Failed("the bridge could not save it".into()),
+                                })
                         }
-                        Err(err) => log::warn!("[Runtime] Image for {} not delivered: {err}", msg.session_id),
-                    }
+                        Err(err) => uploads::Settled { session_id: msg.session_id, input_id: msg.input_id, outcome: FileOutcome::Failed(err) },
+                    };
+                    let _ = inputs.send(settled.into_input());
                 });
             }
             Effect::Stopped => return true,

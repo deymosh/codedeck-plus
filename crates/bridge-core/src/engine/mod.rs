@@ -209,6 +209,9 @@ pub struct Engine {
     /// file, credentials included, and a busy session appends many times a
     /// second. A crash loses at most one heartbeat's worth of that timestamp.
     activity_dirty: bool,
+    /// Files handed to a session, by their sender's id: a resend is
+    /// answered, not delivered again.
+    delivered_files: phone::DeliveredFiles,
 }
 
 impl Engine {
@@ -255,6 +258,7 @@ impl Engine {
             registry_dirty: false,
             interrupted_creates: Vec::new(),
             activity_dirty: false,
+            delivered_files: phone::DeliveredFiles::default(),
         }
     }
 
@@ -275,11 +279,7 @@ impl Engine {
             Input::HostDown { reason } => self.on_host_down(&reason),
             Input::Timer(id) => self.on_timer(id),
             Input::GitHead { session_id, head } => self.on_git_head(&session_id, head),
-            Input::FileReady { session_id, text } => {
-                if !self.send_input(&session_id, text) {
-                    log::warn!("[Engine] Uploaded image for {session_id} could not be delivered: no live session");
-                }
-            }
+            Input::FileSettled { session_id, input_id, outcome } => self.on_file_settled(session_id, input_id, outcome),
             Input::OpenPairing { duration_ms } => self.open_pairing(duration_ms),
             Input::ClosePairing => self.close_pairing(crate::io::PairingCloseReason::Closed, None),
             Input::WorkspaceChanged => self.list_dirty = true,
