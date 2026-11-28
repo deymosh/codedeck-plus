@@ -15,7 +15,7 @@ use protocol::events::{
 
 use super::{ConversationDelete, Engine, HostCall};
 use crate::catalog::{is_effort, is_mode};
-use crate::io::{Addressee, Effect, InboundEvent, Via};
+use crate::io::{Addressee, Effect, FileOutcome, InboundEvent, Via};
 use crate::registry::{project_of, SessionRecord};
 use crate::session::{option_answer, permission_summary, CardKind, Phase, Runner, Session, StartKind};
 /// The wire name of a command, for logs. (Commands can carry secrets, so
@@ -215,20 +215,26 @@ impl Engine {
     }
 
     fn on_input(&mut self, m: InputMsg) {
-        let known = self.sessions.contains_key(&m.session_id);
         if self.send_input(&m.session_id, m.text) {
-            if let Some(input_id) = m.input_id {
-                self.publish_all(BridgeToPhone::InputAck(InputAckMsg { session_id: m.session_id, input_id }));
-            }
+            self.input_delivered(m.session_id, m.input_id);
             return;
         }
         log::info!("[Engine] No live session for input to {}", m.session_id);
-        self.publish_all(BridgeToPhone::InputFailed(InputFailedMsg {
-            session_id: m.session_id,
-            // `no-session`: never heard of it; `error`: known, but not running.
-            reason: if known { InputFailedReason::Error } else { InputFailedReason::NoSession },
-            input_id: m.input_id,
-        }));
+        self.input_not_running(m.session_id, m.input_id);
+    }
+
+    /// `input-ack`, when the sender gave an id to answer.
+    fn input_delivered(&mut self, session_id: String, input_id: Option<String>) {
+        if let Some(input_id) = input_id {
+            self.publish_all(BridgeToPhone::InputAck(InputAckMsg { session_id, input_id }));
+        }
+    }
+
+    /// `input-failed` for a session that cannot take input: `no-session` for
+    /// one never heard of, `error` for one known but not running.
+    fn input_not_running(&mut self, session_id: String, input_id: Option<String>) {
+        let reason = if self.sessions.contains_key(&session_id) { InputFailedReason::Error } else { InputFailedReason::NoSession };
+        self.publish_all(BridgeToPhone::InputFailed(InputFailedMsg { session_id, reason, input_id, detail: None }));
     }
 
     fn on_permission_response(&mut self, m: PermissionResponseMsg) {
@@ -503,15 +509,70 @@ impl Engine {
     }
 
     fn on_upload_file(&mut self, m: UploadFileMsg) {
-        let session_id = match &m {
-            UploadFileMsg::Blossom(b) => &b.session_id,
-            UploadFileMsg::Chunk(c) => &c.session_id,
+        let (session_id, input_id) = match &m {
+            UploadFileMsg::Blossom(b) => (&b.session_id, &b.input_id),
+            UploadFileMsg::Chunk(c) => (&c.session_id, &c.input_id),
         };
+        // A resend of a file already in the session: answered at its first
+        // piece, with nothing downloaded or written again.
+        if let Some(id) = input_id {
+            let now = self.now();
+            if self.delivered_files.contains(session_id, id, now) {
+                self.input_delivered(session_id.clone(), input_id.clone());
+                return;
+            }
+        }
         if self.run_ref(session_id).is_none() {
-            log::info!("[Engine] Image for {session_id}, which is not running — dropped");
+            log::info!("[Engine] A file for {session_id}, which is not running — dropped");
+            // Answered only when the sender can match the answer: without an
+            // id, every refused chunk would be one more failure to show.
+            if input_id.is_some() {
+                self.input_not_running(session_id.clone(), input_id.clone());
+            }
             return;
         }
         self.out.push(Effect::HandleFileUpload(m));
+    }
+
+    /// The runtime is done with a file: it goes to the session (once — a
+    /// resend is only acknowledged), and the sender hears how it ended.
+    /// As with a refused chunk, a failure is answered only to a sender that
+    /// gave an id.
+    pub(super) fn on_file_settled(&mut self, session_id: String, input_id: Option<String>, outcome: FileOutcome) {
+        match outcome {
+            // Two sends of one file that overlapped: the first one in counts.
+            FileOutcome::Ready(_) if input_id.as_deref().is_some_and(|id| self.delivered_files.contains(&session_id, id, self.now())) => {
+                self.input_delivered(session_id, input_id);
+            }
+            FileOutcome::Ready(text) => {
+                if self.send_input(&session_id, text) {
+                    // Only now: a file saved for a session that stopped
+                    // meanwhile was not delivered, and its resend must be.
+                    if let Some(id) = &input_id {
+                        let now = self.now();
+                        self.delivered_files.add(&session_id, id, now);
+                    }
+                    self.input_delivered(session_id, input_id);
+                } else {
+                    log::warn!("[Engine] A file for {session_id} could not be delivered: no live session");
+                    if input_id.is_some() {
+                        self.input_not_running(session_id, input_id);
+                    }
+                }
+            }
+            FileOutcome::AlreadyDelivered => self.input_delivered(session_id, input_id),
+            FileOutcome::Failed(detail) => {
+                log::warn!("[Engine] A file for {session_id} was not received: {detail}");
+                if input_id.is_some() {
+                    self.publish_all(BridgeToPhone::InputFailed(InputFailedMsg {
+                        session_id,
+                        reason: InputFailedReason::File,
+                        input_id,
+                        detail: Some(detail),
+                    }));
+                }
+            }
+        }
     }
 
     fn on_usage_request(&mut self, session_id: &str) {
@@ -696,5 +757,34 @@ impl Engine {
             return Some("The session is not running — its personas are listed once it is.".to_string());
         }
         None
+    }
+}
+
+/// How long, and how many, delivered files the resend guard remembers: a
+/// day covers a file left staged on a phone overnight; the cap bounds the
+/// memory a busy bridge spends on it. Not persisted — after a restart a
+/// resend is delivered again.
+const DELIVERED_FILES_MS: u64 = 24 * 60 * 60 * 1000;
+const DELIVERED_FILES_CAP: usize = 1000;
+
+/// Files handed to a session, by session and sender's id, oldest first.
+#[derive(Default)]
+pub(super) struct DeliveredFiles(std::collections::VecDeque<(String, u64)>);
+
+impl DeliveredFiles {
+    fn key(session_id: &str, input_id: &str) -> String {
+        format!("{session_id}\n{input_id}")
+    }
+
+    fn contains(&self, session_id: &str, input_id: &str, now: u64) -> bool {
+        let key = Self::key(session_id, input_id);
+        self.0.iter().any(|(k, at)| *k == key && now.saturating_sub(*at) < DELIVERED_FILES_MS)
+    }
+
+    fn add(&mut self, session_id: &str, input_id: &str, now: u64) {
+        while self.0.front().is_some_and(|(_, at)| now.saturating_sub(*at) >= DELIVERED_FILES_MS) || self.0.len() >= DELIVERED_FILES_CAP {
+            self.0.pop_front();
+        }
+        self.0.push_back((Self::key(session_id, input_id), now));
     }
 }

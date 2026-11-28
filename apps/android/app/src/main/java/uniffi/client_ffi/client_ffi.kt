@@ -9667,7 +9667,8 @@ sealed class UniffiIntent {
      * the user's Blossom server (when one is set) through the
      * `UniffiHttpFetch` port, else or on failure sends it as relay chunks,
      * then publishes the `upload-file` command — no outbox item, no local echo (the transcript shows it once
-     * the bridge injects it, like any other output).
+     * the bridge injects it, like any other output). The dispatch returns
+     * once the file is sent; whether it arrived is `CoreEvent::FileSettled`.
      */
     data class SendSessionFile(
         val `machine`: kotlin.String, 
@@ -9685,7 +9686,13 @@ sealed class UniffiIntent {
          * IANA media type of `data` (e.g. `"application/pdf"`), forwarded to the
          * bridge verbatim — the attachment command carries it as-is.
          */
-        val `mimeType`: kotlin.String) : UniffiIntent()
+        val `mimeType`: kotlin.String, 
+        /**
+         * The caller's id for this file: `CoreEvent::FileSettled` answers
+         * it. Keep it for a retry of the same file — the bridge then
+         * acknowledges one that did arrive rather than delivering it twice.
+         */
+        val `inputId`: kotlin.String) : UniffiIntent()
         
     {
         
@@ -10650,6 +10657,7 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 FfiConverterByteArray.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
                 )
             3 -> UniffiIntent.Interrupt(
                 FfiConverterString.read(buf),
@@ -10976,6 +10984,7 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 + FfiConverterByteArray.allocationSize(value.`data`)
                 + FfiConverterString.allocationSize(value.`filename`)
                 + FfiConverterString.allocationSize(value.`mimeType`)
+                + FfiConverterString.allocationSize(value.`inputId`)
             )
         }
         is UniffiIntent.Interrupt -> {
@@ -11582,6 +11591,7 @@ public object FfiConverterTypeUniffiIntent : FfiConverterRustBuffer<UniffiIntent
                 FfiConverterByteArray.write(value.`data`, buf)
                 FfiConverterString.write(value.`filename`, buf)
                 FfiConverterString.write(value.`mimeType`, buf)
+                FfiConverterString.write(value.`inputId`, buf)
                 Unit
             }
             is UniffiIntent.Interrupt -> {

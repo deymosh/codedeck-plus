@@ -12,7 +12,7 @@
 //! Bindings (`crates/client-ffi` for Android) wrap the handle; nothing here
 //! knows which host it runs in.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -205,6 +205,13 @@ pub enum CoreEvent {
     /// An outbox item reached a terminal state (`delivered` = bridge ack'd, not
     /// just published).
     OutboxSettled { id: String, delivered: bool },
+    /// A file sent with `Intent::SendSessionFile` under `id` settled: `reason`
+    /// `None` = it is in the session; else why not — the bridge's
+    /// `input-failed` reason (`no-session`, `error`, `file`, with `detail` for
+    /// `file`), or `unsent` when the phone could not send it at all. The
+    /// bridge acknowledges a resend under the same id without delivering it
+    /// again, so a retry keeps the id.
+    FileSettled { id: String, reason: Option<String>, detail: Option<String> },
     /// The pair flow ended: `paired` true on success, false on nack / timeout.
     PairingSettled { paired: bool },
     /// A user-visible action did not land. Semantic — the UI writes the copy.
@@ -523,6 +530,7 @@ impl Core {
             transcript_store: ports.transcript_store,
             notifier: ports.notifier,
             http: ports.http,
+            file_sends: Rc::default(),
         };
         tokio::task::spawn_local(event_loop.run(rx));
         Self { tx }
@@ -1125,6 +1133,9 @@ struct Loop {
     transcript_store: Rc<dyn TranscriptStore>,
     notifier: Rc<dyn Notifier>,
     http: Rc<dyn crate::attachments::HttpFetch>,
+    /// Each file send in progress by its id, flagged once the bridge has
+    /// answered it — a refusal while pieces are still going ends the send.
+    file_sends: Rc<RefCell<HashMap<String, Rc<Cell<bool>>>>>,
 }
 
 impl Loop {

@@ -4,7 +4,7 @@
 mod support;
 
 use agent_protocol::{BridgeMessage, HostMessage, SessionEvent, TurnState};
-use bridge_core::{Effect, Input};
+use bridge_core::{Effect, FileOutcome, Input};
 use protocol::common::{EntryBody, NoticeKind, Role, SessionState};
 use protocol::events::{BridgeToPhone, InputFailedReason};
 use serde_json::json;
@@ -327,6 +327,74 @@ fn input_to_an_unknown_session_is_no_session_and_to_an_ended_one_error() {
     let msgs = rig.messages();
     assert!(msgs.iter().any(|m| matches!(m, BridgeToPhone::InputFailed(f) if f.reason == InputFailedReason::Error)));
     assert_eq!(last_heartbeat(&msgs).sessions.len(), 1, "a clean end keeps the session listed");
+}
+
+/// The sender of a file hears how it ended, by the id it gave, as the
+/// sender of text does.
+#[test]
+fn a_file_is_answered_like_an_input() {
+    let mut rig = Rig::new();
+    rig.host_up();
+    let s = rig.ready_session("alpha");
+    rig.take();
+    let ack = |msgs: &[BridgeToPhone], id: &str| msgs.iter().any(|m| matches!(m, BridgeToPhone::InputAck(a) if a.input_id == id));
+    let settle = |rig: &mut Rig, id: Option<&str>, outcome: FileOutcome| {
+        rig.input(Input::FileSettled { session_id: s.clone(), input_id: id.map(str::to_string), outcome })
+    };
+
+    rig.send(json!({"type":"upload-file","sessionId":s,"uploadId":"u1","filename":"a.pdf","mimeType":"application/pdf",
+                    "base64Data":"aGk=","text":"read this","chunkIndex":0,"totalChunks":1,"inputId":"f1"}));
+    assert!(rig.take().iter().any(|e| matches!(e, Effect::HandleFileUpload(_))), "the runtime gets the file");
+
+    // Saved: the session gets it, then the sender hears so.
+    settle(&mut rig, Some("f1"), FileOutcome::Ready("read this\n\n[Attached file: /w/a.pdf]".into()));
+    assert!(rig.has_host_request(|m| matches!(m, BridgeMessage::Prompt { .. })), "the file reached the agent");
+    assert!(ack(&rig.messages(), "f1"));
+    rig.take();
+
+    // A resend of it: acknowledged at its first piece, nothing fetched or
+    // prompted again…
+    rig.send(json!({"type":"upload-file","sessionId":s,"uploadId":"u9","filename":"a.pdf","mimeType":"application/pdf",
+                    "base64Data":"aGk=","text":"read this again","chunkIndex":0,"totalChunks":3,"inputId":"f1"}));
+    let effects = rig.take();
+    assert!(!effects.iter().any(|e| matches!(e, Effect::HandleFileUpload(_) | Effect::Host(_))), "{effects:#?}");
+    assert!(effects.iter().any(|e| matches!(e, Effect::Publish { message: BridgeToPhone::InputAck(a), .. } if a.input_id == "f1")));
+    // …and two overlapping sends of it count once.
+    settle(&mut rig, Some("f1"), FileOutcome::Ready("read this\n\n[Attached file: /w/a2.pdf]".into()));
+    assert!(!rig.has_host_request(|m| matches!(m, BridgeMessage::Prompt { .. })));
+    assert!(ack(&rig.messages(), "f1"));
+    // A sender without an id resent by the runtime's own guard.
+    settle(&mut rig, None, FileOutcome::AlreadyDelivered);
+    assert!(rig.messages().is_empty());
+
+    // Not received: the reason, for a person.
+    settle(&mut rig, Some("f2"), FileOutcome::Failed("download failed: HTTP 404".into()));
+    let failed: Vec<_> = rig.messages().into_iter().filter_map(|m| match m { BridgeToPhone::InputFailed(f) => Some(f), _ => None }).collect();
+    assert_eq!(failed.len(), 1);
+    assert_eq!((failed[0].reason, failed[0].input_id.as_deref(), failed[0].detail.as_deref()), (InputFailedReason::File, Some("f2"), Some("download failed: HTTP 404")));
+
+    // A sender without an id cannot match an answer, so it gets none.
+    settle(&mut rig, None, FileOutcome::Failed("x".into()));
+    assert!(rig.messages().is_empty());
+
+    // A file for a session that stopped is refused at once.
+    rig.host_event(&s, SessionEvent::Ended { error: None, resume_lost: false });
+    rig.take();
+    rig.send(json!({"type":"upload-file","sessionId":s,"uploadId":"u2","filename":"a.png","mimeType":"image/png",
+                    "base64Data":"aGk=","text":"","chunkIndex":0,"totalChunks":2,"inputId":"f3"}));
+    let effects = rig.take();
+    assert!(!effects.iter().any(|e| matches!(e, Effect::HandleFileUpload(_))));
+    assert!(effects.iter().any(|e| matches!(e, Effect::Publish { message: BridgeToPhone::InputFailed(f), .. }
+        if f.reason == InputFailedReason::Error && f.input_id.as_deref() == Some("f3"))));
+    // …and so is one that was saved meanwhile — which never reached the
+    // session, so its resend is not taken for one that did.
+    settle(&mut rig, Some("f4"), FileOutcome::Ready("x".into()));
+    assert!(rig.messages().iter().any(|m| matches!(m, BridgeToPhone::InputFailed(f) if f.input_id.as_deref() == Some("f4"))));
+    rig.send(json!({"type":"upload-file","sessionId":s,"uploadId":"u4","filename":"a.png","mimeType":"image/png",
+                    "base64Data":"aGk=","text":"","chunkIndex":0,"totalChunks":1,"inputId":"f4"}));
+    let msgs = rig.messages();
+    assert!(!ack(&msgs, "f4"), "{msgs:#?}");
+    assert!(msgs.iter().any(|m| matches!(m, BridgeToPhone::InputFailed(f) if f.input_id.as_deref() == Some("f4"))));
 }
 
 #[test]

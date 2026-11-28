@@ -98,10 +98,14 @@ import java.util.UUID
 import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -113,6 +117,7 @@ import uniffi.client_ffi.UniffiOptionChoice
 import uniffi.client_ffi.UniffiSessionMcp
 import uniffi.client_ffi.UniffiTranscriptDelta
 import uniffi.client_ffi.UniffiUsageData
+import uniffi.client_runtime.CoreEvent
 import androidx.compose.runtime.CompositionLocalProvider
 import com.codedeck.plus.ui.components.AgentLook
 import com.codedeck.plus.ui.components.LocalAgentLook
@@ -176,6 +181,22 @@ private const val MODE_CONFIRM_TIMEOUT_MS = 8_000L
  *  (the file read, the Rust-side upload stages) always get to report their
  *  own, more specific failure first. */
 private const val SESSION_FILE_SEND_BACKSTOP_MS = SESSION_FILE_SEND_BUDGET_MS + 5_000L
+
+/** How long a sent file waits for the machine's answer. Over the bridge's own
+ *  bounds — a minute for a Blossom download or an idle piece, then saving —
+ *  so a slow machine answers before the composer gives up on it. */
+private const val FILE_ANSWER_TIMEOUT_MS = 75_000L
+
+/** What the "Upload failed:" banner says when a sent file did not reach the
+ *  session: `reason` is `CoreEvent.FileSettled`'s, null when no answer came. */
+internal fun fileNotDeliveredCopy(reason: String?, detail: String?): String = when (reason) {
+    null -> "no answer from the machine yet. The file may still arrive; sending it again will not deliver it twice."
+    "unsent" -> "the file could not be sent. Check the connection and try again."
+    "no-session" -> "the machine knows no such session."
+    "error" -> "the session is not running."
+    "file" -> "the machine could not receive it" + (detail?.let { ": $it." } ?: ".")
+    else -> "the machine did not take it ($reason)."
+}
 
 /**
  * The session screen, top to bottom: [SessionTopBar] (back, title,
@@ -263,7 +284,13 @@ fun SessionScreen(
     // can stop.
     val context = LocalContext.current
     var pendingFile by remember(machine, sessionId) { mutableStateOf<PickedFile?>(null) }
+    // The staged file's id, new with every pick and kept across retries: the
+    // machine answers a file by it, and acknowledges a resend of one that did
+    // arrive instead of delivering it twice.
+    var pendingFileId by remember(machine, sessionId) { mutableStateOf("") }
     var uploading by remember(machine, sessionId) { mutableStateOf(false) }
+    // Sent, and waiting on the machine's answer.
+    var delivering by remember(machine, sessionId) { mutableStateOf(false) }
     var uploadError by remember(machine, sessionId) { mutableStateOf<String?>(null) }
     val attachGeneration = remember(machine, sessionId) { AttachGeneration() }
 
@@ -278,6 +305,7 @@ fun SessionScreen(
         // the staging read finishes (which here, unlike the reference's
         // already-local File, can take seconds on a cloud-backed provider).
         uploading = false
+        delivering = false
         uploadError = null
         scope.launch {
             val staged = withTimeoutOrNull(FILE_READ_TIMEOUT_MS) {
@@ -287,6 +315,7 @@ fun SessionScreen(
             }
             if (staged != null) {
                 pendingFile = staged
+                pendingFileId = UUID.randomUUID().toString()
             } else {
                 // A provider that surrenders neither metadata nor decodable
                 // bytes within the budget stages nothing: the current
@@ -313,6 +342,7 @@ fun SessionScreen(
         attachGeneration.bump()
         pendingFile = null
         uploading = false
+        delivering = false
         uploadError = null
     }
 
@@ -355,11 +385,12 @@ fun SessionScreen(
      * server when set, else relay chunks) and publishes the `upload-file`
      * command. A file over the limit is refused here, before any upload. The
      * backstop stops the SPINNER, not the send — the Rust loop keeps going
-     * past it, so the file can still land after the banner shows. A
-     * dispatch that resolves but failed internally (Blossom unreachable AND
-     * the chunk fallback exhausted) reports through the core's ActionFailed
-     * event rather than a thrown error, so resolution clears the composer
-     * exactly as it does in the reference.
+     * past it, so the file can still land after the banner shows. The
+     * dispatch returns once the file is sent; it is gone from the composer
+     * only when the machine's answer (`CoreEvent.FileSettled`, matched by
+     * the staged file's id) says it is in the session. Any other answer, or
+     * none in time, keeps it staged with the reason, and Send retries under
+     * the same id.
      */
     fun sendWithFile(text: String) {
         val staged = pendingFile ?: return
@@ -368,6 +399,7 @@ fun SessionScreen(
         if (uploading) return
         val generation = attachGeneration.current
         val abandoned = { generation != attachGeneration.current }
+        val inputId = pendingFileId
         uploading = true
         uploadError = null
         scope.launch {
@@ -396,6 +428,11 @@ fun SessionScreen(
             }
             if (abandoned()) return@launch
 
+            // Listening before the send: a refusal can come while the file's
+            // pieces are still going, before the dispatch returns.
+            val answer = async(start = CoroutineStart.UNDISPATCHED) {
+                core.events.filterIsInstance<CoreEvent.FileSettled>().first { it.id == inputId }
+            }
             // The reference's catch covers the dispatch too: an FFI-level
             // failure is a banner, never a crash. Timeout keeps its own
             // branch below — it is not an error thrown, it is the backstop.
@@ -409,29 +446,46 @@ fun SessionScreen(
                             `data` = processed.bytes,
                             filename = processed.filename,
                             mimeType = processed.mimeType,
+                            inputId = inputId,
                         ),
                     )
                 }
             } catch (err: CancellationException) {
+                answer.cancel()
                 throw err
             } catch (err: Exception) {
+                answer.cancel()
                 if (!abandoned()) {
                     uploadError = err.message ?: err.javaClass.simpleName
                     uploading = false
                 }
                 return@launch
             }
-            if (abandoned()) return@launch
+            if (abandoned()) {
+                answer.cancel()
+                return@launch
+            }
             if (completed == null) {
+                answer.cancel()
                 // The attachment stays staged: the send may still land, and
                 // retry (or the always-live remove) is one tap either way.
                 uploadError =
                     "TimeoutError: the file send timed out after $SESSION_FILE_SEND_BACKSTOP_MS ms"
-            } else {
-                pendingFile = null
-                draft = ""
+                uploading = false
+                return@launch
             }
+            delivering = true
+            val settled = withTimeoutOrNull(FILE_ANSWER_TIMEOUT_MS) { answer.await() }
+            answer.cancel()
+            if (abandoned()) return@launch
+            delivering = false
             uploading = false
+            if (settled != null && settled.reason == null) {
+                pendingFile = null
+                if (draft == text) draft = ""
+            } else {
+                uploadError = fileNotDeliveredCopy(settled?.reason, settled?.detail)
+            }
         }
     }
 
@@ -680,7 +734,9 @@ fun SessionScreen(
                         modifier = Modifier.weight(1f),
                     )
                     Text(
-                        if (uploading) {
+                        if (delivering) {
+                            "delivering…"
+                        } else if (uploading) {
                             "uploading…"
                         } else {
                             formatSize(staged.sizeBytes)

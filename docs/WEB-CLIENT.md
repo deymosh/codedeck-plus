@@ -185,11 +185,15 @@ saves the file in the workspace's `.codedeck/uploads` and tells the agent
 where. A file chosen for one session is dropped when another is opened, so
 it never reaches the wrong one.
 
-An `OK` says the bridge has the chunk, not that the file reached the agent:
-a session that stopped meanwhile, or a file the bridge could not write,
-drops it with no answer on the wire. The message the agent gets names the
-file, so the page waits a minute for it in the transcript and says so when
-it does not show up.
+An `OK` says the bridge has the chunk, not that the file reached the agent.
+That answer comes once per file, by the id the page gave it when it was
+attached (`inputId`, on every chunk): `input-ack` when the file is in the
+session, `input-failed` with the reason when it is not — the page then stops
+sending pieces, says why and keeps the file attached. Until the answer the
+file shows as delivering; with none in a minute the page says so and keeps
+it attached, and sending it again under the same id is acknowledged rather
+than delivered twice (while the bridge remembers it: a day, not across a
+restart).
 
 ## Lifetimes
 

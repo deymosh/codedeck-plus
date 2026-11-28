@@ -148,7 +148,8 @@ pub enum UniffiIntent {
     /// the user's Blossom server (when one is set) through the
     /// `UniffiHttpFetch` port, else or on failure sends it as relay chunks,
     /// then publishes the `upload-file` command — no outbox item, no local echo (the transcript shows it once
-    /// the bridge injects it, like any other output).
+    /// the bridge injects it, like any other output). The dispatch returns
+    /// once the file is sent; whether it arrived is `CoreEvent::FileSettled`.
     SendSessionFile {
         machine: String,
         session_id: String,
@@ -160,6 +161,10 @@ pub enum UniffiIntent {
         /// IANA media type of `data` (e.g. `"application/pdf"`), forwarded to the
         /// bridge verbatim — the attachment command carries it as-is.
         mime_type: String,
+        /// The caller's id for this file: `CoreEvent::FileSettled` answers
+        /// it. Keep it for a retry of the same file — the bridge then
+        /// acknowledges one that did arrive rather than delivering it twice.
+        input_id: String,
     },
     Interrupt {
         machine: String,
@@ -609,7 +614,7 @@ impl TryFrom<UniffiIntent> for Intent {
             UniffiIntent::SendInput { machine, session_id, text, input_id } => {
                 Intent::SendInput { machine, session_id, text, input_id }
             }
-            UniffiIntent::SendSessionFile { machine, session_id, text, data, filename, mime_type } => {
+            UniffiIntent::SendSessionFile { machine, session_id, text, data, filename, mime_type, input_id } => {
                 Intent::SendSessionFile(SessionFileSend {
                     machine,
                     session_id,
@@ -617,6 +622,7 @@ impl TryFrom<UniffiIntent> for Intent {
                     data,
                     filename,
                     mime_type,
+                    input_id,
                 })
             }
             UniffiIntent::Interrupt { machine, session_id } => Intent::Interrupt { machine, session_id },

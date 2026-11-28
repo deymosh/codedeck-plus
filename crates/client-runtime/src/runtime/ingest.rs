@@ -212,6 +212,12 @@ impl Loop {
         for (id, delivered) in r.outbox_settled {
             self.emit(CoreEvent::OutboxSettled { id, delivered });
         }
+        for answer in r.files_settled {
+            if let Some(answered) = self.file_sends.borrow().get(&answer.id) {
+                answered.set(true);
+            }
+            self.emit(CoreEvent::FileSettled { id: answer.id, reason: answer.reason, detail: answer.detail });
+        }
         if let Some(paired) = r.pairing_settled {
             self.emit(CoreEvent::PairingSettled { paired });
             self.state_changed(SliceId::Pairing);

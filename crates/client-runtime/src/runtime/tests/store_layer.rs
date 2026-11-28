@@ -78,6 +78,7 @@ async fn a_stalled_image_upload_does_not_block_the_loop() {
                         data: b"bytes".to_vec(),
                         filename: "a.jpg".into(),
                         mime_type: "image/jpeg".into(),
+                        input_id: "f1".into(),
                     }))
                     .await;
             });
@@ -409,6 +410,7 @@ async fn sending_a_session_image_uploads_to_blossom_and_publishes_the_command() 
                         data: b"png bytes here".to_vec(),
                         filename: "photo.png".into(),
                         mime_type: "image/png".into(),
+                        input_id: "f2".into(),
                     }))
                     .await;
             });
@@ -429,6 +431,7 @@ async fn sending_a_session_image_uploads_to_blossom_and_publishes_the_command() 
                     assert_eq!(m.filename, "photo.png");
                     assert_eq!(m.size_bytes, b"png bytes here".len() as u64);
                     assert!(!m.hash.is_empty());
+                    assert_eq!(m.input_id.as_deref(), Some("f2"), "the caller's id, for the bridge's answer");
                 }
                 other => panic!("Blossom succeeded — should not chunk: {other:?}"),
             }
@@ -465,6 +468,7 @@ async fn with_no_blossom_server_a_file_goes_through_the_relays() {
                         data: b"%PDF-1.7 bytes".to_vec(),
                         filename: "notes.pdf".into(),
                         mime_type: "application/pdf".into(),
+                        input_id: "f3".into(),
                     }))
                     .await;
             });
@@ -484,9 +488,81 @@ async fn with_no_blossom_server_a_file_goes_through_the_relays() {
                 PhoneToBridge::UploadFile(UploadFileMsg::Chunk(m)) => {
                     assert_eq!((m.filename.as_str(), m.mime_type.as_str()), ("notes.pdf", "application/pdf"));
                     assert_eq!(m.total_chunks, 1);
+                    assert_eq!(m.input_id.as_deref(), Some("f3"));
                 }
                 other => panic!("no Blossom server is set: {other:?}"),
             }
+        })
+        .await;
+}
+
+/// The bridge refusing a file while its pieces are still going ends the
+/// send there, and the caller hears why under its id.
+#[tokio::test]
+async fn a_file_refused_mid_send_stops_and_settles_with_the_reason() {
+    LocalSet::new()
+        .run_until(async {
+            let mut mock = mock_relay().await;
+            let phone = keypair_from_secret_hex(SEC_PHONE).unwrap();
+            let machine = generate_keypair();
+            let spy = Rc::new(Spy::default());
+            let core = core_for(&mock, &phone, Rc::clone(&spy)).await;
+            core.set_machines(vec![machine.pubkey_hex.clone()]);
+            core.start();
+            eose_all(&mut mock).await;
+            wait_connected(&core).await;
+
+            let core2 = core.clone();
+            let machine_pubkey = machine.pubkey_hex.clone();
+            let dispatched = tokio::task::spawn_local(async move {
+                core2
+                    .dispatch(Intent::SendSessionFile(SessionFileSend {
+                        machine: machine_pubkey,
+                        session_id: "s1".into(),
+                        text: String::new(),
+                        // Four pieces through the relays.
+                        data: vec![7u8; 80_000],
+                        filename: "big.bin".into(),
+                        mime_type: "application/octet-stream".into(),
+                        input_id: "f9".into(),
+                    }))
+                    .await;
+            });
+
+            // The first piece, left unconfirmed: the send waits on it.
+            let first = loop {
+                let frame = mock.next_frame().await;
+                let v: Vec<serde_json::Value> = serde_json::from_str(&frame).unwrap();
+                match decode_command_frame(&frame, &phone.pubkey_hex, &machine) {
+                    Some(PhoneToBridge::UploadFile(UploadFileMsg::Chunk(m))) => {
+                        assert_eq!((m.chunk_index, m.total_chunks, m.input_id.as_deref()), (0, 4, Some("f9")));
+                        break v[1]["id"].as_str().unwrap().to_string();
+                    }
+                    _ if v[0] == "EVENT" => mock.push(format!(r#"["OK","{}",true,""]"#, v[1]["id"].as_str().unwrap())),
+                    _ => {}
+                }
+            };
+            let refusal = protocol::codec::decode_bridge_to_phone(
+                r#"{"v":12,"type":"input-failed","sessionId":"s1","reason":"error","inputId":"f9"}"#,
+            )
+            .unwrap();
+            push_bridge_to_phone_event(&mock, &machine, &phone.pubkey_hex, "cd-3", &refusal);
+            let settled = |spy: &Spy| {
+                spy.events.lock().unwrap().iter().filter(|e| matches!(e, CoreEvent::FileSettled { .. })).cloned().collect::<Vec<_>>()
+            };
+            wait_for(|| !settled(&spy).is_empty()).await;
+            mock.push(format!(r#"["OK","{first}",true,""]"#));
+
+            // A second piece would wait on its own OK, which never comes: the
+            // send ending at all is the proof none went.
+            tokio::time::timeout(Duration::from_secs(5), dispatched)
+                .await
+                .expect("the send went on after the refusal")
+                .unwrap();
+            assert_eq!(
+                settled(&spy),
+                vec![CoreEvent::FileSettled { id: "f9".into(), reason: Some("error".into()), detail: None }]
+            );
         })
         .await;
 }
@@ -522,6 +598,7 @@ async fn sending_a_session_image_falls_back_to_chunks_when_blossom_is_unreachabl
                         data: b"small image bytes".to_vec(),
                         filename: "photo.jpg".into(),
                         mime_type: "image/jpeg".into(),
+                        input_id: "f4".into(),
                     }))
                     .await;
             });

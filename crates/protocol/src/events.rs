@@ -175,6 +175,9 @@ pub enum InputFailedReason {
     NoSession,
     /// The session exists but is not running.
     Error,
+    /// An `upload-file` the bridge could not receive: the download, the
+    /// file's bytes or saving it failed (`detail` says which).
+    File,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -184,6 +187,10 @@ pub struct InputFailedMsg {
     pub reason: InputFailedReason,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_id: Option<String>,
+    /// For a person to read, with `file`: what went wrong. Never a secret
+    /// (no key, no file content).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]

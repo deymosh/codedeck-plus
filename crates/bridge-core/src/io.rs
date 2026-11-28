@@ -222,6 +222,19 @@ pub enum NotifyLevel {
     Warn,
 }
 
+/// How an uploaded file ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileOutcome {
+    /// On disk: this text (the user's words plus its path) is the session's
+    /// next input.
+    Ready(String),
+    /// A resend of a file already handed to the session: nothing to do but
+    /// say it arrived.
+    AlreadyDelivered,
+    /// Not received; for a person to read (never a key or file content).
+    Failed(String),
+}
+
 #[derive(Debug)]
 pub enum Input {
     /// Always the first input: load persisted state, arm the periodic
@@ -239,9 +252,9 @@ pub enum Input {
     Timer(TimerId),
     /// Answer to [`Effect::ReadGitHead`]; `None` when `cwd` is not a repo.
     GitHead { session_id: String, head: Option<String> },
-    /// An [`Effect::HandleFileUpload`] finished: the image is on disk and
-    /// `text` (the user's words plus its path) is the session's next input.
-    FileReady { session_id: String, text: String },
+    /// An [`Effect::HandleFileUpload`] settled — once per file, not per
+    /// chunk; `input_id` is the sender's, to answer it by.
+    FileSettled { session_id: String, input_id: Option<String>, outcome: FileOutcome },
     /// Open a pairing window (replacing an open one).
     OpenPairing { duration_ms: Option<u64> },
     ClosePairing,
@@ -315,7 +328,7 @@ pub enum Effect {
     /// Read `git rev-parse HEAD` in `cwd`; answer with [`Input::GitHead`].
     ReadGitHead { session_id: String, cwd: String },
     /// Fetch / reassemble an uploaded image into the workspace; answer with
-    /// [`Input::FileReady`] once it is on disk.
+    /// [`Input::FileSettled`] once it is on disk or has failed.
     HandleFileUpload(UploadFileMsg),
     /// Start a shell for `term` in `cwd`, at `cols`×`rows`; answer with
     /// [`Input::TerminalSpawned`] once it runs, or
