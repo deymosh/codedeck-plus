@@ -103,6 +103,5 @@ export function buildPiEnv(
   // to whatever the bridge or the operator's environment says.
   env[PI_AGENT_DIR_ENV] = home;
   env.PI_SKIP_VERSION_CHECK = '1';
-  env.PI_TELEMETRY = '0';
   return env;
 }
