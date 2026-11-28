@@ -349,7 +349,6 @@ function onMessage(msg) {
       render();
       return;
     case "output": {
-      if (expected.size) fileDelivered(msg.sessionId, msg.entries);
       if (!transcripts.has(msg.sessionId)) return;
       const t = transcript(msg.sessionId);
       msg.entries.forEach((entry, i) => t.entries.set(msg.seq + i, entry));
@@ -404,7 +403,11 @@ function onMessage(msg) {
         renderNewSession();
       }
       return;
+    case "input-ack":
+      fileAnswered(msg.inputId, null);
+      return;
     case "input-failed":
+      if (fileAnswered(msg.inputId, msg)) return;
       notify(msg.reason === "no-session" ? "The bridge knows no such session." : "The session is not running.");
       return;
     case "option-confirmed": {
@@ -654,22 +657,34 @@ $("composer").addEventListener("submit", async (event) => {
 // in the workspace and tells the agent where; the words typed with it go along
 // as the message. Its caps are the bridge's: 25 MB, and a partial upload idle
 // for a minute is dropped.
+//
+// The file carries an id of its own, chosen when it is attached, and the
+// bridge answers it once the file is in the session (`input-ack`) or could
+// not be (`input-failed`). Until then it stays attached: sent again, under
+// the same id, a file that did arrive is only acknowledged again.
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 // Base64 per chunk: with the command around it and its signature, a frame
 // stays well inside the 256 KiB the stream accepts.
 const FILE_CHUNK_CHARS = 180000;
+// The bridge's own waits are shorter: a minute for a piece, then saving.
+const ANSWER_MS = 60000;
 let attached = null;
+let attachedId = null;
 let sending = false;
+/** inputId → resolve(null on arrival, the `input-failed` otherwise). */
+const fileAnswers = new Map();
 
 function attach(file) {
   if (!file) return;
   if (sending) return notify("A file is still being sent.");
   if (file.size > MAX_FILE_BYTES) return notify(`${file.name} is over the 25 MB a file may be.`);
   attached = file;
+  attachedId = crypto.randomUUID();
   drawAttachment();
 }
 
+/** `progress`: a percentage while the pieces go up, "answer" once they are all sent. */
 function drawAttachment(progress) {
   $("attachment").hidden = !attached;
   $("attach").disabled = sending;
@@ -677,7 +692,26 @@ function drawAttachment(progress) {
   $("attachment-remove").hidden = sending;
   if (!attached) return;
   $("attachment-name").textContent = attached.name || "file";
-  $("attachment-state").textContent = progress != null ? `sending ${progress}%` : size(attached.size);
+  $("attachment-state").textContent =
+    progress === "answer" ? "delivering…" : progress != null ? `sending ${progress}%` : size(attached.size);
+}
+
+/** Ids of files this page sent: a piece already on its way when the file
+ *  settled is answered too, and that answer is not news. */
+const sentFiles = new Set();
+
+/** Hand the bridge's answer to the file waiting on it; false when it is not a file's. */
+function fileAnswered(inputId, failure) {
+  if (!inputId || !sentFiles.has(inputId)) return false;
+  const resolve = fileAnswers.get(inputId);
+  fileAnswers.delete(inputId);
+  if (resolve) resolve(failure);
+  return true;
+}
+
+function whyNot(failure) {
+  if (failure.reason === "file") return failure.detail || "the bridge could not receive it";
+  return failure.reason === "no-session" ? "the bridge knows no such session" : "the session is not running";
 }
 
 function size(bytes) {
@@ -720,64 +754,53 @@ async function sendFile(sessionId, file, text) {
     }
     const total = ends.length;
     const uploadId = crypto.randomUUID();
-    for (let i = 0; i < total; i++) {
-      const answer = await link.command({
-        type: "upload-file",
-        sessionId,
-        uploadId,
-        filename: file.name || "file",
-        mimeType: file.type || "application/octet-stream",
-        base64Data: data.slice(i === 0 ? 0 : ends[i - 1], ends[i]),
-        text: i === 0 ? text : "",
-        chunkIndex: i,
-        totalChunks: total,
-      });
-      if (!answer.accepted) return notify(`${file.name} was not sent: ${answer.message || "the bridge did not take it"}.`);
-      drawAttachment(Math.round(((i + 1) / total) * 100));
+    const inputId = attachedId;
+    sentFiles.add(inputId);
+    // Armed before the first piece: a session that stopped answers that one.
+    let settled = false;
+    let failure = null;
+    const answered = new Promise((resolve) => fileAnswers.set(inputId, resolve)).then((f) => {
+      settled = true;
+      failure = f;
+    });
+    try {
+      for (let i = 0; i < total && !settled; i++) {
+        const answer = await link.command({
+          type: "upload-file",
+          sessionId,
+          uploadId,
+          filename: file.name || "file",
+          mimeType: file.type || "application/octet-stream",
+          base64Data: data.slice(i === 0 ? 0 : ends[i - 1], ends[i]),
+          text: i === 0 ? text : "",
+          chunkIndex: i,
+          totalChunks: total,
+          inputId,
+        });
+        if (!answer.accepted) return notify(`${file.name} was not sent: ${answer.message || "the bridge did not take it"}.`);
+        drawAttachment(Math.round(((i + 1) / total) * 100));
+      }
+      if (!settled) {
+        drawAttachment("answer");
+        let timer;
+        await Promise.race([answered, new Promise((resolve) => (timer = setTimeout(resolve, ANSWER_MS)))]);
+        clearTimeout(timer);
+      }
+    } finally {
+      fileAnswers.delete(inputId);
     }
-    attached = null;
+    if (!settled) {
+      return notify(`No answer about ${file.name} yet. It may still arrive; sending it again will not deliver it twice.`);
+    }
+    if (failure) return notify(`${file.name} did not reach the session: ${whyNot(failure)}.`);
+    if (attached === file) attached = null;
     if ($("input").value === text) $("input").value = "";
-    expectDelivery(sessionId, file.name || "file");
   } finally {
     sending = false;
     // A send that failed after another session was opened leaves nothing
     // attached there: the file was chosen for the session it was sent to.
     if (attached === file && selected !== sessionId) attached = null;
     drawAttachment();
-  }
-}
-
-// The bridge answers each chunk once it has it queued, not once the file is
-// saved and handed to the agent, and the wire has no answer for that: a
-// session that stopped meanwhile, or a file the bridge could not write, drops
-// it without a word. The message the agent gets names the file, so the page
-// waits for it to show up in the transcript and says so when it does not.
-const DELIVERY_MS = 60000;
-const expected = new Map();
-
-/** The file's name as the bridge saves it (`uploads.rs`). */
-function savedName(name) {
-  const safe = name.replace(/[^A-Za-z0-9._-]/g, "_");
-  return safe.replace(/^[._]+|[._]+$/g, "") ? safe : "file";
-}
-
-function expectDelivery(sessionId, name) {
-  const key = `${sessionId}\n${savedName(name)}`;
-  clearTimeout(expected.get(key));
-  expected.set(key, setTimeout(() => {
-    expected.delete(key);
-    notify(`No sign that ${name} reached the session. If it does not show up, the session may have stopped: attach it again.`);
-  }, DELIVERY_MS));
-}
-
-function fileDelivered(sessionId, entries) {
-  for (const [key, timer] of expected) {
-    const [session, name] = key.split("\n");
-    if (session !== sessionId) continue;
-    if (entries.some((e) => e.entryType === "text" && e.role === "user" && String(e.text).includes(name))) {
-      clearTimeout(timer);
-      expected.delete(key);
-    }
   }
 }
 

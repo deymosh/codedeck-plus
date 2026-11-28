@@ -280,26 +280,33 @@ async fn a_browser_signed_in_by_the_phone_drives_a_session_over_its_signed_strea
                 }
             }
 
-            // A file attached in two chunks lands in the workspace, and the
-            // agent is told where.
+            // A file attached in two chunks lands in the workspace, the
+            // agent is told where, and the browser hears it arrived.
             let session = session.unwrap();
             for (i, part) in ["bm90ZXMg", "ZnJvbSBhIGJyb3dzZXI="].into_iter().enumerate() {
                 let chunk = json!({"v":12,"type":"upload-file","sessionId":session,"uploadId":"w-up","filename":"notes.md",
-                                   "mimeType":"text/markdown","base64Data":part,"text":"read this","chunkIndex":i,"totalChunks":2});
+                                   "mimeType":"text/markdown","base64Data":part,"text":"read this","chunkIndex":i,"totalChunks":2,
+                                   "inputId":"w-file"});
                 command(&mut ws, chunk).await;
             }
+            let (mut attached, mut acked) = (None, false);
             let attached = loop {
-                assert!(tokio::time::Instant::now() < deadline + TIMEOUT, "the file's echo, in time");
+                assert!(tokio::time::Instant::now() < deadline + TIMEOUT, "the file's echo and its ack, in time");
                 match next(&mut ws).await {
                     WebFrame::Ok { accepted, message, .. } => assert!(accepted, "{message}"),
                     WebFrame::Msg(text) => {
                         let msg: Value = serde_json::from_str(&text).unwrap();
                         let text = msg["entries"].as_array().into_iter().flatten().filter_map(|e| e["text"].as_str()).collect::<String>();
+                        assert_ne!(msg["type"], "input-failed", "{msg}");
+                        acked |= msg["type"] == "input-ack" && msg["inputId"] == "w-file";
                         if msg["type"] == "output" && text.contains("echo: read this") {
-                            break text;
+                            attached = Some(text);
                         }
                     }
                     other => panic!("unexpected {other:?}"),
+                }
+                if let (Some(text), true) = (&attached, acked) {
+                    break text.clone();
                 }
             };
             let path = attached.split("[Attached file: ").nth(1).and_then(|rest| rest.split(']').next()).expect("the file's path");
