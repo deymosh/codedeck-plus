@@ -27,8 +27,8 @@ importers:
         version: 4.6.7
     devDependencies:
       '@agentclientprotocol/sdk':
-        specifier: ^2.5.0
-        version: 2.5.0(zod@4.6.7)
+        specifier: ^2.12.0
+        version: 2.12.0(zod@4.6.7)
       '@deepseek-ai/dsh':
         specifier: 0.2.2-rc.5
         version: 0.2.2-rc.5(5ff9f29e92827ea9e807ff7bdd67660e)
@@ -88,8 +88,8 @@ packages:
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
 
-  '@agentclientprotocol/sdk@2.5.0':
-    resolution: {integrity: sha512-MFlXeIuwN6nZSK45SAsSnVjbLgQ2r4fnthoF1lQoGJP3PdaPRpOZeCF2Dds8S4cN8yZP5QbxB1bkJccGskmcYw==}
+  '@agentclientprotocol/sdk@2.12.0':
+    resolution: {integrity: sha512-nSkamfY4Lw9/AVBU5G5V9p82ScXhANDMBybQwcPH/9+euUtZm04/VFUMaLj4gLFEXxQEy+QP1VQiKgSRbYVIPg==}
     peerDependencies:
       '@modelcontextprotocol/server': ^2.4.0
       zod: ^3.25.76 || ^4.0.0
@@ -5882,7 +5882,7 @@ snapshots:
     dependencies:
       zod: 4.6.7
 
-  '@agentclientprotocol/sdk@2.5.0(zod@4.6.7)':
+  '@agentclientprotocol/sdk@2.12.0(zod@4.6.7)':
     dependencies:
       zod: 4.6.7
 
