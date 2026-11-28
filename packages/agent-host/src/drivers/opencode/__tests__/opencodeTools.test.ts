@@ -59,9 +59,9 @@ describe('opencodeTool', () => {
 
 /**
  * The tools a session can call by name, recorded from the sources of the
- * version the lockfile pins (2.2.7), with the arguments each one requires:
+ * version the lockfile pins (2.4.2), with the arguments each one requires:
  * `export const name` and `export const Input` in
- * `packages/core/src/tool/plugin/*.ts` at tag v2.2.7, plus the `execute`
+ * `packages/core/src/tool/plugin/*.ts` at tag v2.4.2, plus the `execute`
  * tool out of `packages/codemode`.
  *
  * Every tool there is `codemode: false`, which is what puts it on the
@@ -89,9 +89,10 @@ const PUBLISHED: Record<string, readonly string[]> = {
   question: ['questions'],
   // Only while the config sets `experimental.todo`.
   todowrite: ['todos'],
-  // Only while the catalog holds an image model. (The artifact_* and
-  // schedule_* tools of the same version are Code Mode only.)
-  experimental_image_generate: ['prompt'],
+  // Code Mode only in this version: `generate_image` (2.2.7's
+  // `experimental_image_generate`, then a call of its own),
+  // `generate_video`, the artifact, automation, machine, session and MCP
+  // resource tools, and `cd`.
 };
 
 /** The call a tool must at least be able to carry. The rest of its arguments

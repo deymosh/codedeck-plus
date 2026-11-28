@@ -8,10 +8,18 @@
  * were diffed and found unchanged — except that `integration.list` now
  * leaves out integrations a config policy denies, which no probe here sets —
  * and a fake-model session (a turn, a tool call, its permission, a question)
- * ran. What the probes established, and this fake therefore states:
+ * ran. For 2.4.2 (2026-11-28) the startup lists below were probed again and
+ * a fake-model session ran (the same, plus a sub-agent, which since 2.3.0
+ * always returns at once and runs on in the background); nothing else here
+ * was re-checked. What the probes established, and this fake therefore
+ * states:
  *
  *  - `provider.list` lists only the providers the server can use, and an
- *    empty list for the first moments after it starts (registration); the
+ *    empty list for the first moments after it starts (registration). Since
+ *    2.4.0 (probed on 2.4.2, 2026-11-28) the server loads its plugins in the
+ *    background after that: for a few hundred ms more `plugin.list` is empty
+ *    and the lists hold the built-in catalog's providers (`opencode`) but
+ *    not the config's; both fill in together, in the same 10 ms poll. The
  *    `integration.list` ids are every provider it knows (about 235) and
  *    `provider.get` describes one that `provider.list` leaves out.
  *  - `config.get` is an array of documents: one `{type:'document', info}`
@@ -132,6 +140,11 @@ export interface FakeServerOptions {
   config?: { providers?: Record<string, FakeProviderConfig> };
   /** `provider.list` answers empty for this many calls first. */
   providerRegistration?: number;
+  /** The server is still loading its plugins for this many `provider.list`
+   *  and `plugin.list` calls after registration: `plugin.list` answers
+   *  empty, and the config's providers are missing from `provider.list`
+   *  and `model.list`. */
+  pluginLoading?: number;
   /** Integrations that are no model provider (web search, for one). */
   integrations?: string[];
   /** Providers whose `provider.get` fails, as a request can. */
@@ -380,6 +393,12 @@ export function fakeOpenCode(options: FakeServerOptions = {}): FakeOpenCodeServe
 
   let providerListCalls = 0;
   const registration = options.providerRegistration ?? 0;
+  let loadingAsks = 0;
+  const loading = options.pluginLoading ?? 0;
+  /** Count one ask towards the plugins having loaded; true while they have not. */
+  const stillLoading = (): boolean => loadingAsks++ < loading;
+  const configProviders = new Set(Object.keys(options.config?.providers ?? {}));
+  const loaded = (providerID: string): boolean => loadingAsks >= loading || !configProviders.has(providerID);
 
   const client = {
     server: {
@@ -401,7 +420,7 @@ export function fakeOpenCode(options: FakeServerOptions = {}): FakeOpenCodeServe
       }),
     },
     plugin: {
-      list: vi.fn(async () => ({ ...at, data: plugins })),
+      list: vi.fn(async () => ({ ...at, data: stillLoading() ? [] : plugins })),
       check: vi.fn(async ({ target }: { target?: string }) => {
         if (!target || !plugins.some((p) => p.source.type === 'package' && p.source.target === target)) {
           throw Object.assign(new Error(`Plugin package is not in the current server inventory: ${target ?? ''}`), { name: 'InvalidRequestError' });
@@ -509,7 +528,8 @@ export function fakeOpenCode(options: FakeServerOptions = {}): FakeOpenCodeServe
     provider: {
       list: vi.fn(async () => {
         if (providerListCalls++ < registration) return { ...at, data: [] };
-        return { ...at, data: [...providers.values()].filter((provider) => usable.has(provider.id)) };
+        stillLoading();
+        return { ...at, data: [...providers.values()].filter((provider) => usable.has(provider.id) && loaded(provider.id)) };
       }),
       get: vi.fn(async ({ providerID }: { providerID: string }) => {
         if (options.providerGetFails?.has(providerID)) throw new Error(`fetch failed for ${providerID}`);
@@ -521,7 +541,7 @@ export function fakeOpenCode(options: FakeServerOptions = {}): FakeOpenCodeServe
       }),
     },
     model: {
-      list: vi.fn(async () => ({ ...at, data: [...models.values()].filter((model) => usable.has(model.providerID)) })),
+      list: vi.fn(async () => ({ ...at, data: [...models.values()].filter((model) => usable.has(model.providerID) && loaded(model.providerID)) })),
       default: vi.fn(async () => ({ ...at, data: null })),
     },
     integration: {
