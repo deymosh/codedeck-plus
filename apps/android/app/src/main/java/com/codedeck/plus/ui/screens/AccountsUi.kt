@@ -20,7 +20,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.sp
 import com.codedeck.plus.ui.components.ErrorNote
 import com.codedeck.plus.ui.components.Field
@@ -244,7 +243,7 @@ internal fun AccountConnectPage(
                             { key = it },
                             label = "API key",
                             mono = true,
-                            visualTransformation = PasswordVisualTransformation(),
+                            secret = true,
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                         )
                     }

@@ -405,6 +405,9 @@ private fun ImportCard(
     }
 }
 
+// The masked value-based field Compose 1.13 deprecates, kept until the forms
+// move to the state-based fields together (see `Field` in Kit.kt).
+@Suppress("DEPRECATION")
 @Composable
 private fun KeyField(text: String, onTextChange: (String) -> Unit, modifier: Modifier) {
     OutlinedTextField(

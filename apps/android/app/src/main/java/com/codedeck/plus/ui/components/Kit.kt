@@ -51,6 +51,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -537,7 +538,12 @@ fun QuietButton(text: String, onClick: () -> Unit, danger: Boolean = false, enab
     }
 }
 
-/** The text field every form uses. */
+/** The text field every form uses; a `secret` one shows its text masked. */
+// Compose 1.13 deprecates masking a value-based field (VisualTransformation)
+// in favour of the state-based fields (TextFieldState, OutlinedSecureTextField).
+// Moving every form onto those changes how typing and masking behave, so it
+// is a change of its own, checked on a device; until then the mask is kept.
+@Suppress("DEPRECATION")
 @Composable
 fun Field(
     value: String,
@@ -549,7 +555,7 @@ fun Field(
     isError: Boolean = false,
     singleLine: Boolean = true,
     mono: Boolean = false,
-    visualTransformation: VisualTransformation = VisualTransformation.None,
+    secret: Boolean = false,
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
 ) {
     OutlinedTextField(
@@ -560,7 +566,7 @@ fun Field(
         supportingText = supporting?.let { { Text(it) } },
         isError = isError,
         singleLine = singleLine,
-        visualTransformation = visualTransformation,
+        visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
         keyboardOptions = keyboardOptions,
         textStyle = androidx.compose.ui.text.TextStyle(
             color = Tokens.Text,

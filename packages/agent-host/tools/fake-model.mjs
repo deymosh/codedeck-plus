@@ -33,7 +33,8 @@
  *                    the content is a line break — for what an agent does
  *                    after a file change (Pi's diff card, its diagnostics)
  *   /task [brief]    start a sub-agent with the agent's own sub-agent tool
- *                    (the CodeDeck Pi extension's `task`); the brief is the
+ *                    (the CodeDeck Pi extension's `task`, OpenCode's
+ *                    `subagent`); the brief is the
  *                    sub-agent's prompt, so `/task /tool` makes the
  *                    sub-agent run the shell scenario against this server
  *   /error           answer with a 400 API error, so the failure path is
@@ -260,8 +261,8 @@ const QUESTION_TOOLS = ['AskUserQuestion', 'ask_user_question', 'question', 'ask
 /** Names that propose a plan for approval (`exit_plan` is the CodeDeck Pi
  *  extension's, which takes `{plan}` too). */
 const PLAN_TOOLS = ['ExitPlanMode', 'exit_plan_mode', 'exit_plan'];
-/** Names that start a sub-agent. */
-const TASK_TOOLS = ['task'];
+/** Names that start a sub-agent. Both take `{description, prompt, agent}`. */
+const TASK_TOOLS = ['task', 'subagent'];
 /** Names that write a whole file. The arguments are Pi's (`{path,
  *  content}`), the only writer this scenario was run against; another
  *  agent's tool of the same name may want others and refuse the call. */

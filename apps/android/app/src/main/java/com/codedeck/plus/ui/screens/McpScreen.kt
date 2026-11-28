@@ -19,7 +19,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.codedeck.plus.core.CoreHost
@@ -281,7 +280,7 @@ private fun AddServer(
                             label = "Bearer token",
                             supporting = "Sent as the Authorization header. Leave empty if the server needs none.",
                             mono = true,
-                            visualTransformation = PasswordVisualTransformation(),
+                            secret = true,
                         )
                     }
                 }
@@ -354,7 +353,7 @@ private fun SecretPairs(title: String, keyHint: String, pairs: MutableList<Secre
             pairs.forEachIndexed { i, p ->
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
                     Field(p.key, { p.key = it }, Modifier.weight(1f), placeholder = keyHint, mono = true)
-                    Field(p.value, { p.value = it }, Modifier.weight(1.3f), placeholder = "value", mono = true, visualTransformation = PasswordVisualTransformation())
+                    Field(p.value, { p.value = it }, Modifier.weight(1.3f), placeholder = "value", mono = true, secret = true)
                     QuietButton("Remove", onClick = { pairs.removeAt(i) })
                 }
             }

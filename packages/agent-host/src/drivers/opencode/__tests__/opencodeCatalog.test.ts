@@ -113,11 +113,12 @@ describe('an OpenCode driver reading its 2.x server', () => {
   /** A server that registers its providers after `quietPolls` asks, lists
    *  the ones it can use and those its config adds, and describes the rest
    *  only when asked for one. */
-  function serverFor(config: { providers?: Record<string, { name?: string; settings?: { baseURL?: string } }> }, quietPolls = 0) {
+  function serverFor(config: { providers?: Record<string, { name?: string; settings?: { baseURL?: string } }> }, quietPolls = 0, pluginLoading = 0) {
     return fakeOpenCode({
       providers: KNOWN.map((info) => ({ info, usable: info.activation === 'enabled', ...(info.id === 'opencode' ? { models: [zenFree] } : {}) })),
       config: config as { providers?: Record<string, FakeProviderConfig> },
       providerRegistration: quietPolls,
+      pluginLoading,
       providerGetFails: failing,
       providerGetDelayMs: { 'opencode-go': 5 },
       // What the test's server knows: the catalog providers and the web
@@ -126,7 +127,7 @@ describe('an OpenCode driver reading its 2.x server', () => {
     }).client;
   }
 
-  function managed(options: { catalogCache?: string; quietPolls?: number; get?: ReturnType<typeof vi.fn> } = {}) {
+  function managed(options: { catalogCache?: string; quietPolls?: number; pluginLoading?: number; get?: ReturnType<typeof vi.fn> } = {}) {
     const starts: StartOpenCodeServerOptions[] = [];
     const get = options.get ?? vi.fn(async () => ({ status: 200, text: JSON.stringify(MODELS_DEV) }));
     const driver = OpenCodeDriver.create({
@@ -140,7 +141,7 @@ describe('an OpenCode driver reading its 2.x server', () => {
         starts.push(o);
         return { url: `http://127.0.0.1:${4100 + starts.length}`, pid: starts.length, exited: new Promise(() => {}), close: async () => {} };
       },
-      connect: () => serverFor(JSON.parse(starts[starts.length - 1]!.env!.OPENCODE_CONFIG_CONTENT!), options.quietPolls),
+      connect: () => serverFor(JSON.parse(starts[starts.length - 1]!.env!.OPENCODE_CONFIG_CONTENT!), options.quietPolls, options.pluginLoading),
     });
     return { driver, starts, get };
   }
@@ -163,6 +164,18 @@ describe('an OpenCode driver reading its 2.x server', () => {
     const openrouter: ProviderBinding = { id: 'or', label: 'My OR', baseUrl: 'https://openrouter.ai/api', authToken: 'tok', models: [{ id: 'plain/chat' }] };
     await driver.setProviders([openrouter]);
     expect(Object.keys(configOf(starts[1]!).providers)).toEqual(['openrouter']);
+    await driver.shutdown();
+  });
+
+  it("waits for the server's plugins before reading its models, so a profile's model is offered", async () => {
+    // Since 2.4.0 a server lists its built-in providers before it has loaded
+    // its plugins, and the config's providers (every profile) only after.
+    const { driver: created } = managed({ pluginLoading: 3 });
+    const driver = await created;
+    const openrouter: ProviderBinding = { id: 'or', label: 'My OR', baseUrl: 'https://openrouter.ai/api', authToken: 'tok', models: [{ id: 'plain/chat' }] };
+    await driver.setProviders([openrouter]);
+    const catalog = await driver.listModels();
+    expect(catalog.models.map((m) => m.id)).toContain('openrouter/plain/chat');
     await driver.shutdown();
   });
 

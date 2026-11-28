@@ -126,7 +126,6 @@ describe('PiSession startup', () => {
     expect(spawn.args[spawn.args.indexOf('--model') + 1]).toBe('claude-sonnet-5');
     expect(spawn.env.PI_CODING_AGENT_DIR).toBe(h.home);
     expect(spawn.env.PI_SKIP_VERSION_CHECK).toBe('1');
-    expect(spawn.env.PI_TELEMETRY).toBe('0');
     expect(spawn.cwd).toBe('/work');
 
     expect(ctx.events).toContainEqual(

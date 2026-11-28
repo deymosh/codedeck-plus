@@ -36,7 +36,9 @@ class SecureIdentityStoreTest {
     private val hex64 = Regex("^[0-9a-f]{64}$")
 
     private fun newAead(): Aead =
-        KeysetHandle.generateNew(PredefinedAeadParameters.AES256_GCM)
+        KeysetHandle.newBuilder()
+            .addEntry(KeysetHandle.generateEntryFromParameters(PredefinedAeadParameters.AES256_GCM).withRandomId().makePrimary())
+            .build()
             .getPrimitive(RegistryConfiguration.get(), Aead::class.java)
 
     private fun newFile(): File = File(tempFolder.newFolder(), "identity.bin")

@@ -85,18 +85,25 @@ export interface OpenCodeDriverOptions {
 
 /** A server registers its providers, from the catalog built into it, a
  *  moment after it says it is listening (0.6-0.9 s): until then it lists
- *  no provider and no model, and describes none. */
-export const CATALOG_WAIT_MS = 3_000;
+ *  no provider and no model, and describes none. Its plugins load after
+ *  that, in the background, and the providers its config adds (every
+ *  profile) are listed only once they have: `plugin.list` stays empty until
+ *  then, 1.5-2.5 s after the listening line on 2.4.2. The cap leaves a slow
+ *  machine room for both. */
+export const CATALOG_WAIT_MS = 10_000;
 
-/** Wait for a just-started server to list a provider, at most `waitMs`. A
- *  server that cannot be asked, or a host shutting down, has nothing to wait
- *  for. (One whose config disables every provider never lists one: it costs
- *  the whole wait, once per start.) */
+/** Wait for a just-started server to list a provider and its plugins, at
+ *  most `waitMs`: before both, a model list would leave out the config's
+ *  providers, and a profile's model would be refused as unknown. A server
+ *  that cannot be asked, or a host shutting down, has nothing to wait for.
+ *  (One whose config disables every provider never lists one: it costs the
+ *  whole wait, once per start.) */
 async function catalogRegistered(client: OpenCodeClient, waitMs: number, stopped: () => boolean): Promise<void> {
   const deadline = Date.now() + waitMs;
   while (Date.now() < deadline && !stopped()) {
     try {
-      if ((await client.provider.list()).data.length > 0) return;
+      const [providers, plugins] = await Promise.all([client.provider.list(), client.plugin.list()]);
+      if (providers.data.length > 0 && plugins.data.length > 0) return;
     } catch {
       return;
     }

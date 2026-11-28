@@ -82,8 +82,8 @@ descriptor 3 on to it; one that does not leaves the profile's requests
 without a key (Pi's error says so, and the bridge log has the extension's
 line naming the missing token).
 
-Pi runs with `--offline`, version checks and telemetry off: it makes no
-network request of its own beyond the model's. Its model catalog is therefore
+Pi runs with `--offline` and version checks off (it has no telemetry since
+1.7.0): it makes no network request of its own beyond the model's. Its model catalog is therefore
 the one its release shipped with, plus your own `models.json`.
 
 ## Permissions

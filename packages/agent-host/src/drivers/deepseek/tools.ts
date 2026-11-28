@@ -8,10 +8,11 @@
  * rows say `toolName: subagent`. ACP carries the tool's own name as the call's
  * title, so these are the strings that arrive.
  *
- * Two tools of the harness are deliberately not here, because this profile
- * does not mount them: `ralph` (disabled in `dsh-base`, restored only by an
- * overlay that asks for it) and `present` (it declares deliverable files for
- * the harness's own web app, which nothing on the phone shows).
+ * Tools of the harness this profile does not mount are deliberately not
+ * here, among them `ralph` (disabled in `dsh-base`, restored only by an
+ * overlay that asks for it), `present` (it declares deliverable files for
+ * the harness's own web app, which nothing on the phone shows) and
+ * `interrupt_agent` (`dsh-base` turns it off); the drift test lists them all.
  */
 import { oneLine, readToolCall, str, ToolKind, type ToolCallRead, type ToolDialects } from '../../sdk/tools';
 
@@ -28,7 +29,6 @@ const runTitle = (input: Input): string => oneLine(str(input.command) || str(inp
 /** A sub-agent is named by what it was asked to do; the harness's call has
  *  no separate agent name. */
 const subagentTitle = (input: Input): string => str(input.description);
-const killTitle = (input: Input): string => str(input.job_id) || str(input.agent_id) || str(input.target);
 
 const askTitle = (input: Input): string => {
   const first = Array.isArray(input.questions) ? input.questions[0] : undefined;
@@ -44,7 +44,6 @@ export const DEEPSEEK_TOOLS: ToolDialects = {
   bash: { kind: ToolKind.Execute, title: runTitle, detail: (input) => str(input.command) },
   pwsh: { kind: ToolKind.Execute, title: runTitle, detail: (input) => str(input.command) },
   job_kill: { kind: ToolKind.Execute, title: (input) => str(input.job_id) },
-  interrupt_agent: { kind: ToolKind.Execute, title: killTitle },
   // Reads the session's working directory, or changes it when given `cd`.
   working_directory: { kind: ToolKind.Execute, title: (input) => (str(input.cd) ? `cd ${str(input.cd)}` : 'pwd') },
 
@@ -72,7 +71,10 @@ export const DEEPSEEK_TOOLS: ToolDialects = {
   // --- handing work to a sub-agent ---
   subagent: { kind: ToolKind.Agent, title: subagentTitle, detail: (input) => str(input.prompt) },
   subagent_fork: { kind: ToolKind.Agent, title: subagentTitle, detail: (input) => str(input.prompt) },
-  send_message: { kind: ToolKind.Other, title: (input) => str(input.agent_id) || str(input.target) },
+  // A child agent is addressed by its name.
+  send_message: { kind: ToolKind.Other, title: (input) => str(input.agent) },
+  // Waits for the next input: a child's message, its completion, the user.
+  wait_agent: { kind: ToolKind.Other },
   list_agents: { kind: ToolKind.Read },
   list_subagent_models: { kind: ToolKind.Read, title: (input) => str(input.provider) },
   workflow: { kind: ToolKind.Agent, title: (input) => str(input.name) },
