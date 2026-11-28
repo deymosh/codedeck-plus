@@ -283,6 +283,11 @@ pub struct UploadFileBlossomMsg {
     pub text: String,
     #[specta(type = specta_typescript::Number)]
     pub size_bytes: u64,
+    /// The sender's id for this file: the bridge answers with `input-ack`
+    /// once it is in the session, or `input-failed`. A resend under the same
+    /// id is acknowledged again, never delivered twice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_id: Option<String>,
 }
 
 impl std::fmt::Debug for UploadFileBlossomMsg {
@@ -295,6 +300,7 @@ impl std::fmt::Debug for UploadFileBlossomMsg {
             .field("filename", &self.filename)
             .field("mime_type", &self.mime_type)
             .field("size_bytes", &self.size_bytes)
+            .field("input_id", &self.input_id)
             .finish_non_exhaustive()
     }
 }
@@ -312,6 +318,9 @@ pub struct UploadFileChunkMsg {
     pub chunk_index: u64,
     #[specta(type = specta_typescript::Number)]
     pub total_chunks: u64,
+    /// As on the Blossom form; every chunk of one upload carries the same.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_id: Option<String>,
 }
 
 /// Same `type`, disambiguated by shape (`hash`/`url` vs

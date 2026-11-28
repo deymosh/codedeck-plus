@@ -144,6 +144,7 @@ impl FileSendCtx {
                 mime_type,
                 text,
                 size_bytes,
+                input_id: None,
             }));
             let result = self
                 .publish_and_confirm(&machine, msg, PUBLISH_CONFIRM_BUDGET, PUBLISH_CONFIRM_ATTEMPTS)
@@ -183,6 +184,7 @@ impl FileSendCtx {
                 text: if i == 0 { text.clone() } else { String::new() },
                 chunk_index: i as u64,
                 total_chunks,
+                input_id: None,
             }));
             // The TS client sends chunks with a single attempt each — the outer
             // budget disciplines the run, not per-frame retry.

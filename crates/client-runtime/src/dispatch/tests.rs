@@ -884,6 +884,7 @@ async fn input_failed_marks_the_item_failed_with_the_wire_reason() {
                 session_id: "s1".into(),
                 reason: protocol::events::InputFailedReason::NoSession,
                 input_id: Some("in-1".into()),
+                detail: None,
             }),
         )
         .await;

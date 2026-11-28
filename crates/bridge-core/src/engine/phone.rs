@@ -228,6 +228,7 @@ impl Engine {
             // `no-session`: never heard of it; `error`: known, but not running.
             reason: if known { InputFailedReason::Error } else { InputFailedReason::NoSession },
             input_id: m.input_id,
+            detail: None,
         }));
     }
 

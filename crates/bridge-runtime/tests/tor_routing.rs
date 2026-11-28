@@ -215,6 +215,7 @@ fn blossom_message(url: String, blob: &Encrypted) -> UploadFileBlossomMsg {
         mime_type: "image/png".into(),
         text: String::new(),
         size_bytes: blob.bytes.len() as u64,
+        input_id: None,
     }
 }
 

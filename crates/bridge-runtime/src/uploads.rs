@@ -256,6 +256,7 @@ mod tests {
             text: text.into(),
             chunk_index: i,
             total_chunks: n,
+            input_id: None,
         }
     }
 
