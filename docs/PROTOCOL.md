@@ -267,12 +267,13 @@ question.
 ### Input
 
 `input {sessionId, text, inputId?}` → `input-ack {sessionId, inputId}` or
-`input-failed {sessionId, inputId?, reason}`:
+`input-failed {sessionId, inputId?, reason, detail?}`:
 
 | Reason | Meaning |
 |---|---|
 | `no-session` | The bridge knows no session with this id. |
 | `error` | The session exists but is not running. |
+| `file` | An `upload-file` the bridge could not receive; `detail` says why, for a person to read. |
 
 The bridge writes the user's transcript entry itself (agents do not reliably
 echo input) and drops an agent's echo of it.
@@ -292,6 +293,20 @@ the relays when no server is set (or it failed). The bridge saves the file
 under its own name in `<first root>/.codedeck/uploads` and runs `text` with
 the path added as the session's next input — an image to be looked at, any
 other file named. At most 25 MiB; a relay-only upload must fit 200 chunks.
+
+Both shapes take an `inputId` (every chunk of one upload the same), and the
+bridge answers the file as it answers an `input`: `input-ack` once the file
+is in the session, `input-failed` when it is not — `error`/`no-session` at
+the first piece for a session that cannot take it, `file` with a `detail`
+when the download, its hash or the bytes failed, or saving them did. A
+sender stops at its file's first answer (a piece already on its way may be
+answered too); a sender with no `inputId` gets none. A partial upload idle
+for a minute is dropped without an answer — the sender's own wait has ended
+it, and a retry must not hear the old attempt's failure. A file that reached
+the session is remembered by its `inputId` for a day (not across a bridge
+restart): a resend under it is acknowledged at its first piece and not
+delivered again, so a sender that heard nothing keeps the id and sends
+again.
 
 ### Terminal
 
