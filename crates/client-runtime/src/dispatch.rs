@@ -73,6 +73,15 @@ pub enum PairDeadline {
     Clear,
 }
 
+/// The bridge's answer to a file: `reason` `None` = it is in the session,
+/// else the `input-failed` reason (with `detail` for `file`).
+#[derive(Debug, PartialEq)]
+pub struct FileAnswer {
+    pub id: String,
+    pub reason: Option<String>,
+    pub detail: Option<String>,
+}
+
 /// What a routed message asks the event loop to do beyond the in-memory store
 /// mutation `route` already applied.
 #[derive(Debug, Default, PartialEq)]
@@ -93,6 +102,9 @@ pub struct RouteResult {
     pub pair_deadline: Option<PairDeadline>,
     /// Outbox items settled this route: `(id, delivered)`.
     pub outbox_settled: Vec<(String, bool)>,
+    /// Answers to an id the outbox does not hold — a file's
+    /// (`Intent::SendSessionFile`).
+    pub files_settled: Vec<FileAnswer>,
     /// The pair flow ended: `Some(true)` paired, `Some(false)` nack / timeout.
     pub pairing_settled: Option<bool>,
     /// `pending_sessions` changed — not persisted (a placeholder is meaningless
@@ -402,6 +414,11 @@ impl<'a> Router<'a> {
                     r.send(machine, sync_effect_to_cmd(e));
                 }
             }
+            // An id the outbox does not hold is a file's: files never enter
+            // the outbox (their bytes are not worth persisting for a resend).
+            BridgeToPhone::InputAck(m) if !self.stores.outbox.items.contains_key(&m.input_id) => {
+                r.files_settled.push(FileAnswer { id: m.input_id.clone(), reason: None, detail: None });
+            }
             BridgeToPhone::InputAck(m) => {
                 self.stores.outbox.confirm(&m.input_id, self.now);
                 r.persist(StoreId::Outbox);
@@ -413,9 +430,13 @@ impl<'a> Router<'a> {
                         .as_str()
                         .map(str::to_string)
                         .unwrap_or_default();
-                    self.stores.outbox.fail(id, reason, self.now);
-                    r.persist(StoreId::Outbox);
-                    r.outbox_settled.push((id.clone(), false));
+                    if self.stores.outbox.items.contains_key(id) {
+                        self.stores.outbox.fail(id, reason, self.now);
+                        r.persist(StoreId::Outbox);
+                        r.outbox_settled.push((id.clone(), false));
+                    } else {
+                        r.files_settled.push(FileAnswer { id: id.clone(), reason: Some(reason), detail: m.detail.clone() });
+                    }
                 }
             }
 

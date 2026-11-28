@@ -1,6 +1,7 @@
 //! Sending a file into a session: the upload runs as its own task
 //! ([`FileSendCtx`]), off the loop.
 
+use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -8,7 +9,7 @@ use nostr_transport::{PublishResult, PublishVerdict};
 use protocol::commands::PhoneToBridge;
 use tokio::sync::oneshot;
 
-use super::{egress_detail, ActionFailedKind, Clock, CoreEvent, CoreObserver, Entropy, Loop};
+use super::{egress_detail, Clock, CoreEvent, CoreObserver, Entropy, Loop};
 use crate::intent::SessionFileSend;
 use crate::signer::{Cipher, IdentitySigner};
 use crate::transport::ws::{WsTransport, PUBLISH_CONFIRM_ATTEMPTS, PUBLISH_CONFIRM_BUDGET};
@@ -36,8 +37,18 @@ impl Loop {
     /// events, reconnects and every view query for that long.
     pub(super) fn spawn_session_file(&self, send: SessionFileSend, reply: Option<oneshot::Sender<()>>) {
         let ctx = self.image_send_ctx(&send.machine);
+        let (sends, id) = (Rc::clone(&self.file_sends), send.input_id.clone());
+        let answered = Rc::new(Cell::new(false));
+        sends.borrow_mut().insert(id.clone(), Rc::clone(&answered));
         tokio::task::spawn_local(async move {
-            ctx.send_session_file(send).await;
+            ctx.send_session_file(send, &answered).await;
+            // Only this send's entry: a retry under the same id may have
+            // replaced it meanwhile.
+            let mut sends = sends.borrow_mut();
+            if sends.get(&id).is_some_and(|a| Rc::ptr_eq(a, &answered)) {
+                sends.remove(&id);
+            }
+            drop(sends);
             if let Some(reply) = reply {
                 let _ = reply.send(());
             }
@@ -94,11 +105,13 @@ impl FileSendCtx {
     /// stage-2 rejection is a hard failure, never a reason to re-upload
     /// megabytes over the relays. No optimistic local echo: the image lands in
     /// the transcript only once the bridge injects it, like any other output.
-    async fn send_session_file(
-        &self,
-        send: SessionFileSend,
-    ) {
-        let SessionFileSend { machine, session_id, text, data, filename, mime_type } = send;
+    ///
+    /// Done here means sent: whether the file arrived is the bridge's answer
+    /// under `input_id` (`CoreEvent::FileSettled`). A send that fails on the
+    /// phone settles it as `unsent` itself, and the bridge's answer to a
+    /// piece already sent ends the chunk loop early.
+    async fn send_session_file(&self, send: SessionFileSend, answered: &Cell<bool>) {
+        let SessionFileSend { machine, session_id, text, data, filename, mime_type, input_id } = send;
         use client_core::image_chunks::{chunk_base64, IMAGE_CHUNK_BYTES, IMAGE_CHUNK_DELAY_MS};
         use protocol::commands::{
             UploadFileBlossomMsg, UploadFileChunkMsg, UploadFileMsg,
@@ -116,10 +129,14 @@ impl FileSendCtx {
         let started_at = self.clock.now_ms();
         let size_bytes = data.len() as u64;
 
+        // The file did not leave the phone: it settles here, as the bridge
+        // would settle one it could not take.
         let fail = |this: &Self| {
-            this.observer.action_failed(ActionFailedKind::PublishRejected);
-            this.observer
-                .on_event(CoreEvent::ActionFailed { kind: ActionFailedKind::PublishRejected });
+            this.observer.on_event(CoreEvent::FileSettled {
+                id: input_id.clone(),
+                reason: Some("unsent".into()),
+                detail: None,
+            });
         };
 
         // --- Stage 1: the bytes, on the user's server when they chose one ---
@@ -144,7 +161,7 @@ impl FileSendCtx {
                 mime_type,
                 text,
                 size_bytes,
-                input_id: None,
+                input_id: Some(input_id.clone()),
             }));
             let result = self
                 .publish_and_confirm(&machine, msg, PUBLISH_CONFIRM_BUDGET, PUBLISH_CONFIRM_ATTEMPTS)
@@ -167,6 +184,11 @@ impl FileSendCtx {
         let total_chunks = chunks.len() as u64;
         let chunks_started_at = self.clock.now_ms();
         for (i, chunk) in chunks.into_iter().enumerate() {
+            // Answered already — the session stopped, say: the rest of the
+            // file would be refused piece by piece.
+            if answered.get() {
+                return;
+            }
             let now = self.clock.now_ms();
             if now.saturating_sub(chunks_started_at) >= CHUNK_ASSEMBLY_BUDGET_MS
                 || now.saturating_sub(started_at) >= SESSION_IMAGE_SEND_BUDGET_MS
@@ -184,7 +206,7 @@ impl FileSendCtx {
                 text: if i == 0 { text.clone() } else { String::new() },
                 chunk_index: i as u64,
                 total_chunks,
-                input_id: None,
+                input_id: Some(input_id.clone()),
             }));
             // The TS client sends chunks with a single attempt each — the outer
             // budget disciplines the run, not per-frame retry.

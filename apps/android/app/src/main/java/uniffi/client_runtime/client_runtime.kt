@@ -1164,6 +1164,25 @@ sealed class CoreEvent {
     }
     
     /**
+     * A file sent with `Intent::SendSessionFile` under `id` settled: `reason`
+     * `None` = it is in the session; else why not — the bridge's
+     * `input-failed` reason (`no-session`, `error`, `file`, with `detail` for
+     * `file`), or `unsent` when the phone could not send it at all. The
+     * bridge acknowledges a resend under the same id without delivering it
+     * again, so a retry keeps the id.
+     */
+    data class FileSettled(
+        val `id`: kotlin.String, 
+        val `reason`: kotlin.String?, 
+        val `detail`: kotlin.String?) : CoreEvent()
+        
+    {
+        
+
+        companion object
+    }
+    
+    /**
      * The pair flow ended: `paired` true on success, false on nack / timeout.
      */
     data class PairingSettled(
@@ -1290,35 +1309,40 @@ public object FfiConverterTypeCoreEvent : FfiConverterRustBuffer<CoreEvent>{
                 FfiConverterString.read(buf),
                 FfiConverterBoolean.read(buf),
                 )
-            3 -> CoreEvent.PairingSettled(
+            3 -> CoreEvent.FileSettled(
+                FfiConverterString.read(buf),
+                FfiConverterOptionalString.read(buf),
+                FfiConverterOptionalString.read(buf),
+                )
+            4 -> CoreEvent.PairingSettled(
                 FfiConverterBoolean.read(buf),
                 )
-            4 -> CoreEvent.ActionFailed(
+            5 -> CoreEvent.ActionFailed(
                 FfiConverterTypeActionFailedKind.read(buf),
                 )
-            5 -> CoreEvent.TranscriptAppended(
+            6 -> CoreEvent.TranscriptAppended(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            6 -> CoreEvent.LiveText(
+            7 -> CoreEvent.LiveText(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterOptionalString.read(buf),
                 )
-            7 -> CoreEvent.TerminalOutput(
+            8 -> CoreEvent.TerminalOutput(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterULong.read(buf),
                 FfiConverterByteArray.read(buf),
                 )
-            8 -> CoreEvent.FolderAck(
+            9 -> CoreEvent.FolderAck(
                 FfiConverterString.read(buf),
                 FfiConverterBoolean.read(buf),
                 FfiConverterOptionalString.read(buf),
                 FfiConverterOptionalString.read(buf),
                 )
-            9 -> CoreEvent.Ping
+            10 -> CoreEvent.Ping
             else -> throw RuntimeException("invalid enum value, something is very wrong!!")
         }
     }
@@ -1337,6 +1361,15 @@ public object FfiConverterTypeCoreEvent : FfiConverterRustBuffer<CoreEvent>{
                 4UL
                 + FfiConverterString.allocationSize(value.`id`)
                 + FfiConverterBoolean.allocationSize(value.`delivered`)
+            )
+        }
+        is CoreEvent.FileSettled -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`id`)
+                + FfiConverterOptionalString.allocationSize(value.`reason`)
+                + FfiConverterOptionalString.allocationSize(value.`detail`)
             )
         }
         is CoreEvent.PairingSettled -> {
@@ -1412,24 +1445,31 @@ public object FfiConverterTypeCoreEvent : FfiConverterRustBuffer<CoreEvent>{
                 FfiConverterBoolean.write(value.`delivered`, buf)
                 Unit
             }
-            is CoreEvent.PairingSettled -> {
+            is CoreEvent.FileSettled -> {
                 buf.putInt(3)
+                FfiConverterString.write(value.`id`, buf)
+                FfiConverterOptionalString.write(value.`reason`, buf)
+                FfiConverterOptionalString.write(value.`detail`, buf)
+                Unit
+            }
+            is CoreEvent.PairingSettled -> {
+                buf.putInt(4)
                 FfiConverterBoolean.write(value.`paired`, buf)
                 Unit
             }
             is CoreEvent.ActionFailed -> {
-                buf.putInt(4)
+                buf.putInt(5)
                 FfiConverterTypeActionFailedKind.write(value.`kind`, buf)
                 Unit
             }
             is CoreEvent.TranscriptAppended -> {
-                buf.putInt(5)
+                buf.putInt(6)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`sessionId`, buf)
                 Unit
             }
             is CoreEvent.LiveText -> {
-                buf.putInt(6)
+                buf.putInt(7)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`sessionId`, buf)
                 FfiConverterString.write(value.`key`, buf)
@@ -1437,7 +1477,7 @@ public object FfiConverterTypeCoreEvent : FfiConverterRustBuffer<CoreEvent>{
                 Unit
             }
             is CoreEvent.TerminalOutput -> {
-                buf.putInt(7)
+                buf.putInt(8)
                 FfiConverterString.write(value.`machine`, buf)
                 FfiConverterString.write(value.`term`, buf)
                 FfiConverterULong.write(value.`offset`, buf)
@@ -1445,7 +1485,7 @@ public object FfiConverterTypeCoreEvent : FfiConverterRustBuffer<CoreEvent>{
                 Unit
             }
             is CoreEvent.FolderAck -> {
-                buf.putInt(8)
+                buf.putInt(9)
                 FfiConverterString.write(value.`requestId`, buf)
                 FfiConverterBoolean.write(value.`success`, buf)
                 FfiConverterOptionalString.write(value.`path`, buf)
@@ -1453,7 +1493,7 @@ public object FfiConverterTypeCoreEvent : FfiConverterRustBuffer<CoreEvent>{
                 Unit
             }
             is CoreEvent.Ping -> {
-                buf.putInt(9)
+                buf.putInt(10)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }

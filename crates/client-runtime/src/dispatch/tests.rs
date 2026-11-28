@@ -893,6 +893,37 @@ async fn input_failed_marks_the_item_failed_with_the_wire_reason() {
     assert_eq!(s.outbox.items["in-1"].error.as_deref(), Some("no-session"));
 }
 
+/// Files never enter the outbox: an answer to an id it does not hold is a
+/// file's, and settles that file without touching the outbox.
+#[tokio::test]
+async fn an_answer_to_an_id_the_outbox_does_not_hold_settles_a_file() {
+    let (mut s, ts, kp) = stores().await;
+    let mut r = Router::new(&mut s, &ts, &kp, 1_000);
+    let ack = r
+        .route(MACHINE, &BridgeToPhone::InputAck(protocol::events::InputAckMsg { session_id: "s1".into(), input_id: "f1".into() }))
+        .await;
+    assert_eq!(ack.files_settled, vec![crate::dispatch::FileAnswer { id: "f1".into(), reason: None, detail: None }]);
+    assert!(ack.outbox_settled.is_empty() && ack.persist.is_empty());
+
+    let failed = r
+        .route(
+            MACHINE,
+            &BridgeToPhone::InputFailed(InputFailedMsg {
+                session_id: "s1".into(),
+                reason: protocol::events::InputFailedReason::File,
+                input_id: Some("f2".into()),
+                detail: Some("download failed: HTTP 404".into()),
+            }),
+        )
+        .await;
+    assert_eq!(
+        failed.files_settled,
+        vec![crate::dispatch::FileAnswer { id: "f2".into(), reason: Some("file".into()), detail: Some("download failed: HTTP 404".into()) }]
+    );
+    assert!(failed.outbox_settled.is_empty() && failed.persist.is_empty());
+    assert!(s.outbox.items.is_empty());
+}
+
 fn closes_of(out: &RouteResult, session: &str) -> usize {
     out.sends.iter().filter(|x| matches!(&x.msg, PhoneToBridge::CloseSession(m) if m.session_id == session)).count()
 }

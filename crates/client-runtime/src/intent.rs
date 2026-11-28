@@ -65,6 +65,10 @@ pub struct SessionFileSend {
     pub data: Vec<u8>,
     pub filename: String,
     pub mime_type: String,
+    /// The caller's id for this file, answered by `CoreEvent::FileSettled`.
+    /// Kept across retries of the same file: the bridge then acknowledges
+    /// one that did arrive instead of delivering it twice.
+    pub input_id: String,
 }
 
 /// Ambient inputs `apply` needs.
