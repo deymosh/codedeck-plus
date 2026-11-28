@@ -14,7 +14,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import com.codedeck.plus.ui.components.Chip
 import com.codedeck.plus.ui.components.Field
 import com.codedeck.plus.ui.components.PrimaryButton
@@ -127,7 +126,7 @@ internal fun MachineCredentials(
                             placeholder = if (cred.present) "Leave empty to keep it" else null,
                             supporting = credentialStatusText(cred),
                             isError = cred.valid == false,
-                            visualTransformation = PasswordVisualTransformation(),
+                            secret = true,
                         )
                     } else {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {

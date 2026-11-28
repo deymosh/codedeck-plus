@@ -36,11 +36,11 @@ fun devVersionName(): String {
 android {
     namespace = "com.codedeck.plus"
     // AGP 9's platform DSL — Android 17 (API 37) ships minor platform
-    // revisions (37.0/37.1/37.2/…) rather than one fixed "android-37" SDK;
-    // `release(37)` resolves to the latest stable minor under that major
-    // version instead of pinning one that will age out of `sdkmanager`.
+    // revisions (37.0/37.1/37.2/…) rather than one fixed "android-37" SDK.
+    // A bare `release(37)` compiles against 37.0; Compose 1.13 requires
+    // 37.1 or later, so the minor is named.
     compileSdk {
-        version = release(37)
+        version = release(37) { minorApiLevel = 2 }
     }
 
     defaultConfig {

@@ -21,7 +21,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import com.codedeck.plus.core.CoreHost
 import com.codedeck.plus.ui.components.Chip
@@ -599,7 +598,7 @@ private fun ProviderEditorPage(
                     onValueChange = { token = it },
                     label = "API token",
                     placeholder = if (editing?.hasToken == true) "unchanged" else "sk-…",
-                    visualTransformation = PasswordVisualTransformation(),
+                    secret = true,
                 )
                 if (editing?.hasToken == true) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {

@@ -111,6 +111,12 @@ internal fun Composer(
             if (draft.isEmpty()) {
                 Text(placeholder, color = Tokens.TextDim, fontSize = Tokens.TextLg, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
+            // The value-based field Compose 1.13 deprecates for TextFieldState.
+            // The draft is the core's, replaced from outside (a quick prompt, a
+            // picked command, a sent message); moving it to a state the field
+            // owns changes how typing and those replacements meet, so that
+            // move is a change of its own, checked on a device.
+            @Suppress("DEPRECATION")
             BasicTextField(
                 value = shown,
                 onValueChange = {

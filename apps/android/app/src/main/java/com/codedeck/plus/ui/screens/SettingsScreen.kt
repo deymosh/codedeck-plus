@@ -25,12 +25,12 @@ import androidx.compose.material.icons.outlined.SettingsEthernet
 import androidx.compose.material.icons.outlined.TextFields
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.SliderState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -436,20 +436,22 @@ internal fun AppearancePage(view: UniffiSettingsView, dispatch: (UniffiIntent) -
                 // Local position while dragging; re-keyed on the stored value
                 // so a change made elsewhere snaps the thumb to it. The intent
                 // fires on release.
-                var position by remember(view.uiScale) { mutableFloatStateOf(view.uiScale.toFloat()) }
+                val slider = remember(view.uiScale) {
+                    // The value, no drawn steps, the range.
+                    SliderState(view.uiScale.toFloat(), 0, UI_SCALE_MIN..UI_SCALE_MAX)
+                }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space2)) {
-                    Text("${Math.round(position * 100)}%", color = Tokens.Text, fontSize = Tokens.TextXl, modifier = Modifier.weight(1f))
-                    QuietButton("Reset", enabled = position != UI_SCALE_DEFAULT, onClick = {
-                        position = UI_SCALE_DEFAULT
+                    Text("${Math.round(slider.value * 100)}%", color = Tokens.Text, fontSize = Tokens.TextXl, modifier = Modifier.weight(1f))
+                    QuietButton("Reset", enabled = slider.value != UI_SCALE_DEFAULT, onClick = {
+                        slider.value = UI_SCALE_DEFAULT
                         dispatch(UniffiIntent.SetUiScale(UI_SCALE_DEFAULT.toDouble()))
                     })
                 }
                 Slider(
-                    value = position,
+                    slider,
                     // Snaps to 5% steps without drawing them.
-                    onValueChange = { position = Math.round(it * 20) / 20f },
-                    onValueChangeFinished = { dispatch(UniffiIntent.SetUiScale(position.toDouble())) },
-                    valueRange = UI_SCALE_MIN..UI_SCALE_MAX,
+                    onValueChange = { slider.value = Math.round(it * 20) / 20f },
+                    onValueChangeFinished = { dispatch(UniffiIntent.SetUiScale(slider.value.toDouble())) },
                     colors = SliderDefaults.colors(
                         thumbColor = Tokens.Accent,
                         activeTrackColor = Tokens.Accent,
